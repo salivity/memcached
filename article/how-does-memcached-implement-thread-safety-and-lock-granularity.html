@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How does Memcached implement thread safety and lock granularity? - memcached</title>
+    <meta name="description" content="Memcached implements thread safety and fine-grained locking across multi-core processors by combining a master-worker thread architecture with granular mutexes that isolate critical sections across its hash table, memory slabs, and LRU eviction queues. Me">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-does-memcached-implement-thread-safety-and-lock-granularity">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How does Memcached implement thread safety and lock granularity? - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-does-memcached-implement-thread-safety-and-lock-granularity" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached implements thread safety and fine-grained locking across multi-core processors by combining a master-worker thread architecture with granular mutexes that isolate critical sections across its hash table, memory slabs, and LRU eviction queues. Me" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1
+id="how-does-memcached-implement-thread-safety-and-lock-granularity">How
+does Memcached implement thread safety and lock granularity?</h1>
+<p>Memcached implements thread safety and fine-grained locking across
+multi-core processors by combining a master-worker thread architecture
+with granular mutexes that isolate critical sections across its hash
+table, memory slabs, and LRU eviction queues.</p>
+<h2 id="thread-architecture-and-event-dispatching">Thread Architecture
+and Event Dispatching</h2>
+<p>Memcached uses a multi-threaded, event-driven architecture powered by
+<code>libevent</code>. A single primary thread, known as the dispatcher
+thread, accepts incoming client connections and assigns them to worker
+threads using a round-robin distribution model over internal pipes. Each
+worker thread runs its own event loop, handling network I/O, parsing
+client commands, and executing read or write operations against shared
+in-memory data structures.</p>
+<h2 id="granular-lock-design">Granular Lock Design</h2>
+<p>To prevent race conditions without serializing access across CPU
+cores, Memcached breaks down system locking into distinct functional
+domains rather than relying on a single global lock:</p>
+<ul>
+<li><strong>Hash Table Item Locks:</strong> Memcached uses a array of
+fine-grained mutexes (item locks) mapped to key hash values. When
+accessing or updating a specific key, a worker thread acquires only the
+mutex covering that hash bucket range, allowing concurrent threads to
+read and write different key ranges simultaneously.</li>
+<li><strong>Slab Class Locks:</strong> Memory allocation relies on a
+slab allocator, where memory is divided into pre-allocated chunk sizes
+grouped by slab classes. Memory allocation and chunk re-assignment are
+protected by locks scoped to individual slab classes, preventing threads
+from blocking each other when allocating memory for different item
+sizes.</li>
+<li><strong>Segmented LRU Locks:</strong> Memcached organizes cache
+eviction queues into separate sub-LRUs (such as HOT, WARM, and COLD
+lists) per slab class. Rather than updating the main LRU list on every
+read access—which previously caused high lock contention—items are
+bumped between temperature queues using asynchronous workers and
+per-queue locks, drastically reducing mutex contention during read-heavy
+workloads.</li>
+<li><strong>Hash Table Expansion Lock:</strong> When the internal hash
+table grows, Memcached migrates items to a larger table using a
+dedicated maintenance thread. Worker threads briefly acquire a lock on
+individual buckets during migration, ensuring ongoing operations
+continue with minimal delay.</li>
+</ul>
+<p>Through this combination of event-driven worker threads and split
+mutex domain partitioning, Memcached minimizes thread contention and
+achieves high throughput on modern multi-core systems.</p></article>
+        <div id="comments-container"></div>
+        <script>
+            const utterancesScript = document.createElement('script');
+            utterancesScript.setAttribute('src', 'https://utteranc.es/client.js');
+            utterancesScript.setAttribute('repo', 'salivity/memcached'); 
+            utterancesScript.setAttribute('issue-term', 'pathname'); 
+            const currentTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            utterancesScript.setAttribute('theme', currentTheme === 'dark' ? 'github-dark' : 'github-light'); 
+            utterancesScript.setAttribute('crossorigin', 'anonymous');
+            utterancesScript.async = true;
+            document.getElementById('comments-container').appendChild(utterancesScript);
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

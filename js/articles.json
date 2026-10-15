@@ -1,0 +1,62 @@
+[
+  [
+    10,
+    "What are the risks of an unauthenticated public Memcached instance?",
+    "Running an unauthenticated Memcached instance open to the public internet presents severe security risks, primarily centered around unauthorized data exposure, remote cache manipulation, and network infrastructure abuse. Because Memcached was designed for",
+    false
+  ],
+  [
+    9,
+    "How does Memcached handle lazy expiration vs active reclamation?",
+    "Memcached uses lazy expiration as its primary mechanism for handling expired keys, delaying memory cleanup until an item is explicitly requested, while relying on active memory reclamation strategies like LRU eviction and background crawler threads when a",
+    false
+  ],
+  [
+    8,
+    "What Is the Memcached Growth Factor Parameter?",
+    "The growth factor parameter in Memcached determines the scale at which slab class chunk sizes increase sequentially, directly impacting memory allocation efficiency and cache utilization. When Memcached initializes, it organizes memory into distinct slab",
+    false
+  ],
+  [
+    7,
+    "How does Memcached implement thread safety and lock granularity?",
+    "Memcached implements thread safety and fine-grained locking across multi-core processors by combining a master-worker thread architecture with granular mutexes that isolate critical sections across its hash table, memory slabs, and LRU eviction queues. Me",
+    false
+  ],
+  [
+    6,
+    "What Happens When Memcached Memory Limit Is Reached?",
+    "When Memcached reaches its allocated memory limit and receives a request to store a new item, it frees space by initiating an automatic eviction process powered by a Least Recently Used (LRU) algorithm. Rather than rejecting new writes or expanding system",
+    false
+  ],
+  [
+    5,
+    "How Memcached ASCII Protocol Differs From Binary Protocol",
+    "Memcached offers both a text-based ASCII protocol and a structured binary protocol, which differ significantly in parsing complexity, network overhead, and computational performance. While the ASCII protocol uses plain-text commands terminated by line bre",
+    false
+  ],
+  [
+    4,
+    "How Does Consistent Hashing Scale Memcached Clusters?",
+    "Consistent hashing enables Memcached clusters to scale across multiple servers by minimizing the redistribution of cached keys when servers are added or removed. In a traditional hashing system, changing the node count invalidates nearly all cached items,",
+    false
+  ],
+  [
+    3,
+    "Why Does Memcached Limit Item Size to 1MB by Default?",
+    "Memcached enforces a default maximum item size limit of 1 megabyte primarily due to its underlying memory architecture, which relies on fixed 1MB page allocations within a slab allocator to prevent memory fragmentation and ensure high-throughput execution",
+    false
+  ],
+  [
+    2,
+    "How does Memcached handle memory allocation using the slab allocator mechanism?",
+    "Memcached manages memory allocation using a specialized slab allocator mechanism designed to eliminate memory fragmentation and maintain high-speed, constant-time operations. Rather than relying on standard system memory allocation functions like malloc a",
+    false
+  ],
+  [
+    1,
+    "What Problem Was Memcached Designed to Solve?",
+    "Memcached was created primarily to solve the bottleneck of slow database queries in high-traffic web application development by caching frequently accessed data in dynamic memory. By reducing the reliance on disk-bound database reads, Memcached significan",
+    false
+  ]
+]

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How does Memcached handle memory allocation using the slab allocator mechanism? - memcached</title>
+    <meta name="description" content="Memcached manages memory allocation using a specialized slab allocator mechanism designed to eliminate memory fragmentation and maintain high-speed, constant-time operations. Rather than relying on standard system memory allocation functions like malloc a">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-does-memcached-handle-memory-allocation-using-the-slab-allocator-mechanism">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How does Memcached handle memory allocation using the slab allocator mechanism? - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-does-memcached-handle-memory-allocation-using-the-slab-allocator-mechanism" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached manages memory allocation using a specialized slab allocator mechanism designed to eliminate memory fragmentation and maintain high-speed, constant-time operations. Rather than relying on standard system memory allocation functions like malloc a" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1
+id="how-does-memcached-handle-memory-allocation-using-the-slab-allocator-mechanism">How
+does Memcached handle memory allocation using the slab allocator
+mechanism?</h1>
+<p>Memcached manages memory allocation using a specialized slab
+allocator mechanism designed to eliminate memory fragmentation and
+maintain high-speed, constant-time operations. Rather than relying on
+standard system memory allocation functions like <code>malloc</code> and
+<code>free</code> for every individual cached item, Memcached
+pre-allocates memory into fixed-size regions called pages, subdivides
+them into uniform units called chunks, and groups these chunks into
+specific slab classes based on size.</p>
+<h2 id="core-elements-of-the-slab-allocator-architecture">Core Elements
+of the Slab Allocator Architecture</h2>
+<p>The slab allocation strategy in Memcached relies on three fundamental
+components working together:</p>
+<ul>
+<li><strong>Pages</strong>: Memory is requested from the operating
+system in large, continuous blocks called pages, typically 1 MB in size.
+Pages serve as the foundational units of memory assignment in
+Memcached.</li>
+<li><strong>Chunks</strong>: Each page assigned to a slab class is
+divided into smaller, equal-sized slots called chunks. A chunk
+represents the smallest unit of storage that holds a single cached
+key-value entry.</li>
+<li><strong>Slab Classes</strong>: Memcached categorizes chunks by size
+into different slab classes. For example, Class 1 might contain 96-byte
+chunks, Class 2 might contain 120-byte chunks, and Class 3 might contain
+152-byte chunks.</li>
+</ul>
+<h2 id="the-allocation-process">The Allocation Process</h2>
+<p>When an application sends a key-value item to Memcached, the engine
+executes a specific allocation flow to store the item:</p>
+<ol type="1">
+<li><strong>Class Selection</strong>: Memcached calculates the total
+size required for the item (including key, value, and internal
+metadata). It searches its ordered list of slab classes to locate the
+smallest chunk size capable of holding the data.</li>
+<li><strong>Best-Fit Assignment</strong>: The data is placed into an
+available free chunk inside that target slab class.</li>
+<li><strong>Page Expansion</strong>: If all chunks in the selected slab
+class are currently in use, Memcached assigns a new 1 MB page from the
+global free pool to that slab class, dividing the page into additional
+chunks of that class's fixed size.</li>
+</ol>
+<h2 id="growth-factor-and-size-progression">Growth Factor and Size
+Progression</h2>
+<p>The increment in chunk size between successive slab classes is
+governed by a growth factor parameter (configurable via <code>-f</code>,
+with a default value of 1.25).</p>
+<p>With a growth factor of 1.25, each slab class features chunks
+approximately 25% larger than those of the preceding class. A lower
+growth factor creates finer granularity between chunk sizes, reducing
+internal unused space within a chunk at the cost of managing more slab
+classes. A higher growth factor reduces the number of classes but can
+increase internal memory waste.</p>
+<h2 id="memory-trade-offs-and-internal-fragmentation">Memory Trade-Offs
+and Internal Fragmentation</h2>
+<p>While the slab allocator successfully prevents external memory
+fragmentation—where system memory becomes broken up into unallocated,
+unusable gaps—it introduces internal fragmentation.</p>
+<p>Internal fragmentation occurs when an item's exact size is smaller
+than the assigned chunk size. For instance, storing a 70-byte payload
+inside a 96-byte chunk leaves 26 bytes of unused space within that
+specific chunk. Because chunks are uniform and atomic, that extra space
+cannot be reclaimed or allocated to other items.</p>
+<h2 id="recycling-memory-and-evictions">Recycling Memory and
+Evictions</h2>
+<p>When memory reaches capacity or free chunks run out within a specific
+class, Memcached reclaims space through built-in mechanisms:</p>
+<ul>
+<li><strong>Free List Reuse</strong>: When items are updated or deleted,
+their occupied chunks are returned directly to the target slab class's
+free list for instant reuse.</li>
+<li><strong>Lazy Deletion</strong>: Expired items are not proactively
+swept from memory by a background cleaner; instead, their space is
+reclaimed when requested by a client or when new data needs to occupy
+the slot.</li>
+<li><strong>LRU Eviction</strong>: When a slab class has exhausted all
+allocated chunks and no unallocated 1 MB pages remain in the global
+pool, Memcached uses a Least Recently Used (LRU) algorithm to evict old
+items specifically within that slab class to free up chunks for new
+writes.</li>
+</ul></article>
+        <div id="comments-container"></div>
+        <script>
+            const utterancesScript = document.createElement('script');
+            utterancesScript.setAttribute('src', 'https://utteranc.es/client.js');
+            utterancesScript.setAttribute('repo', 'salivity/memcached'); 
+            utterancesScript.setAttribute('issue-term', 'pathname'); 
+            const currentTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            utterancesScript.setAttribute('theme', currentTheme === 'dark' ? 'github-dark' : 'github-light'); 
+            utterancesScript.setAttribute('crossorigin', 'anonymous');
+            utterancesScript.async = true;
+            document.getElementById('comments-container').appendChild(utterancesScript);
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

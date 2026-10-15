@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Why Does Memcached Limit Item Size to 1MB by Default? - memcached</title>
+    <meta name="description" content="Memcached enforces a default maximum item size limit of 1 megabyte primarily due to its underlying memory architecture, which relies on fixed 1MB page allocations within a slab allocator to prevent memory fragmentation and ensure high-throughput execution">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/why-does-memcached-limit-item-size-to-1-mb-by-default">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Why Does Memcached Limit Item Size to 1MB by Default? - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/why-does-memcached-limit-item-size-to-1-mb-by-default" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached enforces a default maximum item size limit of 1 megabyte primarily due to its underlying memory architecture, which relies on fixed 1MB page allocations within a slab allocator to prevent memory fragmentation and ensure high-throughput execution" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="why-does-memcached-limit-item-size-to-1mb-by-default">Why Does
+Memcached Limit Item Size to 1MB by Default?</h1>
+<p>Memcached enforces a default maximum item size limit of 1 megabyte
+primarily due to its underlying memory architecture, which relies on
+fixed 1MB page allocations within a slab allocator to prevent memory
+fragmentation and ensure high-throughput execution. By keeping items
+small, Memcached optimizes memory utilization across server instances,
+prevents slow network serialization bottlenecks, and maintains
+predictable low-latency operations for high-concurrency key-value
+caching.</p>
+<h2 id="the-slab-allocator-architecture">The Slab Allocator
+Architecture</h2>
+<p>At the core of Memcached's memory management is the slab allocator.
+Rather than allocating and freeing dynamic memory on the fly using
+standard system calls, which causes severe memory fragmentation over
+time, Memcached pre-allocates contiguous memory blocks divided into
+fixed-size pages.</p>
+<p>Each allocated page is exactly 1MB in size. Memcached further
+subdivides these 1MB pages into uniform chunks based on designated "slab
+classes" to hold items of varying size ranges. Because a single page
+cannot span multiple memory allocations, the largest possible individual
+chunk that can fit inside a single 1MB page—after factoring in key
+header metadata—is just under 1MB. Supporting larger items directly
+would require increasing the fundamental page size, leading to
+significantly higher memory overhead and wasted space for smaller
+items.</p>
+<h2 id="prevention-of-memory-fragmentation">Prevention of Memory
+Fragmentation</h2>
+<p>Traditional dynamic memory allocation leads to heap fragmentation
+when objects of varying sizes are frequently stored and deleted. Over
+time, free memory becomes broken into tiny pockets, making it impossible
+to allocate contiguous space for larger data structures.</p>
+<p>Memcached completely avoids this issue by organizing items strictly
+by size classes. When a page is assigned to a slab class, it remains
+dedicated to chunks of that specific size. Capping items at 1MB keeps
+chunk distributions manageable, prevents internal waste across slab
+classes, and guarantees deterministic allocation speed.</p>
+<h2 id="performance-and-network-bottlenecks">Performance and Network
+Bottlenecks</h2>
+<p>Memcached is designed for fast, in-memory caching of small objects
+like session states, database query results, and rendered HTML
+fragments. Storing multi-megabyte payloads inside a key-value cache
+introduces significant network and CPU bottlenecks.</p>
+<ul>
+<li><strong>Network Saturation:</strong> Retrieving large objects over
+the network consumes considerable bandwidth, increasing latency for
+concurrent requests sharing the same interface.</li>
+<li><strong>CPU Overhead:</strong> Serializing and deserializing large
+data blobs on the application side increases processing time and memory
+allocation pressure.</li>
+<li><strong>Cache Eviction Risk:</strong> Because Memcached uses a Least
+Recently Used (LRU) policy, storing massive items forces the cache to
+evict hundreds or thousands of smaller, frequently accessed keys to free
+up space.</li>
+</ul>
+<h2 id="adjusting-the-maximum-item-size">Adjusting the Maximum Item
+Size</h2>
+<p>While 1MB is the default constraint, Memcached allows administrators
+to override this behavior if larger items are strictly required.
+Starting with Memcached version 1.4.2, the <code>-I</code> (or
+<code>--max-item-size</code>) command-line flag enables users to
+increase the maximum item limit at startup.</p>
+<p>For example, to raise the limit to 5MB, Memcached can be started with
+the following option:</p>
+<p><code>memcached -I 5m</code></p>
+<p>Increasing this limit increases the base page size, which alters the
+slab class chunk distribution and can lead to higher memory overhead for
+smaller cached objects. For large files or media assets, storing data in
+object storage solutions like Amazon S3 or a dedicated Content Delivery
+Network (CDN) is generally recommended over caching in Memcached.</p></article>
+        <div id="comments-container"></div>
+        <script>
+            const utterancesScript = document.createElement('script');
+            utterancesScript.setAttribute('src', 'https://utteranc.es/client.js');
+            utterancesScript.setAttribute('repo', 'salivity/memcached'); 
+            utterancesScript.setAttribute('issue-term', 'pathname'); 
+            const currentTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            utterancesScript.setAttribute('theme', currentTheme === 'dark' ? 'github-dark' : 'github-light'); 
+            utterancesScript.setAttribute('crossorigin', 'anonymous');
+            utterancesScript.async = true;
+            document.getElementById('comments-container').appendChild(utterancesScript);
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>
