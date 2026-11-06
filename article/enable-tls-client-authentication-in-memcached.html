@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enable TLS Client Authentication in Memcached - memcached</title>
+    <meta name="description" content="Securing a Memcached deployment with mutual TLS (mTLS) prevents unauthorized data access by requiring clients to present a valid, trusted cryptographic certificate before executing cache commands. This guide outlines the essential steps to configure and v">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/enable-tls-client-authentication-in-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Enable TLS Client Authentication in Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/enable-tls-client-authentication-in-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Securing a Memcached deployment with mutual TLS (mTLS) prevents unauthorized data access by requiring clients to present a valid, trusted cryptographic certificate before executing cache commands. This guide outlines the essential steps to configure and v" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="enable-tls-client-authentication-in-memcached">Enable TLS Client
+Authentication in Memcached</h1>
+<p>Securing a Memcached deployment with mutual TLS (mTLS) prevents
+unauthorized data access by requiring clients to present a valid,
+trusted cryptographic certificate before executing cache commands. This
+guide outlines the essential steps to configure and verify TLS client
+certificate authentication in Memcached, covering certificate
+preparation, service configuration options, and connection testing using
+OpenSSL.</p>
+<h2 id="1-verify-tls-support-in-memcached">1. Verify TLS Support in
+Memcached</h2>
+<p>Memcached must be compiled with OpenSSL support. Verify that your
+installed binary supports TLS by checking its help output:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-h</span> <span class="kw">|</span> <span class="fu">grep</span> <span class="at">-i</span> ssl</span></code></pre></div>
+<p>If the TLS options (such as <code>-Z</code> or
+<code>--enable-ssl</code>) are absent, you must build Memcached from
+source using the <code>--enable-tls</code> flag:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./configure</span> <span class="at">--enable-tls</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> make install</span></code></pre></div>
+<h2 id="2-prepare-certificates-and-keys">2. Prepare Certificates and
+Keys</h2>
+<p>Mutual TLS requires a Certificate Authority (CA), a server
+certificate and private key, and a client certificate and private
+key.</p>
+<ol type="1">
+<li><p><strong>Generate the CA key and certificate:</strong></p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> req <span class="at">-x509</span> <span class="at">-newkey</span> rsa:4096 <span class="at">-nodes</span> <span class="at">-keyout</span> ca.key <span class="at">-out</span> ca.crt <span class="at">-days</span> 365 <span class="at">-subj</span> <span class="st">&quot;/CN=Memcached-CA&quot;</span></span></code></pre></div></li>
+<li><p><strong>Generate and sign the server certificate:</strong></p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> req <span class="at">-newkey</span> rsa:2048 <span class="at">-nodes</span> <span class="at">-keyout</span> server.key <span class="at">-out</span> server.csr <span class="at">-subj</span> <span class="st">&quot;/CN=memcached-server&quot;</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> x509 <span class="at">-req</span> <span class="at">-in</span> server.csr <span class="at">-CA</span> ca.crt <span class="at">-CAkey</span> ca.key <span class="at">-CAcreateserial</span> <span class="at">-out</span> server.crt <span class="at">-days</span> 365</span></code></pre></div></li>
+<li><p><strong>Generate and sign the client certificate:</strong></p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> req <span class="at">-newkey</span> rsa:2048 <span class="at">-nodes</span> <span class="at">-keyout</span> client.key <span class="at">-out</span> client.csr <span class="at">-subj</span> <span class="st">&quot;/CN=memcached-client&quot;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> x509 <span class="at">-req</span> <span class="at">-in</span> client.csr <span class="at">-CA</span> ca.crt <span class="at">-CAkey</span> ca.key <span class="at">-CAcreateserial</span> <span class="at">-out</span> client.crt <span class="at">-days</span> 365</span></code></pre></div></li>
+</ol>
+<p>Store the private keys in secure directories with restricted read
+permissions (e.g., <code>chmod 600</code>).</p>
+<h2 id="3-configure-memcached-for-tls-client-verification">3. Configure
+Memcached for TLS Client Verification</h2>
+<p>Launch Memcached with TLS enabled, specifying the server certificate,
+private key, trusted CA certificate, and the verification mode.</p>
+<p>Memcached uses OpenSSL's verification bitmask for
+<code>ssl_verify_mode</code>. To enforce client certificate
+authentication, set the mode to <code>3</code> (which combines
+<code>SSL_VERIFY_PEER</code> [1] and
+<code>SSL_VERIFY_FAIL_IF_NO_PEER_CERT</code> [2]):</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-Z</span> <span class="dt">\</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_chain_cert=/path/to/server.crt <span class="dt">\</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_key=/path/to/server.key <span class="dt">\</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_ca_cert=/path/to/ca.crt <span class="dt">\</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_verify_mode=3 <span class="dt">\</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">-p</span> 11211 <span class="dt">\</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">-u</span> memcached</span></code></pre></div>
+<h3 id="configuration-parameters">Configuration Parameters</h3>
+<ul>
+<li><code>-Z</code>: Enables TLS mode.</li>
+<li><code>ssl_chain_cert</code>: Path to the server's certificate file
+(or certificate chain).</li>
+<li><code>ssl_key</code>: Path to the server's private key.</li>
+<li><code>ssl_ca_cert</code>: Path to the CA certificate used to
+validate connecting clients.</li>
+<li><code>ssl_verify_mode=3</code>: Enforces that clients must present a
+certificate signed by the specified CA; connections without a valid
+certificate are rejected.</li>
+</ul>
+<h2 id="4-verify-tls-client-authentication">4. Verify TLS Client
+Authentication</h2>
+<p>Use OpenSSL's <code>s_client</code> utility to verify both valid and
+invalid connection attempts.</p>
+<h3 id="test-a-valid-connection">Test a Valid Connection</h3>
+<p>Connect by providing the trusted client certificate and private
+key:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> s_client <span class="at">-connect</span> 127.0.0.1:11211 <span class="dt">\</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">-cert</span> client.crt <span class="dt">\</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">-key</span> client.key <span class="dt">\</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">-CAfile</span> ca.crt</span></code></pre></div>
+<p>Once the handshake completes and displays
+<code>Verify return code: 0 (ok)</code>, type standard Memcached
+commands to test functionality:</p>
+<pre class="text"><code>version
+VERSION 1.6.x
+quit</code></pre>
+<h3 id="test-rejection-without-a-client-certificate">Test Rejection
+Without a Client Certificate</h3>
+<p>Attempt to connect without presenting client credentials:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> s_client <span class="at">-connect</span> 127.0.0.1:11211 <span class="at">-CAfile</span> ca.crt</span></code></pre></div>
+<p>The TLS handshake should fail immediately, and the server will
+terminate the connection with an alert such as
+<code>sslv3 alert handshake failure</code> or
+<code>peer did not return a certificate</code>.</p>
+<h3 id="test-rejection-with-an-untrusted-certificate">Test Rejection
+With an Untrusted Certificate</h3>
+<p>Generate a self-signed certificate not issued by
+<code>ca.crt</code>:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> req <span class="at">-x509</span> <span class="at">-newkey</span> rsa:2048 <span class="at">-nodes</span> <span class="at">-keyout</span> rogue.key <span class="at">-out</span> rogue.crt <span class="at">-days</span> 1 <span class="at">-subj</span> <span class="st">&quot;/CN=rogue&quot;</span></span></code></pre></div>
+<p>Attempt the connection using the untrusted certificate:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> s_client <span class="at">-connect</span> 127.0.0.1:11211 <span class="dt">\</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">-cert</span> rogue.crt <span class="dt">\</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">-key</span> rogue.key <span class="dt">\</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">-CAfile</span> ca.crt</span></code></pre></div>
+<p>The connection will be rejected during the TLS handshake with an
+<code>unknown ca</code> or <code>certificate verify failed</code> error,
+confirming that strict client verification is operational.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/enable-tls-client-authentication-in-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inspect Active Memcached Configuration - memcached</title>
+    <meta name="description" content="This article explains how to inspect the current active configuration of a running Memcached daemon using built-in administrative commands. You will learn the specific command required to view active settings, how to execute it via common command-line uti">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/inspect-active-memcached-configuration">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Inspect Active Memcached Configuration - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/inspect-active-memcached-configuration" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how to inspect the current active configuration of a running Memcached daemon using built-in administrative commands. You will learn the specific command required to view active settings, how to execute it via common command-line uti" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="inspect-active-memcached-configuration">Inspect Active Memcached
+Configuration</h1>
+<p>This article explains how to inspect the current active configuration
+of a running Memcached daemon using built-in administrative commands.
+You will learn the specific command required to view active settings,
+how to execute it via common command-line utilities, and how to
+interpret the most important configuration parameters returned by the
+server.</p>
+<h2 id="the-command-stats-settings">The Command:
+<code>stats settings</code></h2>
+<p>To inspect the runtime settings of a Memcached daemon, the command to
+use is:</p>
+<pre class="text"><code>stats settings</code></pre>
+<p>When issued to the Memcached service, this command returns key-value
+pairs representing the daemon's active operational parameters, including
+memory limits, connection thresholds, network bindings, and protocol
+configurations.</p>
+<h2 id="how-to-execute-the-command">How to Execute the Command</h2>
+<p>Memcached communicates via a plain-text protocol over its designated
+TCP port (default: <code>11211</code>). You can issue the
+<code>stats settings</code> command using several command-line
+tools.</p>
+<h3 id="using-netcat-nc">Using Netcat (<code>nc</code>)</h3>
+<p>Netcat provides a fast, non-interactive way to query the daemon:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;stats settings&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> 127.0.0.1 11211</span></code></pre></div>
+<h3 id="using-telnet">Using Telnet</h3>
+<p>For an interactive session, establish a connection with Telnet:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">telnet</span> 127.0.0.1 11211</span></code></pre></div>
+<p>Once connected, type <code>stats settings</code> and press
+<strong>Enter</strong>. Type <code>quit</code> and press
+<strong>Enter</strong> to exit the session.</p>
+<h3 id="using-memcached-tool">Using <code>memcached-tool</code></h3>
+<p>Many Linux distributions package an administrative Perl script named
+<code>memcached-tool</code>. You can view the configuration by
+running:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached-tool</span> 127.0.0.1:11211 settings</span></code></pre></div>
+<h2 id="key-configuration-parameters-explained">Key Configuration
+Parameters Explained</h2>
+<p>The output produces a list of all active parameters. The most
+critical settings include:</p>
+<ul>
+<li><strong><code>maxbytes</code></strong>: The maximum amount of memory
+(in bytes) allocated to the cache.</li>
+<li><strong><code>maxconns</code></strong>: The maximum number of
+simultaneous client connections allowed.</li>
+<li><strong><code>tcpport</code> / <code>udpport</code></strong>: The
+active network ports listening for incoming traffic.</li>
+<li><strong><code>inter</code></strong>: The network interface/IP
+address the daemon is bound to.</li>
+<li><strong><code>verbosity</code></strong>: The current logging level
+(0 = quiet, 1 = verbose, 2 = very verbose).</li>
+<li><strong><code>evictions</code></strong>: Indicates whether object
+eviction is enabled (<code>on</code> or <code>off</code>) when memory is
+full.</li>
+<li><strong><code>binding_protocol</code></strong>: Specifies the
+accepted protocols (e.g., <code>ascii</code>, <code>binary</code>, or
+<code>auto-negotiate</code>).</li>
+</ul>
+<p>Using <code>stats settings</code> ensures operators can verify
+operational states directly against the running process without relying
+on static configuration files that may not reflect real-time daemon
+states.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/inspect-active-memcached-configuration';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

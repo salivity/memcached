@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Connection Backlog Impact on OS Stability - memcached</title>
+    <meta name="description" content="Configuring an excessively high connection backlog queue in Memcached allows the service to absorb sudden spikes in incoming client traffic without immediately rejecting connections. However, setting this value too high without proportional OS-level resou">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-connection-backlog-impact-on-os-stability">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Connection Backlog Impact on OS Stability - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-connection-backlog-impact-on-os-stability" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Configuring an excessively high connection backlog queue in Memcached allows the service to absorb sudden spikes in incoming client traffic without immediately rejecting connections. However, setting this value too high without proportional OS-level resou" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-connection-backlog-impact-on-os-stability">Memcached
+Connection Backlog Impact on OS Stability</h1>
+<p>Configuring an excessively high connection backlog queue in Memcached
+allows the service to absorb sudden spikes in incoming client traffic
+without immediately rejecting connections. However, setting this value
+too high without proportional OS-level resource limits can jeopardize
+host operating system stability. This article examines how inflated
+backlog queues affect kernel memory consumption, network stack
+performance, CPU overhead, and overall system resilience during
+high-concurrency workloads.</p>
+<h3 id="understanding-the-connection-backlog">Understanding the
+Connection Backlog</h3>
+<p>Memcached handles incoming TCP connections using the standard socket
+API. When configured with the <code>-b</code> (backlog) parameter, it
+dictates the maximum length of the queue of pending connections passed
+to the <code>listen()</code> system call.</p>
+<p>This backlog operates at two layers within the Linux network
+stack:</p>
+<ol type="1">
+<li><strong>The SYN Queue (Incomplete Connection Queue):</strong>
+Manages connections during the three-way handshake
+(<code>SYN_RECV</code>), bounded by
+<code>net.ipv4.tcp_max_syn_backlog</code>.</li>
+<li><strong>The Accept Queue (Completed Connection Queue):</strong>
+Holds fully established connections waiting for Memcached worker threads
+to execute <code>accept()</code>, bounded by
+<code>net.core.somaxconn</code> and the application's backlog
+setting.</li>
+</ol>
+<p>The operating system truncates Memcached's requested backlog to the
+value of <code>net.core.somaxconn</code>. If both values are set
+excessively high, the OS permits thousands of connections to pool inside
+the kernel before Memcached processes them.</p>
+<h3 id="kernel-memory-exhaustion-slabsocket-buffers">Kernel Memory
+Exhaustion (SLAB/Socket Buffers)</h3>
+<p>Every TCP connection allocated by the Linux kernel consumes
+non-swappable kernel memory. Even unaccepted connections residing in the
+backlog require dedicated socket structures, control buffers
+(<code>sk_buff</code>), and transmission/receive memory:</p>
+<ul>
+<li><strong>Socket Metadata Overhead:</strong> A single TCP socket
+typically consumes between 1 KB and 3 KB of kernel memory, plus
+associated input/output buffers defined by <code>rmem_default</code> and
+<code>wmem_default</code>.</li>
+<li><strong>Slab Cache Pressure:</strong> Millions of queued sockets
+allocate memory directly from kernel slab caches (<code>TCP</code>,
+<code>tw_sock</code>, <code>sock_inode_cache</code>).</li>
+<li><strong>Out-Of-Memory (OOM) Conditions:</strong> Unlike user-space
+memory, kernel socket memory cannot be easily reclaimed or swapped to
+disk. If connection volume surges into a massive backlog, kernel memory
+exhaustion can trigger the Out-Of-Memory (OOM) killer, which may
+terminate critical system daemons, sshd, or Memcached itself.</li>
+</ul>
+<h3 id="cpu-overhead-and-softirq-starvation">CPU Overhead and Softirq
+Starvation</h3>
+<p>Managing deep queues places significant processing demands on the
+host CPU. When the backlog is flooded:</p>
+<ul>
+<li><strong>ksoftirqd Latency:</strong> Hardware network interrupts
+yield to software interrupts (softirqs) to process packets into
+connection queues. Under heavy connection rates with large backlogs, CPU
+cores spend excessive cycles in softirq contexts
+(<code>NET_RX_SOFTIRQ</code>), starving user-space processes of
+execution time.</li>
+<li><strong>Lock Contention:</strong> Access to the socket accept queue
+is synchronized. Deep queues and high rates of incoming
+<code>SYN</code>/<code>ACK</code> packets increase spinlock contention
+on the socket lock, deteriorating network processing efficiency.</li>
+</ul>
+<h3 id="connection-stalling-and-cascading-timeouts">Connection Stalling
+and Cascading Timeouts</h3>
+<p>Setting a large backlog often creates an illusion of capacity while
+masking severe latency degradation:</p>
+<ul>
+<li><strong>Client Timeouts:</strong> Clients waiting in an oversized
+backlog queue often hit their local connection or read timeouts (e.g.,
+50–200ms) before Memcached calls <code>accept()</code>.</li>
+<li><strong>Wasted Work:</strong> The host OS continues managing
+handshakes and allocating buffers for clients that have already
+abandoned the connection. When Memcached finally retrieves the socket
+from the backlog, it encounters an already-closed or reset connection
+(<code>ECONNRESET</code>), burning CPU cycles to close dead
+sockets.</li>
+<li><strong>SYN Flood Vulnerability:</strong> An excessively permissive
+backlog dilutes the effectiveness of OS-level SYN flood protections,
+such as SYN cookies (<code>net.ipv4.tcp_syncookies</code>), by delaying
+the activation threshold until memory is already heavily committed.</li>
+</ul>
+<h3 id="balanced-configuration-practices">Balanced Configuration
+Practices</h3>
+<p>To maintain host OS stability while handling production spikes:</p>
+<ol type="1">
+<li><strong>Avoid Arbitrary Maximums:</strong> Do not automatically set
+the backlog to extreme values (e.g., <code>65535</code>). Scale the
+backlog based on the maximum throughput Memcached threads can
+realistically process per second.</li>
+<li><strong>Align Kernel and Application Bounds:</strong> Match the
+Memcached <code>-b</code> parameter directly with
+<code>net.core.somaxconn</code> and adjust
+<code>net.ipv4.tcp_max_syn_backlog</code> to prevent asymmetrical queue
+bottlenecks.</li>
+<li><strong>Control Socket Buffer Sizes:</strong> Tune
+<code>net.ipv4.tcp_rmem</code> and <code>net.ipv4.tcp_wmem</code> to
+restrict minimum memory allocations per connection, reducing the
+footprint of idle or queued sockets.</li>
+<li><strong>Prefer Fast Failure:</strong> Configure client timeouts
+conservatively and allow the OS to reject excess connections with TCP
+resets (RST) via <code>net.ipv4.tcp_abort_on_overflow = 1</code> if the
+accept queue fills, protecting the host system from sustained
+starvation.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-connection-backlog-impact-on-os-stability';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Slab Automaton Prevents Memory Corruption - memcached</title>
+    <meta name="description" content="This article explores how Memcached utilizes its slab allocation automaton to guarantee memory safety and stability under high-concurrency workloads. High-throughput caching services face extreme risks of memory fragmentation, race conditions, and pointer">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-slab-automaton-prevents-memory-corruption">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Slab Automaton Prevents Memory Corruption - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-slab-automaton-prevents-memory-corruption" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how Memcached utilizes its slab allocation automaton to guarantee memory safety and stability under high-concurrency workloads. High-throughput caching services face extreme risks of memory fragmentation, race conditions, and pointer" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-slab-automaton-prevents-memory-corruption">How
+Memcached Slab Automaton Prevents Memory Corruption</h1>
+<p>This article explores how Memcached utilizes its slab allocation
+automaton to guarantee memory safety and stability under
+high-concurrency workloads. High-throughput caching services face
+extreme risks of memory fragmentation, race conditions, and pointer
+corruption when relying on standard dynamic memory allocation. By
+partitioning memory into deterministic slab classes, enforcing strict
+state-driven lifecycles, and coupling thread-safe reference counting
+with LRU (Least Recently Used) management, Memcached prevents memory
+corruption, buffer overflows, and use-after-free errors when operating
+near maximum capacity.</p>
+<h3 id="the-problem-with-standard-memory-allocation">The Problem with
+Standard Memory Allocation</h3>
+<p>Under heavy load, conventional runtime memory allocators relying on
+standard <code>malloc</code> and <code>free</code> operations struggle
+with rapid cycles of item creation and invalidation. Variable-sized
+allocations lead to severe external fragmentation, where free memory
+becomes scattered in non-contiguous blocks. Over time, the operating
+system kernel and runtime allocators experience lock contention, latency
+spikes, and an increased risk of memory exhaustion. In multi-threaded
+environments, asynchronous writes and evictions heighten the possibility
+of race conditions, dangling pointers, and double-free bugs.</p>
+<h3 id="slab-allocation-architecture">Slab Allocation Architecture</h3>
+<p>Memcached avoids dynamic heap fragmentation by pre-allocating a
+large, continuous memory pool during startup. This pool is managed via a
+slab allocation architecture:</p>
+<ul>
+<li><strong>Slab Pages:</strong> The pool is carved into discrete
+1-megabyte chunks called slab pages.</li>
+<li><strong>Slab Classes:</strong> Each page is assigned to a specific
+slab class based on item size. A geometric progression factor (typically
+1.25) dictates chunk capacities across classes (e.g., Class 1 holds
+96-byte items, Class 2 holds 120-byte items, and so on).</li>
+<li><strong>Pre-partitioned Chunks:</strong> Once a page is assigned to
+a slab class, it is cut into fixed-size slots. An incoming item is
+assigned strictly to the smallest slab class capable of holding its
+data.</li>
+</ul>
+<p>Because chunks within a slab class are uniform, Memcached completely
+avoids external fragmentation. Pointers never need to address variable
+offsets dynamically within a page, virtually eliminating memory boundary
+overruns.</p>
+<h3 id="the-slab-automaton-and-lifecycle-states">The Slab Automaton and
+Lifecycle States</h3>
+<p>The memory manager functions as a deterministic finite-state machine
+(automaton). Memory items move through distinct, non-overlapping
+lifecycle states:</p>
+<ol type="1">
+<li><strong>Unallocated/Free:</strong> The chunk resides in the slab
+class's free list.</li>
+<li><strong>Allocated/Initializing:</strong> Memory is reserved for an
+incoming payload; socket I/O writes data directly into the pre-sized
+chunk boundaries.</li>
+<li><strong>Active/Linked:</strong> The item is linked into the primary
+hash table and the LRU doubly linked list.</li>
+<li><strong>Stale/Expired:</strong> The item’s time-to-live (TTL) lapses
+or it is targeted by an explicit eviction mechanism.</li>
+<li><strong>Reclaimed:</strong> The chunk is unlinked from the hash
+table and returned to the freelist or overwritten directly.</li>
+</ol>
+<p>By strictly defining the transitions between these states, the slab
+automaton ensures that an item cannot be consumed or overwritten until
+its state has atomically shifted.</p>
+<h3 id="reference-counting-and-concurrency-protection">Reference
+Counting and Concurrency Protection</h3>
+<p>Under concurrent access, a common vector for memory corruption is the
+"use-after-free" bug—occurring when one thread evicts an item while
+another thread is transmitting its contents over a socket. Memcached
+resolves this through item-level reference counting
+(<code>refcount</code>):</p>
+<ul>
+<li>Every reader or worker thread handling an item increments its
+reference count while holding an item lock.</li>
+<li>When an item expires or is targeted for eviction by the LRU crawler,
+the memory manager removes it from the global hash table so no new
+threads can discover it.</li>
+<li>The actual memory chunk is not returned to the slab allocator or
+overwritten until the <code>refcount</code> drops to zero.</li>
+</ul>
+<p>This prevents read/write race conditions and ensures memory remains
+valid throughout the entire duration of a network transmission.</p>
+<h3 id="dynamic-slab-rebalancing-and-the-automaton-worker">Dynamic Slab
+Rebalancing and the Automaton Worker</h3>
+<p>When application access patterns shift, one slab class may run out of
+memory while others remain largely idle. Memcached handles this using a
+background thread known as the slab rebalancer.</p>
+<p>The rebalancer operates as an autonomous worker that migrates an
+entire 1MB page from an underutilized slab class to a starved one. To
+prevent data corruption during this process:</p>
+<ul>
+<li>The rebalancer locks the targeted page and halts allocations
+targeting that specific page slice.</li>
+<li>It systematically unlinks every active item on that page from the
+hash table, verifying reference counts.</li>
+<li>Only when all chunks within the page are idle and unreferenced does
+the automaton reformat the page into new chunk dimensions and assign it
+to the new slab class.</li>
+</ul>
+<h3 id="bounded-limits-and-thread-safety">Bounded Limits and Thread
+Safety</h3>
+<p>Memcached uses item locks partitioned across hash buckets alongside
+dedicated slab mutexes. The memory footprint of any given key-value pair
+is strictly bounded by the maximum slab size (typically 1MB), preventing
+arbitrary payload sizes from overflowing allocated buffers. By managing
+memory through predictable chunk assignments, strict state machines, and
+reference-tracked lifecycles, Memcached maintains zero memory corruption
+and predictable performance under high-concurrency loads.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-slab-automaton-prevents-memory-corruption';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

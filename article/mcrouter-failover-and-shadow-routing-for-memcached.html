@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mcrouter Failover and Shadow Routing for Memcached - memcached</title>
+    <meta name="description" content="This article examines how mcrouter, an open-source Memcached proxy developed by Facebook, handles advanced traffic orchestration through failover and shadow routing strategies. By abstracting cache architecture away from the application tier, mcrouter use">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/mcrouter-failover-and-shadow-routing-for-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Mcrouter Failover and Shadow Routing for Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/mcrouter-failover-and-shadow-routing-for-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines how mcrouter, an open-source Memcached proxy developed by Facebook, handles advanced traffic orchestration through failover and shadow routing strategies. By abstracting cache architecture away from the application tier, mcrouter use" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="mcrouter-failover-and-shadow-routing-for-memcached">Mcrouter
+Failover and Shadow Routing for Memcached</h1>
+<p>This article examines how mcrouter, an open-source Memcached proxy
+developed by Facebook, handles advanced traffic orchestration through
+failover and shadow routing strategies. By abstracting cache
+architecture away from the application tier, mcrouter uses configurable
+route trees to maintain high availability during hardware outages and
+enable safe production testing through asynchronous traffic
+mirroring.</p>
+<h3 id="understanding-mcrouter-route-trees">Understanding Mcrouter Route
+Trees</h3>
+<p>At the core of mcrouter's routing capabilities is the route tree,
+configured via a JSON-based domain-specific language. Instead of an
+application talking directly to individual Memcached nodes, it connects
+to mcrouter via the standard Memcached protocol. Mcrouter parses the
+incoming commands (such as <code>get</code>, <code>set</code>, or
+<code>delete</code>) and routes them through a hierarchy of route
+libraries, such as <code>FailoverRoute</code> and
+<code>ShadowRoute</code>, depending on the operational requirements of
+the caching tier.</p>
+<h3 id="implementing-failover-routing-strategies">Implementing Failover
+Routing Strategies</h3>
+<p>The primary objective of failover routing in mcrouter is to ensure
+high availability and prevent cache stampedes when a cache node degrades
+or fails entirely. This is achieved primarily through the
+<code>FailoverRoute</code> handle.</p>
+<ol type="1">
+<li><strong>Sequential Request Fallback:</strong> When configured with a
+<code>FailoverRoute</code>, mcrouter specifies a list of targets (pools
+or specific instances), designated as primary and secondary targets.
+Mcrouter attempts to dispatch the command to the primary target
+first.</li>
+<li><strong>Error Detection:</strong> If the primary target returns an
+error (such as a connection timeout, network failure, or an explicit
+server error), mcrouter captures the failure rather than returning it
+directly to the client.</li>
+<li><strong>Failover Execution:</strong> Upon detecting the qualifying
+error, mcrouter immediately retries the operation on the subsequent
+targets in the configured list until a successful response is received
+or all targets are exhausted.</li>
+<li><strong>Error Masking and TMO Handling:</strong> Mcrouter can
+distinguish between hard network failures and data misses
+(<code>NOT_FOUND</code>). A cache miss is treated as a valid response
+and returned to the application, whereas an unresponsive server triggers
+the next route in the failover chain.</li>
+</ol>
+<p>Advanced failover configurations can also leverage
+<code>FailoverWithExptimeRoute</code>, which automatically alters the
+Time-To-Live (TTL) on writes routed to failover pools. This prevents
+stale data from persisting indefinitely in backup instances once the
+primary cluster recovers.</p>
+<h3 id="implementing-shadow-routing-strategies">Implementing Shadow
+Routing Strategies</h3>
+<p>Shadow routing allows engineers to mirror live production traffic to
+a secondary, non-production Memcached cluster without affecting
+application latency or data integrity. This is handled by the
+<code>ShadowRoute</code>.</p>
+<ol type="1">
+<li><strong>Traffic Duplication:</strong> A <code>ShadowRoute</code>
+defines a "normal" child route and one or more "shadow" routes. When a
+client issues a query, mcrouter sends the request to the normal
+destination synchronously.</li>
+<li><strong>Asynchronous Dispatch:</strong> Concurrently, mcrouter
+duplicates the command and dispatches it to the shadow target. This
+shadow request runs asynchronously in the background.</li>
+<li><strong>Response Handling:</strong> The response from the primary
+target is returned immediately to the client application. The response
+from the shadow target is completely discarded by mcrouter, ensuring
+that errors or slow response times in the shadow cluster never impact
+the end user.</li>
+<li><strong>Rate Limiting and Sampling:</strong> Shadowing can be
+configured with sampling rates (e.g., mirroring only 10% of total
+commands) and specific key prefixes. This protects shadow clusters from
+being overwhelmed if they run on smaller hardware footprints.</li>
+</ol>
+<h3 id="common-use-cases-for-combined-routing">Common Use Cases for
+Combined Routing</h3>
+<p>Because mcrouter routes are composable, administrators frequently
+nest <code>FailoverRoute</code> and <code>ShadowRoute</code> instances
+inside one another:</p>
+<ul>
+<li><strong>Safe Cluster Upgrades:</strong> Deploy a new Memcached
+version in a shadow pool. By routing mirrored production reads and
+writes to it via <code>ShadowRoute</code>, engineers can validate memory
+usage, latency profiles, and stability under real workloads before
+cutting over traffic.</li>
+<li><strong>Warm Cache Deployment:</strong> Before replacing a failing
+or degraded node, a new node can be configured as a shadow target for
+writes. Once its cache is sufficiently populated, it can be promoted to
+the primary position in a <code>FailoverRoute</code> without inducing a
+cold-cache performance hit on backend databases.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/mcrouter-failover-and-shadow-routing-for-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

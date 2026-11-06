@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inspect Slab Page Allocations in Memcached - memcached</title>
+    <meta name="description" content="This article explains how to inspect slab page allocation counts in Memcached to optimize memory usage and troubleshoot caching issues. By using built-in administrative commands, operators can monitor memory distribution across slab classes, identify memo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/inspect-slab-page-allocations-in-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Inspect Slab Page Allocations in Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/inspect-slab-page-allocations-in-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how to inspect slab page allocation counts in Memcached to optimize memory usage and troubleshoot caching issues. By using built-in administrative commands, operators can monitor memory distribution across slab classes, identify memo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="inspect-slab-page-allocations-in-memcached">Inspect Slab Page
+Allocations in Memcached</h1>
+<p>This article explains how to inspect slab page allocation counts in
+Memcached to optimize memory usage and troubleshoot caching issues. By
+using built-in administrative commands, operators can monitor memory
+distribution across slab classes, identify memory fragmentation, and
+verify how many 1MB memory pages each slab class currently holds.</p>
+<h2 id="the-command-stats-slabs">The Command:
+<code>stats slabs</code></h2>
+<p>The primary command used to inspect slab page allocation counts in
+Memcached is <code>stats slabs</code>.</p>
+<p>Memcached manages memory by dividing allocated RAM into slabs, which
+are further partitioned into equal-sized chunks suited for specific item
+size ranges. Running <code>stats slabs</code> produces detailed
+statistics for every active slab class in the daemon, including the
+total number of pages assigned to each class.</p>
+<h2 id="how-to-execute-the-command">How to Execute the Command</h2>
+<p>Operators can send the command directly over a TCP connection using
+tools like <code>nc</code> (netcat) or <code>telnet</code>.</p>
+<p>Using netcat:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;stats slabs&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> 127.0.0.1 11211</span></code></pre></div>
+<p>Using telnet:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">telnet</span> 127.0.0.1 11211</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">stats</span> slabs</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">quit</span></span></code></pre></div>
+<p>Alternatively, the <code>memcached-tool</code> utility (included with
+many Linux distributions) can display this information in a formatted
+table:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached-tool</span> 127.0.0.1:11211 display</span></code></pre></div>
+<h2 id="interpreting-page-allocation-metrics">Interpreting Page
+Allocation Metrics</h2>
+<p>The output of <code>stats slabs</code> lists key-value pairs
+categorized by slab class identifier (e.g., <code>1</code>,
+<code>2</code>, <code>3</code>). To track page allocations, look for the
+following metrics:</p>
+<ul>
+<li><strong><code>&lt;slabclass&gt;:total_pages</code></strong>: The
+number of 1MB pages assigned to this specific slab class. This is the
+exact metric indicating page allocation counts.</li>
+<li><strong><code>&lt;slabclass&gt;:chunk_size</code></strong>: The size
+in bytes of each chunk within the slab.</li>
+<li><strong><code>&lt;slabclass&gt;:chunks_per_page</code></strong>: The
+number of chunks that fit into a single 1MB page.</li>
+<li><strong><code>&lt;slabclass&gt;:used_chunks</code></strong>: The
+number of allocated chunks currently storing data.</li>
+<li><strong><code>&lt;slabclass&gt;:free_chunks</code></strong>: The
+number of allocated chunks available for new items without allocating a
+new page.</li>
+<li><strong><code>active_slabs</code></strong>: The total count of
+active slab classes in the system.</li>
+<li><strong><code>total_malloced</code></strong>: Total memory allocated
+for all slabs combined.</li>
+</ul>
+<h2 id="why-monitoring-slab-allocations-matters">Why Monitoring Slab
+Allocations Matters</h2>
+<p>Once a page is assigned to a slab class, older Memcached versions
+lock that page to that class permanently. In modern versions, the slab
+automove feature (<code>slab_automove</code>) reallocates pages
+dynamically, but monitoring <code>total_pages</code> remains vital.
+Disproportionately high page counts in rarely used slab classes indicate
+memory skew, while classes consistently running out of free chunks can
+lead to unnecessary evictions.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/inspect-slab-page-allocations-in-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

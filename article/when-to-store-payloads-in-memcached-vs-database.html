@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>When to Store Payloads in Memcached vs Database - memcached</title>
+    <meta name="description" content="Deciding whether to store a payload in Memcached or retrieve it directly from a primary database hinges on a system&#39;s tolerance for latency, data volatility, infrastructure cost, and memory constraints. While Memcached provides sub-millisecond, in-memory">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/when-to-store-payloads-in-memcached-vs-database">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="When to Store Payloads in Memcached vs Database - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/when-to-store-payloads-in-memcached-vs-database" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Deciding whether to store a payload in Memcached or retrieve it directly from a primary database hinges on a system&#39;s tolerance for latency, data volatility, infrastructure cost, and memory constraints. While Memcached provides sub-millisecond, in-memory" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="when-to-store-payloads-in-memcached-vs-database">When to Store
+Payloads in Memcached vs Database</h1>
+<p>Deciding whether to store a payload in Memcached or retrieve it
+directly from a primary database hinges on a system's tolerance for
+latency, data volatility, infrastructure cost, and memory constraints.
+While Memcached provides sub-millisecond, in-memory key-value lookups
+that shield databases from massive read traffic, it is not universally
+optimal for every workload. Evaluating factors such as access frequency,
+computational expense, payload size, and consistency guarantees ensures
+an optimal balance between performance and resource efficiency.</p>
+<h3 id="read-to-write-ratio">Read-to-Write Ratio</h3>
+<p>Workloads with a high read-to-write ratio (e.g., 80/20 or higher) are
+the prime candidates for Memcached. If data is read thousands of times
+between updates—such as user profile headers, site settings, or product
+catalog details—caching eliminates repetitive database read cycles.
+Conversely, write-heavy data that changes faster than it is read should
+be fetched directly from the database, as frequent invalidations negate
+any caching performance benefit.</p>
+<h3 id="computational-and-query-expense">Computational and Query
+Expense</h3>
+<p>The computational cost of generating a payload strongly influences
+caching decisions. Simple primary-key queries against an indexed
+relational table or document store execute in milliseconds and place
+minimal strain on the database. In contrast, complex queries involving
+multiple table joins, aggregations, or heavy sorting demand significant
+CPU and I/O resources. Storing the computed result of expensive
+operations in Memcached provides a massive return on investment,
+regardless of access volume.</p>
+<h3 id="payload-size-and-slab-allocator-limits">Payload Size and Slab
+Allocator Limits</h3>
+<p>Memcached defaults to a maximum item size of 1 megabyte (MB). It uses
+a slab allocator to manage memory and prevent fragmentation, grouping
+data into fixed-size chunks. Storing very large payloads (approaching or
+exceeding 1MB) wastes slab allocation space, increases network
+serialization overhead, and can quickly evict smaller, high-value keys.
+Large blobs, documents, or high-definition media are better served from
+object storage or queried in streaming chunks from the database, while
+Memcached should be reserved for compact, serialized objects.</p>
+<h3 id="latency-and-concurrency-requirements">Latency and Concurrency
+Requirements</h3>
+<p>If an application endpoint requires strict single-digit millisecond
+response times under peak traffic, reading from Memcached is often
+mandatory. Primary databases must manage connection pools, disk I/O,
+write locks, and transaction isolation levels, which introduce latency
+spikes under concurrent loads. Memcached operates purely in-memory with
+non-blocking I/O, making it the appropriate choice when serving
+high-concurrency, latency-critical read requests.</p>
+<h3 id="staleness-tolerance-and-consistency-models">Staleness Tolerance
+and Consistency Models</h3>
+<p>Memcached is inherently an eventually consistent, volatile cache with
+no native support for transactions or complex querying. If an
+application requires strict ACID guarantees—such as checking financial
+balances or updating inventory during a checkout flow—fetching directly
+from the primary database prevents dirty reads and race conditions.
+Payloads should only reside in Memcached if the application can safely
+tolerate slight eventual consistency delays during invalidation
+cycles.</p>
+<h3 id="access-distribution-hot-vs-cold-data">Access Distribution (Hot
+vs. Cold Data)</h3>
+<p>Data access typically follows a Zipfian distribution, where a small
+subset of "hot" keys receives the majority of requests. Memcached
+enforces Least Recently Used (LRU) eviction when memory is full. Storing
+uniformly distributed, rarely accessed "cold" data pollutes the cache
+and causes constant key churn without improving hit rates. Cold payloads
+should remain in the primary database, leaving Memcached capacity
+dedicated strictly to frequently referenced data.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/when-to-store-payloads-in-memcached-vs-database';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

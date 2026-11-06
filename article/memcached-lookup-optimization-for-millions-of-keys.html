@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Lookup Optimization for Millions of Keys - memcached</title>
+    <meta name="description" content="Memcached delivers deterministic, sub-millisecond data retrieval for applications storing millions of keys by relying on an in-memory architecture centered around an expandable hash table, fine-grained concurrency, and custom memory management. By elimina">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-lookup-optimization-for-millions-of-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Lookup Optimization for Millions of Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-lookup-optimization-for-millions-of-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached delivers deterministic, sub-millisecond data retrieval for applications storing millions of keys by relying on an in-memory architecture centered around an expandable hash table, fine-grained concurrency, and custom memory management. By elimina" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-lookup-optimization-for-millions-of-keys">Memcached
+Lookup Optimization for Millions of Keys</h1>
+<p>Memcached delivers deterministic, sub-millisecond data retrieval for
+applications storing millions of keys by relying on an in-memory
+architecture centered around an expandable hash table, fine-grained
+concurrency, and custom memory management. By eliminating disk I/O,
+utilizing efficient hashing algorithms, dynamically expanding its
+internal bucket structures, and preventing operating system memory
+fragmentation through slab allocation, Memcached maintains <span
+class="math inline">\(O(1)\)</span> constant-time lookup performance
+regardless of the total dataset size.</p>
+<h3 id="global-hash-table-and-fast-hashing">Global Hash Table and Fast
+Hashing</h3>
+<p>At the core of Memcached's lookup engine is an internal hash table.
+When an application queries a key, Memcached computes a 32-bit hash
+value using optimized algorithms like Murmur3 or Jenkins Hash. These
+algorithms distribute keys uniformly across available buckets,
+minimizing collisions even when scaling to tens of millions of
+records.</p>
+<p>Memcached maps the computed hash to a specific bucket index. Because
+the hash table operates in pure RAM, resolving this index to a memory
+pointer requires only a few CPU instructions. If multiple keys hash to
+the same bucket, Memcached resolves the collision using a singly linked
+list (separate chaining), checking the full key name to find the exact
+match.</p>
+<h3 id="non-blocking-dynamic-hash-table-expansion">Non-Blocking Dynamic
+Hash Table Expansion</h3>
+<p>As an application inserts millions of keys, the ratio of items to
+buckets (the load factor) increases. If left unmanaged, linked-list
+chains within buckets would grow longer, degrading lookup speed from
+<span class="math inline">\(O(1)\)</span> toward <span
+class="math inline">\(O(n)\)</span>.</p>
+<p>Memcached prevents this by monitoring the load factor. When the
+number of stored items exceeds 1.5 times the number of hash buckets, a
+background maintenance thread automatically doubles the hash table size.
+The rebalancing process moves items from the old table to the new,
+larger table incrementally over time. Because this resizing occurs on a
+dedicated thread in small batches, read and write operations continue
+uninterrupted without latency spikes.</p>
+<h3 id="granular-locking-and-multithreading">Granular Locking and
+Multithreading</h3>
+<p>High lookup speeds under heavy concurrent traffic require efficient
+thread synchronization. Early versions of caching systems relied on a
+single global lock, which created CPU bottlenecks when multiple threads
+attempted concurrent reads.</p>
+<p>Modern Memcached employs cache-aware multithreading with fine-grained
+item locks (lock striping). The hash table is divided into thousands of
+discrete lock segments. When a worker thread performs a lookup, it
+acquires a read lock only for the specific bucket chain containing the
+target key. This allows dozens of worker threads to execute lookups
+simultaneously across different buckets with virtually zero lock
+contention.</p>
+<h3 id="slab-allocation-and-cache-locality">Slab Allocation and Cache
+Locality</h3>
+<p>Standard OS-level memory allocators (like standard
+<code>malloc</code> and <code>free</code>) suffer from external
+fragmentation when managing millions of variable-sized objects, leading
+to scattered memory pointers and expensive CPU cache misses.</p>
+<p>Memcached bypasses this issue using its Slab Allocator:</p>
+<ul>
+<li><strong>Pre-allocated Chunks:</strong> Memory is divided into 1MB
+pages, which are further divided into uniform chunks of specific sizes
+(slab classes).</li>
+<li><strong>Direct Pointer Access:</strong> Items are placed into the
+slab class that best fits their size.</li>
+<li><strong>Deterministic Layout:</strong> Memory addresses remain
+predictable and contiguous, optimizing CPU L1/L2/L3 cache line
+utilization during pointer dereferencing.</li>
+</ul>
+<h3 id="constant-time-eviction">Constant-Time Eviction</h3>
+<p>When memory is exhausted, Memcached avoids scanning the entire
+dataset to free space. Instead, it utilizes an isolated Least Recently
+Used (LRU) doubly linked list per slab class. Finding and evicting an
+expired or stale item to make room for new data is strictly an <span
+class="math inline">\(O(1)\)</span> operation, ensuring that memory
+exhaustion never degrades read or write lookup latency.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-lookup-optimization-for-millions-of-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

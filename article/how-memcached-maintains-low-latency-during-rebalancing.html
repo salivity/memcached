@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Maintains Low Latency During Rebalancing - memcached</title>
+    <meta name="description" content="Memcached maintains sub-millisecond response times during background memory rebalancing through a combination of dedicated background threads, incremental item migration, and fine-grained locking. When memory demands shift across different item sizes, the">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-maintains-low-latency-during-rebalancing">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Maintains Low Latency During Rebalancing - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-maintains-low-latency-during-rebalancing" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains sub-millisecond response times during background memory rebalancing through a combination of dedicated background threads, incremental item migration, and fine-grained locking. When memory demands shift across different item sizes, the" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-maintains-low-latency-during-rebalancing">How
+Memcached Maintains Low Latency During Rebalancing</h1>
+<p>Memcached maintains sub-millisecond response times during background
+memory rebalancing through a combination of dedicated background
+threads, incremental item migration, and fine-grained locking. When
+memory demands shift across different item sizes, the slab rebalancer
+migrates 1MB memory pages between slab classes without freezing the
+system or stalling client operations. This architecture ensures
+high-throughput, predictable performance by breaking heavy memory
+maintenance into microscopic, non-blocking steps.</p>
+<h2 id="the-dedicated-slab-rebalancer-thread">The Dedicated Slab
+Rebalancer Thread</h2>
+<p>Rather than burdening worker threads that handle incoming network
+read and write traffic, Memcached delegates memory reallocation to a
+dedicated background rebalancer thread. By isolating memory maintenance
+to its own execution context, worker threads remain fully available to
+process <code>GET</code>, <code>SET</code>, and <code>DELETE</code>
+commands. The rebalancer thread operates at a lower operational
+priority, ensuring client queries always take precedence over background
+reorganization.</p>
+<h2 id="step-by-step-state-machine-processing">Step-by-Step State
+Machine Processing</h2>
+<p>Rebalancing an entire 1MB slab page at once would introduce
+substantial latency if executed atomically. To prevent this, Memcached
+utilizes a cooperative state machine that processes the page
+incrementally:</p>
+<ol type="1">
+<li><strong>Selection:</strong> The slab automover identifies a source
+slab class with cold or surplus memory and a destination slab class that
+is starved for space.</li>
+<li><strong>Item-by-Item Scanning:</strong> The rebalancer steps through
+the target 1MB page item by item rather than moving the block en
+masse.</li>
+<li><strong>Cooperative Yielding:</strong> Between migrating individual
+chunks, the background thread yields execution, allowing worker threads
+access to memory locks and CPU cores.</li>
+<li><strong>Completion:</strong> Once every chunk on the page is
+cleared, the physical 1MB page is unlinked from the source class and
+reassigned to the destination slab class.</li>
+</ol>
+<h2 id="fine-grained-and-lockless-coordination">Fine-Grained and
+Lockless Coordination</h2>
+<p>Lock contention is the primary source of latency spikes in
+multi-threaded caches. Memcached mitigates contention during rebalancing
+through targeted synchronization:</p>
+<ul>
+<li><strong>Short-Lived Locks:</strong> The rebalancer acquires the slab
+lock only for the duration needed to manipulate a specific item,
+releasing it immediately after.</li>
+<li><strong>Per-Item Hash Table Locks:</strong> When unlinking an active
+item from the cache during page migration, the thread locks only the
+specific hash bucket associated with that item, leaving the rest of the
+hash table completely open to concurrent traffic.</li>
+<li><strong>Lock Stealing Avoidance:</strong> If a worker thread
+requests an item currently targeted by the rebalancer, Memcached
+prioritizes the worker. Depending on the state, the worker either
+successfully reads the item or receives a normal cache miss while the
+item is evicted, avoiding serialization bottlenecks.</li>
+</ul>
+<h2 id="minimal-impact-on-concurrent-slab-classes">Minimal Impact on
+Concurrent Slab Classes</h2>
+<p>Memcached divides memory into discrete slab classes based on data
+size. The rebalancing mechanism is localized entirely to the two
+participating slab classes—the source and the destination. Operations
+targeting all other slab classes proceed without any synchronization
+overhead or lock checking, preserving zero-overhead concurrency across
+the vast majority of cached data.</p>
+<h2 id="rate-limiting-and-sleep-throttling">Rate Limiting and Sleep
+Throttling</h2>
+<p>To prevent background rebalancing from exhausting memory bus
+bandwidth or CPU caches, the rebalancer incorporates sleep intervals. By
+intentionally pacing the speed at which pages are transferred, the
+system maintains flat latency curves even during significant workload
+shifts where multiple megabytes of cache are actively being
+restructured.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-maintains-low-latency-during-rebalancing';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

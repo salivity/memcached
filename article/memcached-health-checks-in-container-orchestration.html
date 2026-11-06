@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Health Checks in Container Orchestration - memcached</title>
+    <meta name="description" content="Container orchestration platforms like Kubernetes, Docker Swarm, and Nomad rely on health checks and readiness probes to manage the lifecycle of containerized workloads, but implementing them for Memcached presents unique challenges due to its lack of a n">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-health-checks-in-container-orchestration">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Health Checks in Container Orchestration - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-health-checks-in-container-orchestration" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Container orchestration platforms like Kubernetes, Docker Swarm, and Nomad rely on health checks and readiness probes to manage the lifecycle of containerized workloads, but implementing them for Memcached presents unique challenges due to its lack of a n" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-health-checks-in-container-orchestration">Memcached
+Health Checks in Container Orchestration</h1>
+<p>Container orchestration platforms like Kubernetes, Docker Swarm, and
+Nomad rely on health checks and readiness probes to manage the lifecycle
+of containerized workloads, but implementing them for Memcached presents
+unique challenges due to its lack of a native HTTP interface. Because
+Memcached communicates over a proprietary text or binary protocol on
+TCP/UDP port 11211 rather than standard HTTP, orchestrators cannot rely
+on basic HTTP status checks. This article explains how orchestration
+systems manage Memcached health, comparing simple TCP socket tests,
+in-container command executions, and specialized monitoring techniques
+to ensure optimal caching tier reliability.</p>
+<h2 id="the-role-of-health-checks-in-memcached">The Role of Health
+Checks in Memcached</h2>
+<p>In modern orchestrators, health checks are typically divided into
+three primary types:</p>
+<ul>
+<li><strong>Liveness Probes:</strong> Determine if the Memcached
+container is alive. If this probe fails, the orchestrator kills the
+container and initiates a restart according to its restart policy.</li>
+<li><strong>Readiness Probes:</strong> Determine whether the instance is
+ready to accept client traffic. If a readiness probe fails, the
+orchestrator removes the pod or container IP from internal routing (such
+as a Kubernetes Service), preventing cache clients from receiving
+connection errors.</li>
+<li><strong>Startup Probes:</strong> Inform the orchestrator that an
+application is still initializing, temporarily disabling liveness and
+readiness checks to prevent premature restarts during slow cold
+starts.</li>
+</ul>
+<h2 id="methods-for-implementing-probes">Methods for Implementing
+Probes</h2>
+<p>Because Memcached does not include a built-in web server to return
+<code>200 OK</code> responses, orchestration tools evaluate its state
+using alternative strategies.</p>
+<h3 id="1-tcp-socket-probes">1. TCP Socket Probes</h3>
+<p>The simplest and most resource-efficient mechanism is a native TCP
+socket check. In platforms like Kubernetes, this is defined via
+<code>tcpSocket</code> pointing to port <code>11211</code>.</p>
+<ul>
+<li><strong>How it works:</strong> The orchestration agent attempts to
+establish a three-way TCP handshake with the Memcached port. If the
+connection succeeds, the probe passes; if the connection is refused or
+times out, it fails.</li>
+<li><strong>Advantages:</strong> Extremely lightweight, requires no
+external utilities or binaries within the container, and consumes
+minimal CPU and network resources.</li>
+<li><strong>Disadvantages:</strong> It only verifies that the network
+daemon has bound to the port. It cannot verify whether the Memcached
+event loop is blocked, if worker threads are deadlocked, or if memory
+exhaustion is causing request drops.</li>
+</ul>
+<h3 id="2-command-execution-exec-probes">2. Command Execution (Exec)
+Probes</h3>
+<p>To verify that Memcached is actually processing commands,
+orchestrators can run commands inside the container using an execution
+probe.</p>
+<ul>
+<li><p><strong>Protocol Ping via Netcat or Bash:</strong> The probe
+sends a basic command, such as <code>version</code> or
+<code>stats</code>, and checks for a valid response:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="at">-e</span> <span class="st">&quot;version\r\n&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> 127.0.0.1 11211 <span class="kw">|</span> <span class="fu">grep</span> <span class="at">-q</span> <span class="st">&quot;VERSION&quot;</span></span></code></pre></div></li>
+<li><p><strong>Using <code>memcached-tool</code>:</strong> Container
+images that include Perl or administrative packages often bundle the
+<code>memcached-tool</code> utility. The orchestrator can run
+<code>memcached-tool 127.0.0.1:11211 display</code> to verify internal
+functionality.</p></li>
+<li><p><strong>Advantages:</strong> Validates that the engine is
+genuinely parsing commands and returning output, providing true
+application-level verification.</p></li>
+<li><p><strong>Disadvantages:</strong> Executing a process inside a
+container creates additional system overhead (forking processes,
+allocating memory) every few seconds, which can degrade low-latency
+cache performance at scale. Furthermore, modern minimal container images
+(distroless or alpine-based) often lack shells, <code>nc</code>, or
+<code>grep</code> for security reasons.</p></li>
+</ul>
+<h3 id="3-sidecar-and-monitoring-agent-probes">3. Sidecar and Monitoring
+Agent Probes</h3>
+<p>In high-throughput environments, engineers frequently deploy a
+sidecar container, such as the Prometheus
+<code>memcached_exporter</code>, alongside the main Memcached
+instance.</p>
+<ul>
+<li><strong>How it works:</strong> The sidecar connects to Memcached
+locally via the native protocol and exposes metrics over an HTTP
+endpoint (e.g., <code>:9150/metrics</code>).</li>
+<li><strong>Application:</strong> The orchestrator can point standard
+HTTP readiness probes to the exporter. If the exporter fails to scrape
+Memcached, the HTTP probe fails, allowing the orchestrator to route
+traffic away without adding shell tools to the Memcached image
+itself.</li>
+</ul>
+<h2 id="best-practices-for-memcached-probing">Best Practices for
+Memcached Probing</h2>
+<ul>
+<li><strong>Use TCP Checks for Liveness, Not Readiness:</strong> A TCP
+socket check is ideal for liveness probes because it avoids unnecessary
+process-fork overhead while reliably catching hard crashes and hung
+processes.</li>
+<li><strong>Keep Timeouts Short:</strong> Memcached operations are
+measured in sub-milliseconds. Set probe timeouts low (e.g., 1 to 2
+seconds) and avoid aggressive failure thresholds to prevent temporary
+network blips from triggering unnecessary cache flushes.</li>
+<li><strong>Avoid Disruptive Cache Restarts:</strong> When a Memcached
+container restarts, its entire in-memory dataset is lost, creating a
+"cache stampede" against backend databases. Configure liveness probes
+conservatively, requiring multiple consecutive failures before an
+orchestrator terminates the instance.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-health-checks-in-container-orchestration';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

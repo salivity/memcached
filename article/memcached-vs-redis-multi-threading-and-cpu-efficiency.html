@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached vs Redis: Multi-Threading and CPU Efficiency - memcached</title>
+    <meta name="description" content="When comparing Memcached and Redis on CPU utilization and execution models, their foundational architectures present fundamentally different approaches. Memcached is natively built with a multi-threaded architecture capable of scaling linear throughput ac">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-vs-redis-multi-threading-and-cpu-efficiency">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached vs Redis: Multi-Threading and CPU Efficiency - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-vs-redis-multi-threading-and-cpu-efficiency" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When comparing Memcached and Redis on CPU utilization and execution models, their foundational architectures present fundamentally different approaches. Memcached is natively built with a multi-threaded architecture capable of scaling linear throughput ac" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-vs-redis-multi-threading-and-cpu-efficiency">Memcached
+vs Redis: Multi-Threading and CPU Efficiency</h1>
+<p>When comparing Memcached and Redis on CPU utilization and execution
+models, their foundational architectures present fundamentally different
+approaches. Memcached is natively built with a multi-threaded
+architecture capable of scaling linear throughput across modern
+multi-core processors out of the box. In contrast, Redis relies
+primarily on a single-threaded event loop for command execution,
+recently augmented by multi-threaded I/O, requiring horizontal process
+scaling to fully saturate multi-core CPUs.</p>
+<h3 id="memcached-native-multi-threading-architecture">Memcached: Native
+Multi-Threading Architecture</h3>
+<p>Memcached uses an event-based, multi-threaded model utilizing
+<code>libevent</code>. When the daemon starts, it creates a master
+thread and a pool of worker threads assigned to handle incoming
+connections and cache operations.</p>
+<ul>
+<li><strong>Linear Multi-Core Scaling:</strong> Memcached distributes
+network connections across its worker threads. As CPU core counts
+increase on a single server, allocating more threads directly scales
+read and write capacity without the need to run separate daemon
+instances.</li>
+<li><strong>Granular Locking:</strong> Memory in Memcached is shared
+across all threads. To maintain data consistency, it employs granular
+item-level and slab-level mutex locks. While this enables high
+multi-core utilization, extreme contention on identical keys or memory
+slabs can introduce lock-overhead bottlenecks at massive concurrency
+levels.</li>
+<li><strong>Operational Simplicity on Large Hardware:</strong> A single
+Memcached process can easily consume 32, 64, or more CPU cores and
+hundreds of gigabytes of RAM, keeping operational and routing complexity
+minimal on large compute instances.</li>
+</ul>
+<h3 id="redis-single-threaded-core-with-multi-threaded-io">Redis:
+Single-Threaded Core with Multi-Threaded I/O</h3>
+<p>Redis was deliberately designed around an event-driven,
+single-threaded execution core. A single thread sequentially processes
+all client commands using non-blocking I/O multiplexing.</p>
+<ul>
+<li><strong>Deterministic Command Execution:</strong> Because commands
+run sequentially on one thread, Redis eliminates the need for internal
+locks, mutexes, or synchronization mechanisms. This guarantees atomicity
+and ultra-low latency for complex data types (such as sorted sets,
+hashes, and bitmaps), but it limits core command execution to the speed
+of a single CPU core.</li>
+<li><strong>Threaded I/O (Redis 6.0+):</strong> While the main execution
+thread remains single-threaded, Redis offloads time-consuming socket
+read and write operations, as well as protocol parsing, to secondary I/O
+threads. This substantially improves CPU utilization on multi-core
+systems compared to older versions, but the actual command processing
+still caps at one core.</li>
+<li><strong>Scaling Across Cores:</strong> To utilize all CPU cores on a
+multi-core machine, administrators must deploy multiple Redis instances
+on separate ports and use client-side sharding or Redis Cluster. This
+introduces management overhead, including connection pooling across
+processes, higher memory overhead per instance, and partitioned data
+management.</li>
+</ul>
+<h3 id="cpu-utilization-efficiency-comparison">CPU Utilization
+Efficiency Comparison</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Metric</th>
+<th style="text-align: left;">Memcached</th>
+<th style="text-align: left;">Redis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Execution Model</strong></td>
+<td style="text-align: left;">Multi-threaded</td>
+<td style="text-align: left;">Single-threaded core (Threaded I/O)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Single-Process Core
+Usage</strong></td>
+<td style="text-align: left;">Saturates all assigned CPU cores</td>
+<td style="text-align: left;">Saturates 1 core for commands; 2–4 cores
+with I/O threads</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Lock Contention</strong></td>
+<td style="text-align: left;">Present (mitigated by slab/item
+locks)</td>
+<td style="text-align: left;">None (lock-free command execution)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Multi-Core Scaling
+Method</strong></td>
+<td style="text-align: left;">Increase thread count in
+configuration</td>
+<td style="text-align: left;">Deploy multiple processes or Redis
+Cluster</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Workload Profile</strong></td>
+<td style="text-align: left;">High-throughput, simple key-value
+reads/writes</td>
+<td style="text-align: left;">Complex data operations, scripting,
+single-thread latency optimization</td>
+</tr>
+</tbody>
+</table>
+<h3 id="summary">Summary</h3>
+<p>For pure key-value caching where the goal is to extract maximum
+throughput from a multi-core server with a single process, Memcached
+offers superior CPU utilization efficiency. It seamlessly scales with
+CPU core counts without architectural workarounds. Redis trades raw
+multi-threaded CPU saturation for algorithmic richness and lock-free
+deterministic performance, requiring cluster-level sharding to achieve
+comparable multi-core hardware utilization.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-vs-redis-multi-threading-and-cpu-efficiency';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

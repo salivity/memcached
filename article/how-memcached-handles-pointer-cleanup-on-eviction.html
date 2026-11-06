@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Pointer Cleanup on Eviction - memcached</title>
+    <meta name="description" content="When Memcached evicts an entry to reclaim space, it manages internal pointer cleanup through an unlinking process across its primary internal data structures: the hash table and the LRU (Least Recently Used) doubly linked list. Rather than deallocating me">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-pointer-cleanup-on-eviction">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Pointer Cleanup on Eviction - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-pointer-cleanup-on-eviction" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When Memcached evicts an entry to reclaim space, it manages internal pointer cleanup through an unlinking process across its primary internal data structures: the hash table and the LRU (Least Recently Used) doubly linked list. Rather than deallocating me" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-pointer-cleanup-on-eviction">How Memcached
+Handles Pointer Cleanup on Eviction</h1>
+<p>When Memcached evicts an entry to reclaim space, it manages internal
+pointer cleanup through an unlinking process across its primary internal
+data structures: the hash table and the LRU (Least Recently Used) doubly
+linked list. Rather than deallocating memory back to the operating
+system using standard heap allocation routines like <code>free()</code>,
+Memcached severs the pointers routing to the targeted item, decrements
+its internal reference counter, and immediately reassigns the underlying
+slab memory chunk to the incoming data.</p>
+<h3 id="core-data-structures-involved-in-eviction">Core Data Structures
+Involved in Eviction</h3>
+<p>To understand pointer cleanup, it is necessary to identify the three
+sets of pointers associated with every cached item:</p>
+<ol type="1">
+<li><strong>Hash Table Pointers (<code>h_next</code>):</strong>
+Memcached uses a global hash table with bucket chaining to handle
+collisions. Each item points to the next entry in the same bucket via an
+internal <code>h_next</code> pointer.</li>
+<li><strong>LRU List Pointers (<code>prev</code> and
+<code>next</code>):</strong> Items are tracked within slab-specific
+doubly linked lists to track usage order. Each item maintains
+<code>prev</code> and <code>next</code> pointers to navigate the LRU
+chain.</li>
+<li><strong>Reference Count (<code>refcount</code>):</strong> An atomic
+integer tracking active readers or operational locks currently
+referencing the item's memory block.</li>
+</ol>
+<h3 id="the-pointer-unlinking-sequence">The Pointer Unlinking
+Sequence</h3>
+<p>Eviction is triggered when a slab class runs out of available chunks
+and the global memory limit has been reached. When Memcached selects an
+item from the tail of the target slab's LRU list for eviction, it
+carries out pointer cleanup through a dedicated routine (historically
+executed via <code>do_item_unlink</code>):</p>
+<h4 id="1-hash-table-unlinking-assoc_delete">1. Hash Table Unlinking
+(<code>assoc_delete</code>)</h4>
+<p>Before an item can be evicted, it must be hidden from incoming read
+requests. The engine walks the hash bucket chain containing the
+item:</p>
+<ul>
+<li>The predecessor's <code>h_next</code> pointer is updated to point
+directly to the target item’s <code>h_next</code>.</li>
+<li>If the item is at the head of the bucket, the bucket's head pointer
+is updated.</li>
+<li>The evicted item's <code>h_next</code> pointer is set to null,
+eliminating any reference to the hash table.</li>
+</ul>
+<h4 id="2-lru-list-unlinking-item_unlink_q">2. LRU List Unlinking
+(<code>item_unlink_q</code>)</h4>
+<p>Next, the item is removed from its slab class's doubly linked
+list:</p>
+<ul>
+<li>The preceding item's <code>next</code> pointer is updated to point
+to the evicted item's <code>next</code>.</li>
+<li>The succeeding item's <code>prev</code> pointer is updated to point
+to the evicted item's <code>prev</code>.</li>
+<li>If the item sat at the tail or head of the LRU, the slab's global
+tail or head pointers are updated accordingly.</li>
+<li>The item’s <code>prev</code> and <code>next</code> pointers are
+cleared.</li>
+</ul>
+<h3 id="reference-counting-and-memory-reclamation">Reference Counting
+and Memory Reclamation</h3>
+<p>Memcached implements strict reference counting to prevent memory
+corruption while concurrent worker threads service requests:</p>
+<ul>
+<li><strong>Checking <code>refcount</code>:</strong> An item can only be
+immediately repurposed if its <code>refcount</code> indicates no
+external references (typically a reference count of 1 for the storage
+system itself). If another connection is concurrently reading the item
+(resulting in a higher <code>refcount</code>), Memcached will not
+immediately overwrite the chunk; it will either crawl backward up the
+LRU to find an unlocked candidate or defer destruction.</li>
+<li><strong>Decrementing References:</strong> Once unlinked from the
+hash table and the LRU, the storage reference is dropped. If the
+reference count hits zero, the memory chunk is fully disconnected.</li>
+<li><strong>In-Place Reuse:</strong> Memcached does not return memory to
+the OS. Instead, the memory address of the cleared item is retained
+directly by the thread performing the write. The header data of the new
+item is written over the old item's header, resetting all internal
+pointers for the incoming key-value pair and placing it at the head of
+the LRU list.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-pointer-cleanup-on-eviction';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

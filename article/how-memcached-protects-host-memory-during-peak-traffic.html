@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Protects Host Memory During Peak Traffic - memcached</title>
+    <meta name="description" content="During peak traffic periods, Memcached protects the host system from memory over-commitment by enforcing strict, pre-allocated resource limits, utilizing a specialized slab allocation mechanism, and automatically evicting stale data. Unlike applications t">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-protects-host-memory-during-peak-traffic">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Protects Host Memory During Peak Traffic - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-protects-host-memory-during-peak-traffic" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="During peak traffic periods, Memcached protects the host system from memory over-commitment by enforcing strict, pre-allocated resource limits, utilizing a specialized slab allocation mechanism, and automatically evicting stale data. Unlike applications t" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-protects-host-memory-during-peak-traffic">How
+Memcached Protects Host Memory During Peak Traffic</h1>
+<p>During peak traffic periods, Memcached protects the host system from
+memory over-commitment by enforcing strict, pre-allocated resource
+limits, utilizing a specialized slab allocation mechanism, and
+automatically evicting stale data. Unlike applications that dynamically
+request memory from the operating system on demand, Memcached
+establishes a fixed operational boundary upon startup. Through a
+combination of the Least Recently Used (LRU) eviction algorithm and
+internal chunk management, the cache maintains predictable memory
+consumption regardless of how high traffic spikes or how many write
+requests are received.</p>
+<h3 id="hard-memory-boundaries--m-parameter">Hard Memory Boundaries
+(<code>-m</code> Parameter)</h3>
+<p>Memcached prevents host memory exhaustion at the architectural level
+through a mandatory memory limit, configured at launch using the
+<code>-m</code> flag. This flag dictates the maximum amount of RAM (in
+megabytes) that the service is permitted to consume for storing
+key-value pairs.</p>
+<p>Once initialized, Memcached will not exceed this defined limit to
+accommodate new data. Even if client applications flood the cache with
+millions of new writes during sudden traffic surges, Memcached refuses
+to request additional memory from the operating system kernel. This
+safeguards the host machine from invoking the Linux Out-Of-Memory (OOM)
+killer, ensuring that other critical system processes and neighboring
+services remain stable.</p>
+<h3 id="slab-allocation-engine">Slab Allocation Engine</h3>
+<p>To prevent host memory over-commit caused by operating system-level
+fragmentation, Memcached avoids relying on standard dynamic memory
+allocation functions (<code>malloc</code> and <code>free</code>) for
+individual cache items. Instead, it uses a Slab Allocator.</p>
+<ol type="1">
+<li><strong>Memory Reservation:</strong> Memcached divides its assigned
+memory pool into 1MB pages (by default).</li>
+<li><strong>Slab Classes:</strong> Pages are categorized into various
+"slab classes," each designed to store items of specific size ranges
+(e.g., items up to 96 bytes, up to 120 bytes, etc.).</li>
+<li><strong>Fixed Chunking:</strong> Each page is pre-carved into
+fixed-size chunks corresponding to its slab class.</li>
+</ol>
+<p>Because memory is pre-allocated in structured pages, Memcached does
+not continuously allocate and deallocate varying buffer sizes in the
+host RAM. This design prevents memory fragmentation from ballooning the
+virtual memory footprint of the process over prolonged high-load
+periods.</p>
+<h3 id="lru-eviction-under-pressure">LRU Eviction Under Pressure</h3>
+<p>When a slab class becomes full and the total memory allocation
+assigned by <code>-m</code> is saturated, Memcached does not expand its
+footprint. Instead, it relies on its Least Recently Used (LRU) eviction
+engine.</p>
+<ul>
+<li><strong>Eviction of Expired Data:</strong> Memcached first
+prioritizes releasing items whose explicit Time-to-Live (TTL) timestamps
+have expired.</li>
+<li><strong>LRU Overwrites:</strong> If no expired items exist within
+the target slab class, the engine automatically purges the oldest, least
+frequently accessed active items to free up chunk space for incoming
+data.</li>
+<li><strong>Segmented LRU:</strong> Modern versions of Memcached split
+the LRU queue into distinct segments (such as <code>HOT</code>,
+<code>WARM</code>, and <code>COLD</code>). This prevents temporary burst
+traffic from flushing out continuously valuable, frequently accessed
+data, while still guaranteeing that new writes reuse existing memory
+chunks immediately.</li>
+</ul>
+<h3 id="connection-and-network-buffer-management">Connection and Network
+Buffer Management</h3>
+<p>Host memory can also be over-committed via network socket buffers
+during massive connection surges. Memcached limits this exposure through
+the <code>-c</code> parameter, which enforces a strict maximum on
+concurrent client connections (defaulting to 1024).</p>
+<p>When connection limits are reached, new connections are deferred or
+rejected rather than allowing unbounded TCP buffer growth in the host's
+kernel space. Additionally, Memcached reclaims unused read and write
+network buffers from idle connections, preventing connection bloat from
+gradually starving the underlying host operating system of RAM.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-protects-host-memory-during-peak-traffic';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

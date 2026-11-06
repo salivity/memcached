@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Manages Large Stream Response Memory - memcached</title>
+    <meta name="description" content="Memcached handles large stream responses by combining non-blocking event-driven I/O, zero-copy network transmission, item reference counting, and slab-based memory chunking. Rather than allocating large contiguous temporary buffers in memory to stage outg">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-manages-large-stream-response-memory">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Manages Large Stream Response Memory - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-manages-large-stream-response-memory" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached handles large stream responses by combining non-blocking event-driven I/O, zero-copy network transmission, item reference counting, and slab-based memory chunking. Rather than allocating large contiguous temporary buffers in memory to stage outg" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-manages-large-stream-response-memory">How
+Memcached Manages Large Stream Response Memory</h1>
+<p>Memcached handles large stream responses by combining non-blocking
+event-driven I/O, zero-copy network transmission, item reference
+counting, and slab-based memory chunking. Rather than allocating large
+contiguous temporary buffers in memory to stage outgoing payloads,
+Memcached streams data directly from its internal cache structures to
+network sockets using scatter-gather I/O. This design minimizes memory
+overhead, mitigates buffer bloat, and maintains high throughput even
+when serving large volumes of data to slow-reading clients.</p>
+<h3 id="slab-allocator-and-chunked-items">Slab Allocator and Chunked
+Items</h3>
+<p>Memcached manages its core memory footprint through a slab allocator,
+dividing memory into predefined slab classes to avoid external memory
+fragmentation. For items exceeding the default 1MB page size, modern
+versions of Memcached utilize chunked items (<code>ITEM_CHUNK</code>).
+Instead of requiring a massive contiguous slab page, large items are
+broken into a linked list of smaller fixed-size chunks. When streaming a
+large response, Memcached traverses this linked list sequentially rather
+than reassembling the object in a separate transient memory space.</p>
+<h3 id="zero-copy-streaming-with-scatter-gather-io">Zero-Copy Streaming
+with Scatter-Gather I/O</h3>
+<p>To minimize CPU usage and redundant memory duplication, Memcached
+does not copy data from cache slabs into intermediate connection-level
+output buffers. Instead, it relies on system-level scatter-gather I/O
+via the <code>writev</code> system call. Memcached constructs an array
+of I/O vectors (<code>iovec</code> structures) containing memory
+pointers and byte lengths pointing directly to the item headers, keys,
+and cached chunk payloads within the slab memory. The operating system
+kernel reads directly from these locations and streams the bytes into
+the TCP socket send buffer.</p>
+<h3 id="item-reference-counting-and-eviction-safety">Item Reference
+Counting and Eviction Safety</h3>
+<p>Because a large response may take several network cycles to transmit
+completely, Memcached must guarantee that cached items are not modified,
+overwritten, or freed by the Least Recently Used (LRU) crawler during
+the operation. To achieve this, Memcached increments the internal
+reference count (<code>refcount</code>) of every item included in an
+active transmission queue. As long as an item's reference count is
+greater than zero, the memory slab hosting that data cannot be
+reallocated or freed. Once the kernel acknowledges the transmission of
+the data or the client connection terminates, Memcached decrements the
+reference count, returning the memory to normal eviction
+eligibility.</p>
+<h3 id="non-blocking-io-and-network-backpressure">Non-Blocking I/O and
+Network Backpressure</h3>
+<p>Memcached runs on an event loop driven by <code>libevent</code>. When
+transmitting large streams, network throughput is constrained by the
+client's TCP receive window and network latency. If a client reads too
+slowly and the TCP socket buffer fills up, <code>writev</code> returns
+<code>EAGAIN</code> or <code>EWOULDBLOCK</code>.</p>
+<p>Memcached handles this backpressure without ballooning connection
+memory:</p>
+<ul>
+<li>It updates the current position in its array of <code>iovec</code>
+structures to track what has already been transmitted.</li>
+<li>It registers the client socket with <code>libevent</code> to listen
+for write-readiness (<code>EV_WRITE</code>).</li>
+<li>The worker thread pauses data transmission for that connection and
+yields the CPU to process requests for other clients.</li>
+<li>When the kernel signals that the network socket can accept more
+bytes, the worker resumes streaming the remaining chunks without
+maintaining auxiliary in-memory queues.</li>
+</ul>
+<h3 id="dynamic-connection-buffers">Dynamic Connection Buffers</h3>
+<p>Connections in Memcached maintain small, dedicated read and write
+buffers for command parsing and protocol framing. When transmitting
+large responses, the connection's dynamic memory footprint is limited to
+the memory required to store the <code>iovec</code> tracking structures.
+These tracking structures consume a negligible fraction of memory
+compared to the actual payload sizes, ensuring that concurrent large
+streams do not cause high transient memory usage across worker
+threads.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-manages-large-stream-response-memory';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

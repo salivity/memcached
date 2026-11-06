@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnosing Memcached Memory Fragmentation with Stats Slabs - memcached</title>
+    <meta name="description" content="Memcached relies on a slab allocation mechanism to manage memory and prevent operating system-level memory fragmentation, but it can still suffer from internal memory fragmentation and slab calcification. The stats slabs command is the primary diagnostic">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/diagnosing-memcached-memory-fragmentation-with-stats-slabs">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Diagnosing Memcached Memory Fragmentation with Stats Slabs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/diagnosing-memcached-memory-fragmentation-with-stats-slabs" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached relies on a slab allocation mechanism to manage memory and prevent operating system-level memory fragmentation, but it can still suffer from internal memory fragmentation and slab calcification. The stats slabs command is the primary diagnostic" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1
+id="diagnosing-memcached-memory-fragmentation-with-stats-slabs">Diagnosing
+Memcached Memory Fragmentation with Stats Slabs</h1>
+<p>Memcached relies on a slab allocation mechanism to manage memory and
+prevent operating system-level memory fragmentation, but it can still
+suffer from internal memory fragmentation and slab calcification. The
+<code>stats slabs</code> command is the primary diagnostic tool used to
+inspect the internal state of these slab classes. By providing detailed
+metrics on page allocations, chunk utilization, and wasted space within
+each class, the command allows administrators to identify mismatched
+chunk sizes, uneven memory distribution, and inactive memory pools that
+hinder caching efficiency.</p>
+<h3 id="understanding-memcached-slab-allocation">Understanding Memcached
+Slab Allocation</h3>
+<p>Memcached divides its assigned memory into 1MB pages. These pages are
+assigned to specific "slab classes," each tailored to store items within
+a particular size range determined by the chunk size and a growth
+factor. Once a page is assigned to a slab class, it is sliced into
+uniform chunks.</p>
+<p>Fragmentation in Memcached generally occurs in two ways:</p>
+<ol type="1">
+<li><strong>Internal Fragmentation:</strong> Occurs when the size of a
+stored object is smaller than the assigned chunk size, leaving unused
+bytes inside the chunk.</li>
+<li><strong>Slab Calcification (External Allocation Imbalance):</strong>
+Occurs when pages are permanently assigned to slab classes based on
+historical traffic patterns, leaving high-demand classes out of memory
+while low-demand classes hold idle, unreleased pages.</li>
+</ol>
+<h3 id="key-metrics-provided-by-stats-slabs">Key Metrics Provided by
+<code>stats slabs</code></h3>
+<p>Executing the <code>stats slabs</code> command via Telnet or netcat
+returns operational statistics for each active slab class (represented
+by an integer ID), followed by global slab counters. The most critical
+per-slab fields for diagnosing fragmentation include:</p>
+<ul>
+<li><strong><code>chunk_size</code></strong>: The maximum size of an
+item (in bytes) that can fit into this slab class.</li>
+<li><strong><code>chunks_per_page</code></strong>: The number of chunks
+created per 1MB page (<code>1,048,576 / chunk_size</code>).</li>
+<li><strong><code>total_pages</code></strong>: The total number of 1MB
+pages currently allocated to the slab class.</li>
+<li><strong><code>total_chunks</code></strong>: The total capacity of
+the slab class (<code>total_pages * chunks_per_page</code>).</li>
+<li><strong><code>used_chunks</code></strong>: The number of chunks
+currently storing active data.</li>
+<li><strong><code>free_chunks</code></strong>: The number of chunks that
+have been freed (e.g., via item deletion or expiration) and are
+available for immediate reuse.</li>
+<li><strong><code>free_chunks_end</code></strong>: The number of
+allocated chunks at the end of the newest page that have never been
+written to.</li>
+</ul>
+<h3 id="identifying-internal-fragmentation">Identifying Internal
+Fragmentation</h3>
+<p>Internal fragmentation is directly tied to the relationship between
+the <code>chunk_size</code> of a slab class and the average size of the
+keys and values being inserted.</p>
+<p>If a slab class has a <code>chunk_size</code> of 512 bytes, but the
+application consistently writes items that are 260 bytes, nearly half of
+the memory allocated to that slab class is wasted. While
+<code>stats slabs</code> gives the static capacity via
+<code>chunk_size</code>, pairing it with the <code>stats items</code>
+command—which reports item counts and age—allows you to calculate the
+delta between allocated space (<code>used_chunks * chunk_size</code>)
+and the actual byte payload stored. A large discrepancy indicates that
+the chunk growth factor is too aggressive, creating overly large gaps
+between sequential slab classes.</p>
+<h3 id="identifying-slab-calcification-and-idle-memory">Identifying Slab
+Calcification and Idle Memory</h3>
+<p>Slab calcification can be spotted using <code>total_pages</code>,
+<code>used_chunks</code>, and <code>free_chunks</code>:</p>
+<ul>
+<li><strong>Underutilized Classes:</strong> A slab class showing a high
+<code>total_pages</code> count alongside a low <code>used_chunks</code>
+count and a high <code>free_chunks</code> count indicates reserved
+memory that is sitting idle.</li>
+<li><strong>Starved Classes:</strong> Conversely, if another slab class
+has high <code>used_chunks</code>, zero <code>free_chunks</code>, zero
+<code>free_chunks_end</code>, and experiences frequent evictions
+(visible in <code>stats items</code>), that class is
+memory-starved.</li>
+</ul>
+<p>Because Memcached historically locked pages to classes permanently,
+pages in the underutilized class could not be borrowed by the starved
+class.</p>
+<h3 id="remediation-based-on-stats-slabs-output">Remediation Based on
+<code>stats slabs</code> Output</h3>
+<p>Once <code>stats slabs</code> pinpoints the nature of the
+fragmentation, you can apply targeted configuration changes:</p>
+<ul>
+<li><strong>Tuning the Growth Factor (<code>-f</code>):</strong> If
+internal fragmentation is high, lower the growth factor (default is
+typically 1.25). A lower factor (e.g., 1.1) creates more slab classes
+with smaller size increments, minimizing wasted space per chunk.</li>
+<li><strong>Enabling Slab Rebalancing:</strong> To solve slab
+calcification, enable runtime page reassignment by starting the daemon
+with <code>-o slab_reassign,slab_automove=1</code> (or
+<code>slab_automove=2</code> for aggressive balancing). This allows
+Memcached to automatically detect classes with high numbers of free
+pages and reassign them to classes experiencing eviction pressure.</li>
+<li><strong>Adjusting Minimum Chunk Size (<code>-n</code>):</strong> If
+tiny items are causing waste in the lowest slab classes, adjust the
+minimum allocated chunk size to closely match the application's smallest
+payload.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/diagnosing-memcached-memory-fragmentation-with-stats-slabs';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

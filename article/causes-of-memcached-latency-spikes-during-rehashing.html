@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Causes of Memcached Latency Spikes During Rehashing - memcached</title>
+    <meta name="description" content="Memcached utilizes an in-memory hash table to achieve sub-millisecond key-value lookups, doubling its internal bucket array when the stored item count exceeds capacity. Although this rehashing process is designed to run asynchronously in the background, p">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/causes-of-memcached-latency-spikes-during-rehashing">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Causes of Memcached Latency Spikes During Rehashing - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/causes-of-memcached-latency-spikes-during-rehashing" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached utilizes an in-memory hash table to achieve sub-millisecond key-value lookups, doubling its internal bucket array when the stored item count exceeds capacity. Although this rehashing process is designed to run asynchronously in the background, p" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="causes-of-memcached-latency-spikes-during-rehashing">Causes of
+Memcached Latency Spikes During Rehashing</h1>
+<p>Memcached utilizes an in-memory hash table to achieve sub-millisecond
+key-value lookups, doubling its internal bucket array when the stored
+item count exceeds capacity. Although this rehashing process is designed
+to run asynchronously in the background, production workloads often
+experience acute tail latency spikes during hash table expansion. These
+performance degradations are primarily caused by thread lock contention,
+memory allocation overhead, CPU resource starvation, and hardware cache
+churn as data structures migrate to the new table.</p>
+<h3
+id="lock-contention-between-worker-threads-and-the-maintenance-thread">Lock
+Contention Between Worker Threads and the Maintenance Thread</h3>
+<p>Memcached handles rehashing incrementally using a dedicated
+background thread (<code>assoc_maintenance_thread</code>). To remain
+thread-safe, the engine employs granular bucket locks (hash table item
+locks). When migrating items from the old table to the new one, the
+maintenance thread must acquire locks on the target buckets.</p>
+<p>If incoming client requests attempt to read, update, or delete keys
+residing in the bucket range currently locked by the maintenance thread,
+those worker threads are forced to block. Under high-throughput
+conditions, this serialized access creates a queue of stalled worker
+threads, rapidly inflating connection backlogs and P99 response
+times.</p>
+<h3 id="granular-chunk-sizes-and-lock-holding-time">Granular Chunk Sizes
+and Lock Holding Time</h3>
+<p>The speed and footprint of the rehashing process are governed by the
+<code>hash_bulk_move</code> setting, which determines how many hash
+buckets are migrated in a single iteration.</p>
+<ul>
+<li>If the batch size is set too high, the maintenance thread holds
+bucket locks for prolonged intervals, directly blocking worker threads
+that target those keys.</li>
+<li>If the batch size is too low, the frequency of lock acquisition and
+release cycles spikes, generating excessive CPU overhead and lock
+synchronization traffic across processor cores.</li>
+</ul>
+<h3 id="hash-table-memory-allocation-and-os-paging">Hash Table Memory
+Allocation and OS Paging</h3>
+<p>Before rehashing begins, Memcached must allocate memory for the new
+hash table, which is double the size of the previous one. For instances
+handling tens of millions of keys, this requires allocating a massive,
+contiguous block of memory for the new bucket pointer array.</p>
+<p>This allocation triggers kernel-level memory management tasks:</p>
+<ul>
+<li><strong>Page Zeroing:</strong> The operating system must zero out
+newly allocated memory pages before handing them to user space.</li>
+<li><strong>Page Faults:</strong> As the maintenance thread touches new
+buckets, minor page faults occur continuously until all virtual memory
+pages are backed by physical RAM.</li>
+<li><strong>Memory Fragmentation:</strong> If system RAM is fragmented,
+allocating large arrays forces the kernel into direct memory reclamation
+or compaction, causing multi-millisecond stalls across the entire
+process.</li>
+</ul>
+<h3 id="cpu-cache-line-invalidation">CPU Cache Line Invalidation</h3>
+<p>Rehashing requires traversing millions of pointers sequentially. As
+the maintenance thread reads items from the old table and writes them to
+the new array, it saturates the CPU’s L1, L2, and L3 caches with cold
+pointer data. This continuous cache churn evicts the "hot" keys and
+frequently accessed data pages used by worker threads serving live
+client traffic. As a result, worker threads suffer elevated hardware
+cache misses, degrading overall execution speed and lowering request
+throughput.</p>
+<h3 id="thread-scheduling-and-cpu-contention">Thread Scheduling and CPU
+Contention</h3>
+<p>Memcached instances often run in resource-constrained environments or
+are configured to use all available CPU cores via worker threads.
+Because the maintenance thread requires non-trivial CPU cycles to
+compute hashes, verify bucket pointers, and execute migrations, it
+actively competes with worker threads for execution time. Without
+dedicated CPU affinity (core pinning), the operating system's thread
+scheduler frequently context-switches between worker threads and the
+maintenance thread, further increasing processing overhead and
+jitter.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/causes-of-memcached-latency-spikes-during-rehashing';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

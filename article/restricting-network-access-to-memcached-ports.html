@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restricting Network Access to Memcached Ports - memcached</title>
+    <meta name="description" content="Memcached is a high-performance, distributed memory caching system designed to speed up dynamic web applications by alleviating database load. However, exposing Memcached directly to the public internet poses severe security risks, including unauthorized">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/restricting-network-access-to-memcached-ports">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Restricting Network Access to Memcached Ports - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/restricting-network-access-to-memcached-ports" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is a high-performance, distributed memory caching system designed to speed up dynamic web applications by alleviating database load. However, exposing Memcached directly to the public internet poses severe security risks, including unauthorized" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="restricting-network-access-to-memcached-ports">Restricting
+Network Access to Memcached Ports</h1>
+<p>Memcached is a high-performance, distributed memory caching system
+designed to speed up dynamic web applications by alleviating database
+load. However, exposing Memcached directly to the public internet poses
+severe security risks, including unauthorized data exposure and
+participation in massive UDP-based Distributed Denial of Service (DDoS)
+amplification attacks. This guide outlines the essential network
+security policies, configuration changes, and firewall rules required to
+effectively restrict direct access to Memcached ports and ensure your
+caching layer remains strictly private.</p>
+<h3 id="default-port-and-associated-risks">Default Port and Associated
+Risks</h3>
+<p>By default, Memcached listens on port <strong>11211</strong> for both
+<strong>TCP</strong> and <strong>UDP</strong> connections. If left open
+to public interfaces:</p>
+<ul>
+<li><strong>Data Leakage:</strong> Memcached lacks built-in encryption
+and historically does not enable authentication by default, allowing
+anyone to inspect, alter, or purge cached data.</li>
+<li><strong>Amplification Attacks:</strong> Attackers can send spoofed
+requests over UDP port 11211 to reflect enormous data responses onto
+target victims, turning your server into an attack vector.</li>
+</ul>
+<hr />
+<h3 id="1-bind-memcached-to-local-or-private-interfaces">1. Bind
+Memcached to Local or Private Interfaces</h3>
+<p>The first line of defense is ensuring the Memcached daemon does not
+listen on public interfaces (<code>0.0.0.0</code>).</p>
+<p>Update the Memcached configuration file (typically
+<code>/etc/memcached.conf</code> on Debian/Ubuntu or
+<code>/etc/sysconfig/memcached</code> on RHEL/CentOS):</p>
+<ul>
+<li><p><strong>Localhost Only:</strong> If the caching server resides on
+the same machine as the application:</p>
+<pre class="text"><code>-l 127.0.0.1</code></pre></li>
+<li><p><strong>Internal Private IP:</strong> If the cache is shared
+across a cluster, bind exclusively to the server’s internal private
+network interface:</p>
+<pre class="text"><code>-l 10.0.0.15</code></pre></li>
+</ul>
+<hr />
+<h3 id="2-disable-the-udp-listener">2. Disable the UDP Listener</h3>
+<p>Memcached is rarely required to run over UDP. Disabling UDP removes
+the possibility of reflection DDoS attacks entirely.</p>
+<p>Add the following flag to your Memcached configuration:</p>
+<pre class="text"><code>-U 0</code></pre>
+<p>Restart the service to apply the change. Verify with
+<code>ss -plunt | grep 11211</code> to ensure no UDP listener remains
+active.</p>
+<hr />
+<h3 id="3-implement-cloud-and-perimeter-security-groups">3. Implement
+Cloud and Perimeter Security Groups</h3>
+<p>If deployed in a cloud environment (AWS, Google Cloud, Azure),
+isolate Memcached at the software-defined networking layer:</p>
+<ul>
+<li><strong>Private Subnets:</strong> Deploy Memcached instances within
+private subnets with no public IP addresses and no direct route to an
+Internet Gateway.</li>
+<li><strong>Security Groups / Network ACLs:</strong>
+<ul>
+<li>Create an ingress rule allowing traffic on TCP port 11211
+<strong>only</strong> from the specific security groups or private CIDR
+blocks of your authorized application servers.</li>
+<li>Explicitly block or drop all inbound internet traffic
+(<code>0.0.0.0/0</code> and <code>::/0</code>) targeting port
+11211.</li>
+</ul></li>
+</ul>
+<hr />
+<h3 id="4-configure-host-based-firewalls">4. Configure Host-Based
+Firewalls</h3>
+<p>For dedicated or on-premises servers, enforce strict filtering via
+host firewalls.</p>
+<h4 id="using-ufw-debianubuntu">Using <code>ufw</code>
+(Debian/Ubuntu):</h4>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Deny all access to port 11211 by default</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ufw deny 11211</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Allow access only from a specific application server</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ufw allow from 10.0.0.20 to any port 11211 proto tcp</span></code></pre></div>
+<h4 id="using-iptables">Using <code>iptables</code>:</h4>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Allow established connections</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">iptables</span> <span class="at">-A</span> INPUT <span class="at">-m</span> conntrack <span class="at">--ctstate</span> ESTABLISHED,RELATED <span class="at">-j</span> ACCEPT</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Allow loopback access</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="ex">iptables</span> <span class="at">-A</span> INPUT <span class="at">-i</span> lo <span class="at">-p</span> tcp <span class="at">--dport</span> 11211 <span class="at">-j</span> ACCEPT</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Allow trusted application server</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="ex">iptables</span> <span class="at">-A</span> INPUT <span class="at">-p</span> tcp <span class="at">-s</span> 10.0.0.20 <span class="at">--dport</span> 11211 <span class="at">-j</span> ACCEPT</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Drop all other access to Memcached</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="ex">iptables</span> <span class="at">-A</span> INPUT <span class="at">-p</span> tcp <span class="at">--dport</span> 11211 <span class="at">-j</span> DROP</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="ex">iptables</span> <span class="at">-A</span> INPUT <span class="at">-p</span> udp <span class="at">--dport</span> 11211 <span class="at">-j</span> DROP</span></code></pre></div>
+<hr />
+<h3 id="5-network-segmentation-and-access-verification">5. Network
+Segmentation and Access Verification</h3>
+<ul>
+<li><p><strong>VLANs and VPC Peering:</strong> Place caching layers in a
+dedicated Virtual Local Area Network (VLAN) or dedicated Virtual Private
+Cloud (VPC), controlling cross-tier communication using strict routing
+policies.</p></li>
+<li><p><strong>External Auditing:</strong> Regularly audit your network
+perimeter using external port scanners (such as Nmap) to verify port
+11211 is unreachable from the public internet:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">nmap</span> <span class="at">-sT</span> <span class="at">-sU</span> <span class="at">-p</span> 11211 <span class="op">&lt;</span>YOUR_PUBLIC_IP<span class="op">&gt;</span></span></code></pre></div>
+<p>The state for both TCP and UDP should report as <code>filtered</code>
+or <code>closed</code>.</p></li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/restricting-network-access-to-memcached-ports';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

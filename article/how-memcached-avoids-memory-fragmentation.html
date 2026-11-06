@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Avoids Memory Fragmentation - memcached</title>
+    <meta name="description" content="Memcached prevents memory fragmentation caused by frequent variable-length writes through an internal memory management system known as the Slab Allocator. Instead of relying on the operating system’s standard memory allocation (malloc and free) for every">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-avoids-memory-fragmentation">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Avoids Memory Fragmentation - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-avoids-memory-fragmentation" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached prevents memory fragmentation caused by frequent variable-length writes through an internal memory management system known as the Slab Allocator. Instead of relying on the operating system’s standard memory allocation (malloc and free) for every" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-avoids-memory-fragmentation">How Memcached Avoids
+Memory Fragmentation</h1>
+<p>Memcached prevents memory fragmentation caused by frequent
+variable-length writes through an internal memory management system
+known as the Slab Allocator. Instead of relying on the operating
+system’s standard memory allocation (<code>malloc</code> and
+<code>free</code>) for every write and delete operation, Memcached
+pre-allocates large blocks of memory and divides them into fixed-size
+chunks. This article explains how the slab allocation mechanism works,
+how it eliminates external fragmentation, and the trade-offs involved in
+its design.</p>
+<h2 id="the-problem-with-standard-memory-allocation">The Problem with
+Standard Memory Allocation</h2>
+<p>In high-throughput caching environments, keys and values vary
+significantly in size and have unpredictable lifespans. Using standard
+operating system memory allocation for each insert and delete causes
+memory to become peppered with small, non-contiguous free spaces over
+time. This condition—known as external fragmentation—eventually prevents
+the system from allocating memory for larger items, even when the total
+amount of free memory across the system is sufficient.</p>
+<h2 id="the-slab-allocation-system">The Slab Allocation System</h2>
+<p>Memcached solves external fragmentation by implementing a slab
+allocator. Memory is organized hierarchically into slabs, slab classes,
+and chunks.</p>
+<h3 id="1-slabs-pages">1. Slabs (Pages)</h3>
+<p>Memcached allocates memory in large, uniform blocks called slabs (or
+pages), typically 1 megabyte in size. These pages are requested from the
+operating system up front or in bulk increments, ensuring the underlying
+OS memory layout remains contiguous.</p>
+<h3 id="2-slab-classes">2. Slab Classes</h3>
+<p>To accommodate different data sizes, Memcached defines a series of
+slab classes. Each slab class is responsible for storing items within a
+specific size bracket. By default, the chunk sizes between successive
+slab classes grow exponentially by a configured factor (known as the
+<code>factor</code>, typically defaulting to 1.25).</p>
+<p>For example:</p>
+<ul>
+<li><strong>Slab Class 1:</strong> 96-byte chunks</li>
+<li><strong>Slab Class 2:</strong> 120-byte chunks</li>
+<li><strong>Slab Class 3:</strong> 152-byte chunks</li>
+</ul>
+<h3 id="3-chunks">3. Chunks</h3>
+<p>Each 1MB slab page is assigned to a specific slab class and
+immediately carved into equal-sized chunks corresponding to that class.
+An individual chunk holds exactly one cached item, consisting of its
+key, flags, metadata, and value.</p>
+<h2 id="storing-and-deleting-data">Storing and Deleting Data</h2>
+<p>When a write operation occurs, Memcached executes the following
+steps:</p>
+<ol type="1">
+<li><strong>Size Calculation:</strong> Memcached calculates the total
+memory needed for the item (key, value, and metadata).</li>
+<li><strong>Class Selection:</strong> It identifies the slab class with
+the smallest chunk size that can still accommodate the item.</li>
+<li><strong>Allocation from Free List:</strong> The item is placed into
+an available chunk within that slab class's free list.</li>
+<li><strong>Deallocation and Reuse:</strong> When an item is deleted or
+expires, its chunk is simply marked as available and returned to the
+free list of its respective slab class.</li>
+</ol>
+<p>Because chunks are reused exclusively by items that fit that specific
+chunk size, memory addresses are never split, merged, or left as
+arbitrary holes. The allocator never requests random micro-allocations
+from the host OS, thereby completely eliminating external
+fragmentation.</p>
+<h2 id="internal-fragmentation-the-design-trade-off">Internal
+Fragmentation: The Design Trade-Off</h2>
+<p>While the slab allocation model eliminates external fragmentation, it
+introduces internal fragmentation. If an item requires 100 bytes of
+memory and is assigned to a slab class with 128-byte chunks, the
+remaining 28 bytes inside that chunk are left unused.</p>
+<p>Memcached accepts internal fragmentation because it provides
+deterministic performance and guarantees that the server will not crash
+or stall due to out-of-memory errors caused by fragmented address
+spaces. Administrators can tune the growth factor parameter
+(<code>-f</code>) to adjust the spacing between slab classes, narrowing
+the gap between chunk sizes and minimizing wasted memory based on their
+specific workload patterns.</p>
+<h2 id="slab-reassignment">Slab Reassignment</h2>
+<p>In earlier versions of Memcached, once a 1MB slab was assigned to a
+slab class, it was permanently locked to that class. If the
+application's data size profile changed, memory could become stranded in
+unused slab classes. Modern versions of Memcached include an automated
+slab rebalancer (slab automove) that detects when a particular slab
+class is starving for memory while another class has idle slabs,
+dynamically reassigning 1MB pages to where they are needed most.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-avoids-memory-fragmentation';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

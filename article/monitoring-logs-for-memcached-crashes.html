@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Logs for Memcached Crashes - memcached</title>
+    <meta name="description" content="Memcached is designed to be a high-performance in-memory key-value store, but unhandled exceptions, memory exhaustion, and segmentation faults can cause the daemon to terminate abruptly. Because Memcached delegates memory management directly to the system">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/monitoring-logs-for-memcached-crashes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Monitoring Logs for Memcached Crashes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/monitoring-logs-for-memcached-crashes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is designed to be a high-performance in-memory key-value store, but unhandled exceptions, memory exhaustion, and segmentation faults can cause the daemon to terminate abruptly. Because Memcached delegates memory management directly to the system" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="monitoring-logs-for-memcached-crashes">Monitoring Logs for
+Memcached Crashes</h1>
+<p>Memcached is designed to be a high-performance in-memory key-value
+store, but unhandled exceptions, memory exhaustion, and segmentation
+faults can cause the daemon to terminate abruptly. Because Memcached
+delegates memory management directly to the system and minimal internal
+error logging by default, detecting crashes requires monitoring a
+combination of operating system kernel logs, process supervisor outputs,
+and core dump facilities. This guide outlines the specific system logs
+and metrics you must monitor to identify and diagnose Memcached failures
+effectively.</p>
+<h3 id="1-kernel-ring-buffer-and-kernel-logs-dmesg-varlogkernlog">1.
+Kernel Ring Buffer and Kernel Logs (<code>dmesg</code>,
+<code>/var/log/kern.log</code>)</h3>
+<p>When Memcached crashes due to severe memory exhaustion or memory
+access violations, the operating system kernel is often the first to
+record the event.</p>
+<ul>
+<li><strong>Out-Of-Memory (OOM) Killer:</strong> If Memcached exceeds
+the physical memory limits of the host or its assigned control group
+(cgroup), the Linux kernel's OOM killer may terminate the
+<code>memcached</code> process. Look for lines containing
+<code>Out of memory: Kill process</code> or
+<code>Killed process &lt;pid&gt; (memcached)</code>.</li>
+<li><strong>Segmentation Faults:</strong> If an internal unhandled
+exception results in illegal memory access, the kernel logs a segfault.
+Look for
+<code>memcached[PID]: segfault at ... error ... in memcached</code>.</li>
+<li><strong>Where to check:</strong> Run <code>dmesg -T</code> or
+inspect <code>/var/log/kern.log</code> (Debian/Ubuntu) or
+<code>/var/log/messages</code> (RHEL/CentOS).</li>
+</ul>
+<h3 id="2-systemd-journal-journalctl">2. Systemd Journal
+(<code>journalctl</code>)</h3>
+<p>On modern Linux distributions, Memcached is typically managed as a
+<code>systemd</code> service. The systemd journal captures both service
+lifecycle changes and any standard error (stderr) output generated
+before termination.</p>
+<ul>
+<li><p><strong>Service Status Changes:</strong> The journal records
+unexpected exit codes, such as <code>status=11/SEGV</code> (segmentation
+fault) or <code>status=9/KILL</code> (abrupt kill signal).</p></li>
+<li><p><strong>Crash Indications:</strong> Watch for events stating
+<code>memcached.service: Main process exited, code=killed, status=...</code>
+and
+<code>memcached.service: Failed with result 'signal'</code>.</p></li>
+<li><p><strong>How to monitor:</strong> Query the service logs directly
+using:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">journalctl</span> <span class="at">-u</span> memcached.service <span class="at">-e</span></span></code></pre></div></li>
+</ul>
+<h3 id="3-core-dump-managers-coredumpctl">3. Core Dump Managers
+(<code>coredumpctl</code>)</h3>
+<p>If an unhandled exception triggers a fatal signal (like
+<code>SIGSEGV</code> or <code>SIGABRT</code>), the system can generate a
+core dump for post-mortem analysis.</p>
+<ul>
+<li>If <code>systemd-coredump</code> is enabled, monitor
+<code>coredumpctl list memcached</code> to see if a dump was
+triggered.</li>
+<li>Check <code>/var/lib/systemd/coredump/</code> or the path defined in
+<code>/proc/sys/kernel/core_pattern</code> to detect if the binary
+crashed and left a memory image for debugger analysis with GDB.</li>
+</ul>
+<h3 id="4-general-system-logs-varlogsyslog-or-varlogmessages">4. General
+System Logs (<code>/var/log/syslog</code> or
+<code>/var/log/messages</code>)</h3>
+<p>Traditional system log daemons (such as <code>rsyslog</code> or
+<code>syslog-ng</code>) aggregate messages from system facilities,
+services, and kernel spaces into central text files.</p>
+<ul>
+<li><strong>Debian/Ubuntu:</strong> <code>/var/log/syslog</code></li>
+<li><strong>RHEL/CentOS/Rocky Linux:</strong>
+<code>/var/log/messages</code></li>
+<li>Filter these files for strings such as <code>memcached</code>,
+<code>segfault</code>, and <code>killed</code> to catch broad operating
+environment errors, resource constraints, or dependent service
+disruptions.</li>
+</ul>
+<h3 id="5-memcached-stderr-log">5. Memcached Stderr Log</h3>
+<p>By default, Memcached produces minimal log output unless configured
+with verbosity flags (<code>-v</code>, <code>-vv</code>, or
+<code>-vvv</code>). In many production packages, output is redirected to
+<code>/var/log/memcached.log</code>.</p>
+<ul>
+<li>Inspect this file for startup initialization failures, permission
+problems, or network binding errors.</li>
+<li>Note that verbose flags should be used with caution in
+high-throughput environments, as excessive disk I/O from logging can
+degrade Memcached performance.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/monitoring-logs-for-memcached-crashes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached stats settings Command Guide - memcached</title>
+    <meta name="description" content="The stats settings command in Memcached outputs the active runtime configuration and internal operational flags of the server instance. Rather than displaying dynamic metrics like hit rates or item counts, this diagnostic command reveals the baseline para">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-settings-command-guide">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached stats settings Command Guide - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-settings-command-guide" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The stats settings command in Memcached outputs the active runtime configuration and internal operational flags of the server instance. Rather than displaying dynamic metrics like hit rates or item counts, this diagnostic command reveals the baseline para" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-stats-settings-command-guide">Memcached stats settings
+Command Guide</h1>
+<p>The <code>stats settings</code> command in Memcached outputs the
+active runtime configuration and internal operational flags of the
+server instance. Rather than displaying dynamic metrics like hit rates
+or item counts, this diagnostic command reveals the baseline parameters
+governing memory distribution, connection handling, thread management,
+and eviction logic. Analyzing these settings enables administrators to
+pinpoint whether performance bottlenecks, connection drops, or premature
+cache evictions stem from underlying workload characteristics or
+misaligned initialization flags.</p>
+<h3 id="memory-allocation-and-item-constraints">Memory Allocation and
+Item Constraints</h3>
+<p>The command provides essential visibility into the memory boundaries
+established when the daemon started:</p>
+<ul>
+<li><strong>maxbytes</strong>: Displays the total maximum memory (in
+bytes) allocated to the Memcached instance. Comparing this value against
+real-time usage confirms whether the instance has adequate
+headroom.</li>
+<li><strong>item_size_max</strong>: Identifies the maximum permitted
+size for any single stored key-value pair (default is 1MB). This helps
+diagnose client-side errors caused by payloads that exceed the permitted
+ceiling.</li>
+<li><strong>chunk_size</strong> and <strong>growth_factor</strong>:
+Indicate the baseline chunk size and the multiplier applied across slab
+classes. These settings reveal how aggressively item sizes scale up,
+aiding in the diagnosis of slab allocation inefficiencies or memory
+fragmentation.</li>
+</ul>
+<h3 id="network-and-connection-configurations">Network and Connection
+Configurations</h3>
+<p>Parameters under this category diagnose network-level boundaries and
+transport protocols:</p>
+<ul>
+<li><strong>maxconns</strong>: Specifies the maximum number of
+simultaneous client connections permitted. If clients face connection
+refused errors while CPU and memory are low, this threshold is often the
+limiting factor.</li>
+<li><strong>tcpport</strong> and <strong>udpport</strong>: Show the
+assigned network listening ports for TCP and UDP communication.</li>
+<li><strong>inter</strong>: Identifies the specific network interface IP
+address to which Memcached is bound, useful for verifying network
+isolation and listening interfaces.</li>
+<li><strong>backlog</strong>: Details the maximum size of the TCP listen
+queue for pending connections, critical for diagnosing connection drops
+during sudden traffic spikes.</li>
+</ul>
+<h3 id="threading-and-system-concurrency">Threading and System
+Concurrency</h3>
+<p>Multi-threading diagnostic values show how work is distributed across
+CPU cores:</p>
+<ul>
+<li><strong>num_threads</strong>: Displays the number of worker threads
+handling incoming client requests. A mismatch between thread count and
+available CPU cores can explain high latency or context-switching
+overhead under load.</li>
+<li><strong>reqs_per_event</strong>: Indicates the maximum number of
+requests a worker thread can process from a single connection before
+yielding to other connections, helping diagnose connection starvation
+issues.</li>
+</ul>
+<h3 id="lru-and-eviction-mechanisms">LRU and Eviction Mechanisms</h3>
+<p>Cache replacement and memory recovery settings detail how Memcached
+handles full memory conditions:</p>
+<ul>
+<li><strong>evictions</strong>: Indicates whether item eviction is
+enabled (<code>on</code> or <code>1</code>) when memory is exhausted, or
+disabled (<code>0</code>), which causes Memcached to return
+out-of-memory errors instead of discarding old keys.</li>
+<li><strong>lru_crawler</strong>: Shows whether the background thread
+that sweeps through LRU lists to clean up expired items is enabled.</li>
+<li><strong>lru_maintainer</strong>: Reports if the sub-LRU split
+management system (separating hot, warm, and cold data) is active,
+providing context when diagnosing why specific items are removed earlier
+than expected.</li>
+<li><strong>tail_repair_time</strong>: Shows the maximum time allowed to
+unjam locked slab buffers, helping detect issues with stranded
+references during evictions.</li>
+</ul>
+<h3 id="security-and-protocol-settings">Security and Protocol
+Settings</h3>
+<ul>
+<li><strong>auth_enabled_sasl</strong>: Indicates whether Simple
+Authentication and Security Layer (SASL) authentication is enforced on
+incoming client requests.</li>
+<li><strong>shutdown_command</strong>: Shows whether remote
+administrative shutdown signals are accepted over the network
+interface.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-settings-command-guide';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

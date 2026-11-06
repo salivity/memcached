@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Eviction in Specific Slab Classes - memcached</title>
+    <meta name="description" content="Memcached isolates memory allocation by dividing its memory pool into individual slab classes, meaning that memory pressure and item evictions are managed independently within each class rather than across the cache as a whole. When a specific slab class">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-eviction-in-specific-slab-classes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Eviction in Specific Slab Classes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-eviction-in-specific-slab-classes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached isolates memory allocation by dividing its memory pool into individual slab classes, meaning that memory pressure and item evictions are managed independently within each class rather than across the cache as a whole. When a specific slab class" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-eviction-in-specific-slab-classes">Memcached Eviction
+in Specific Slab Classes</h1>
+<p>Memcached isolates memory allocation by dividing its memory pool into
+individual slab classes, meaning that memory pressure and item evictions
+are managed independently within each class rather than across the cache
+as a whole. When a specific slab class exhausts its allocated space,
+Memcached applies an isolated Least Recently Used (LRU) policy to remove
+the oldest items in that class alone. This article explains the internal
+mechanics of per-slab LRU queues, why localized pressure occurs even if
+other slabs have free space, and the modern balancing mechanisms
+Memcached uses to mitigate this issue.</p>
+<h3 id="the-slab-allocation-model">The Slab Allocation Model</h3>
+<p>Memcached avoids memory fragmentation by pre-allocating memory into
+1MB pages and dividing those pages into fixed-size chunks. Each chunk
+size corresponds to a specific slab class (e.g., class 1 handles items
+up to 96 bytes, class 2 handles up to 120 bytes, and so on). When an
+item is stored, Memcached places it into the smallest slab class that
+can accommodate its data size.</p>
+<p>Because items are strictly compartmentalized, each slab class
+maintains its own distinct memory pool and its own independent LRU
+list.</p>
+<h3 id="localized-eviction-mechanics">Localized Eviction Mechanics</h3>
+<p>When a write request targets a specific slab class, the following
+process determines eviction behavior:</p>
+<ol type="1">
+<li><strong>Free Chunk Check:</strong> Memcached first searches for free
+or expired chunks within the targeted slab class. If an expired item is
+found, its space is reused immediately without an eviction.</li>
+<li><strong>Page Allocation:</strong> If no free chunks exist and the
+global memory limit has not been reached, Memcached allocates a new 1MB
+page to this specific slab class.</li>
+<li><strong>Per-Slab LRU Eviction:</strong> If the global memory limit
+is exhausted, the slab class cannot acquire a new page. Instead of
+searching globally for the oldest item across all cached data, Memcached
+looks strictly at the tail of the target slab class's LRU queue. The
+oldest item in that specific class is purged to make room for the new
+record.</li>
+</ol>
+<p>Even if other slab classes have millions of unused chunks,
+traditional Memcached behavior will not allow the starved slab class to
+claim memory from them on the fly during a set operation.</p>
+<h3 id="the-problem-of-slab-calcification">The Problem of Slab
+Calcification</h3>
+<p>This isolated architecture can lead to a condition known as "slab
+calcification" or "slab imbalance." For example, if an application
+initially caches millions of 100-byte objects (slab class 1) and later
+shifts to writing 500-byte objects (slab class 6), slab class 1 keeps
+its allocated 1MB pages despite no longer receiving traffic.</p>
+<p>When slab class 6 fills up, it begins actively evicting items despite
+significant idle memory residing in slab class 1. The eviction counter
+(<code>evictions</code>) increments only for the saturated slab class,
+while the rest of the cache appears underutilized.</p>
+<h3 id="modern-mitigations-slab-automove-and-reassign">Modern
+Mitigations: Slab Automove and Reassign</h3>
+<p>To resolve isolated slab pressure without requiring cache flushes,
+modern versions of Memcached incorporate dynamic page reassignment:</p>
+<ul>
+<li><strong>Slab Reassign
+(<code>slabs reassign &lt;source&gt; &lt;target&gt;</code>):</strong> An
+administrative command that manually unbinds a 1MB page from a cold or
+underutilized slab class and transfers it to a saturated slab
+class.</li>
+<li><strong>Slab Automove
+(<code>-o slab_automove=&lt;mode&gt;</code>):</strong> A background
+maintenance thread that monitors eviction patterns and slab utilization.
+If it detects that a specific slab class is experiencing sustained
+evictions while other classes hold dormant pages, it automatically
+migrates pages to the class experiencing pressure.</li>
+</ul>
+<h3 id="segmented-lru-within-slabs">Segmented LRU within Slabs</h3>
+<p>Within each individual slab class, modern Memcached employs a
+segmented LRU model (divided into <code>HOT</code>, <code>WARM</code>,
+and <code>COLD</code> queues). New items enter the <code>HOT</code>
+queue, frequently accessed items are promoted to <code>WARM</code>, and
+inactive items fall to <code>COLD</code>. When localized memory pressure
+forces an eviction, only items at the tail of the <code>COLD</code>
+queue in that specific slab class are evicted, ensuring that frequently
+accessed items within the active size class remain protected.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-eviction-in-specific-slab-classes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

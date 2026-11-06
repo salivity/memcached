@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero Downtime Memcached OS Package Upgrades - memcached</title>
+    <meta name="description" content="Upgrading underlying operating system packages on servers running Memcached without downtime is a common challenge due to the service&#39;s volatile, in-memory nature. Because Memcached stores data exclusively in RAM and lacks native persistence or clustering">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/zero-downtime-memcached-os-package-upgrades">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Zero Downtime Memcached OS Package Upgrades - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/zero-downtime-memcached-os-package-upgrades" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Upgrading underlying operating system packages on servers running Memcached without downtime is a common challenge due to the service&#39;s volatile, in-memory nature. Because Memcached stores data exclusively in RAM and lacks native persistence or clustering" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="zero-downtime-memcached-os-package-upgrades">Zero Downtime
+Memcached OS Package Upgrades</h1>
+<p>Upgrading underlying operating system packages on servers running
+Memcached without downtime is a common challenge due to the service's
+volatile, in-memory nature. Because Memcached stores data exclusively in
+RAM and lacks native persistence or clustering replication, simply
+restarting an OS node results in immediate cache invalidation and
+potential thundering herd problems on upstream databases. Achieving zero
+downtime requires decoupling application dependencies from single nodes
+through architectural strategies such as blue-green cluster swapping,
+proxy-managed routing, rolling upgrades with consistent hashing, and
+dual-writing.</p>
+<h2 id="1-blue-green-cluster-replacement">1. Blue-Green Cluster
+Replacement</h2>
+<p>The most reliable way to prevent downtime and cache stampedes during
+OS upgrades is deploying an entirely new set of hosts.</p>
+<ul>
+<li><strong>Provisioning:</strong> Deploy a parallel "Green" cluster
+running the updated operating system and identical Memcached
+configurations.</li>
+<li><strong>Warm-Up Phase:</strong> Configure the application layer or a
+cache proxy to dual-write to both the active "Blue" cluster and the new
+"Green" cluster. Reads remain pointed at the Blue cluster while the
+Green cluster's hit ratio warms up.</li>
+<li><strong>Cutover:</strong> Once memory usage and hit ratios on the
+Green cluster match expected thresholds, shift application read traffic
+to the Green cluster via DNS, load balancer, or application
+configuration.</li>
+<li><strong>Decommissioning:</strong> Shut down the old Blue cluster,
+leaving the fully patched Green cluster as the primary.</li>
+</ul>
+<p>This approach eliminates the risk of an unexpected OS package
+conflict or reboot failure impacting live traffic.</p>
+<h2 id="2-proxy-layer-routing-with-mcrouter-or-envoy">2. Proxy-Layer
+Routing with Mcrouter or Envoy</h2>
+<p>Using an intelligent proxy layer such as Facebook's Mcrouter or Envoy
+abstracts individual Memcached instances away from application clients,
+allowing automated traffic shifting during maintenance.</p>
+<ul>
+<li><strong>Failover Pools:</strong> Configure route pools with fallback
+rules. If an underlying OS host is shut down for package installations,
+the proxy automatically redirects cache misses or hits to a designated
+secondary pool.</li>
+<li><strong>Shadowing:</strong> Proxies can replicate production writes
+to a staging pool running on the upgraded OS to ensure package
+compatibility and performance stability before full cutover.</li>
+<li><strong>Connection Draining:</strong> Proxies allow graceful
+draining of connections from a specific host before it undergoes OS
+updates, avoiding dropped TCP connections for client applications.</li>
+</ul>
+<h2 id="3-rolling-upgrades-with-consistent-hashing">3. Rolling Upgrades
+with Consistent Hashing</h2>
+<p>If maintaining a duplicate cluster is cost-prohibitive, a rolling
+upgrade strategy across a horizontally scaled cluster is the standard
+alternative.</p>
+<ul>
+<li><strong>Cluster Sizing:</strong> Ensure the cluster has enough spare
+capacity (N+1 or N+2 redundancy) so that removing a single node does not
+overwhelm the remaining nodes or backend databases.</li>
+<li><strong>Consistent Hashing (Ketama):</strong> Client libraries must
+use consistent hashing algorithms. When a single node is taken down for
+an OS kernel upgrade or reboot, Ketama remaps only the keys associated
+with that specific node to adjacent servers, confining cache misses to a
+minimal subset of data.</li>
+<li><strong>Sequential Execution:</strong> Upgrade and reboot one server
+at a time. Automate checks to ensure the server has fully booted,
+Memcached is responsive, and network health checks pass before
+proceeding to the next node.</li>
+</ul>
+<h2 id="4-application-level-resiliency-and-circuit-breaking">4.
+Application-Level Resiliency and Circuit Breaking</h2>
+<p>Even with proxying or rolling updates, taking a node down temporarily
+invalidates cached objects. Applications must be structured to survive
+the transient cache misses caused by OS restarts.</p>
+<ul>
+<li><strong>Thundering Herd Protection:</strong> Implement mutex locking
+or request collapsing (such as singleflight patterns) within the
+application so that only one worker queries the primary database to
+repopulate a missing cache key.</li>
+<li><strong>Circuit Breakers:</strong> Guard primary datastores with
+circuit breakers to prevent elevated cache-miss volumes from causing
+cascading failures downstream while Memcached nodes cycle through OS
+updates.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/zero-downtime-memcached-os-package-upgrades';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

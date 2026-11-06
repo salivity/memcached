@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Mock Memcached for Integration Testing - memcached</title>
+    <meta name="description" content="Testing applications that rely on Memcached requires a strategy that balances test fidelity with execution speed and environment independence. Relying on a shared, persistent staging instance leads to flaky tests, key collisions, and setup friction. This">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-mock-memcached-for-integration-testing">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Mock Memcached for Integration Testing - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-mock-memcached-for-integration-testing" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Testing applications that rely on Memcached requires a strategy that balances test fidelity with execution speed and environment independence. Relying on a shared, persistent staging instance leads to flaky tests, key collisions, and setup friction. This" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-mock-memcached-for-integration-testing">How to Mock
+Memcached for Integration Testing</h1>
+<p>Testing applications that rely on Memcached requires a strategy that
+balances test fidelity with execution speed and environment
+independence. Relying on a shared, persistent staging instance leads to
+flaky tests, key collisions, and setup friction. This article outlines
+the primary approaches developers can take to mock or isolate Memcached
+during local integration testing, including container-based ephemeral
+instances, in-memory embedded emulators, and interface-level
+abstraction.</p>
+<h2 id="container-based-testing-with-testcontainers">Container-Based
+Testing with Testcontainers</h2>
+<p>The most accurate way to "mock" Memcached for integration testing
+without sacrificing production parity is to run an ephemeral instance
+using Docker. The Testcontainers library (available for Java, Node.js,
+Python, Go, and .NET) manages the lifecycle of a real Memcached
+container directly from your test suite.</p>
+<p>With this pattern, the test runner automatically pulls the official
+Memcached image, binds it to an open dynamic port, and passes that
+connection string to your application context. Once the test suite
+finishes, the container is destroyed.</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Python example using testcontainers</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> testcontainers.core.container <span class="im">import</span> DockerContainer</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pymemcache.client.base <span class="im">import</span> Client</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> DockerContainer(<span class="st">&quot;memcached:alpine&quot;</span>).with_exposed_ports(<span class="dv">11211</span>) <span class="im">as</span> memcached:</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    host <span class="op">=</span> memcached.get_container_host_ip()</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    port <span class="op">=</span> memcached.get_exposed_port(<span class="dv">11211</span>)</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    client <span class="op">=</span> Client((host, <span class="bu">int</span>(port)))</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    client.<span class="bu">set</span>(<span class="st">&quot;test_key&quot;</span>, <span class="st">&quot;value&quot;</span>)</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> client.get(<span class="st">&quot;test_key&quot;</span>) <span class="op">==</span> <span class="st">b&quot;value&quot;</span></span></code></pre></div>
+<p>This approach eliminates protocol mismatches and accurately simulates
+eviction policies, memory limits, and TTL behavior without requiring
+local pre-installation of Memcached.</p>
+<h2 id="in-memory-protocol-emulators">In-Memory Protocol Emulators</h2>
+<p>When Docker daemon access is restricted—such as in certain
+lightweight CI environments or strictly isolated local
+machines—in-memory emulators provide a lightweight alternative. These
+tools implement the Memcached text or binary protocol over a standard
+TCP loopback socket entirely inside the host process.</p>
+<ul>
+<li><strong>Java:</strong> <code>jmemcached</code> runs an in-process,
+protocol-compliant server backed by standard Java collections or a
+concurrent hash map.</li>
+<li><strong>Go:</strong> Custom <code>net.Listener</code> mocks or
+packages such as <code>memcached-mock</code> allow you to inspect
+commands sent by standard clients like <code>gomemcache</code>.</li>
+<li><strong>Node.js:</strong> Packages like <code>memcached-mock</code>
+simulate the client API or provide a simulated daemon for tests using
+Jest or Mocha.</li>
+</ul>
+<p>In-process servers execute substantially faster than containers and
+require zero external dependencies, making them ideal for rapid
+test-driven development (TDD) loops.</p>
+<h2 id="application-level-interface-abstraction">Application-Level
+Interface Abstraction</h2>
+<p>For tests focused on business logic rather than low-level protocol
+behavior, mocking the cache client behind a software interface is often
+the cleanest solution.</p>
+<p>Define a caching interface inside your application domain:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> CacheService {</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">get</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>T <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">set</span><span class="op">&lt;</span>T<span class="op">&gt;</span>(key<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> value<span class="op">:</span> T<span class="op">,</span> ttlSeconds<span class="op">?:</span> <span class="dt">number</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">delete</span>(key<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>In your production code, bind this interface to an actual Memcached
+driver. In your local integration test suite, bind the interface to an
+in-memory <code>Map</code> implementation. This enables you to simulate
+specific cache edge cases—such as sudden read timeouts, serialization
+errors, or cache misses—by deliberately programming the mock
+implementation to fail or delay responses.</p>
+<h2 id="key-considerations-for-memcached-test-suites">Key Considerations
+for Memcached Test Suites</h2>
+<ul>
+<li><strong>State Isolation:</strong> Ensure each test or test suite
+runs within an isolated namespace. If tests run against a single
+instance sequentially, issue a <code>flush_all</code> command between
+runs or append unique prefixes to keys.</li>
+<li><strong>Time-to-Live (TTL) Verification:</strong> Rather than
+putting the test execution thread to sleep to wait for key expiration,
+prefer mocking system time or utilizing extremely short TTLs (such as 1
+second) in integration runs.</li>
+<li><strong>Failure Modes:</strong> Explicitly write integration cases
+where Memcached is unreachable to verify that your application falls
+back gracefully to the primary datastore instead of crashing.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-mock-memcached-for-integration-testing';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

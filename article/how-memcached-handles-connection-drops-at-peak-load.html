@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Connection Drops at Peak Load - memcached</title>
+    <meta name="description" content="During peak client concurrency, Memcached relies on an asynchronous, multi-threaded event-driven architecture powered by libevent to detect, isolate, and clean up severed connections without blocking the server. When high-volume traffic causes connection">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-connection-drops-at-peak-load">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Connection Drops at Peak Load - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-connection-drops-at-peak-load" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="During peak client concurrency, Memcached relies on an asynchronous, multi-threaded event-driven architecture powered by libevent to detect, isolate, and clean up severed connections without blocking the server. When high-volume traffic causes connection" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-connection-drops-at-peak-load">How
+Memcached Handles Connection Drops at Peak Load</h1>
+<p>During peak client concurrency, Memcached relies on an asynchronous,
+multi-threaded event-driven architecture powered by
+<code>libevent</code> to detect, isolate, and clean up severed
+connections without blocking the server. When high-volume traffic causes
+connection drops—whether from client-side timeouts, network partitions,
+or OS-level resource limits—Memcached rapidly reclaims internal memory
+buffers and file descriptors while preventing cascading failures across
+its worker thread pool.</p>
+<h3 id="event-driven-failure-detection">Event-Driven Failure
+Detection</h3>
+<p>Memcached assigns accepted client connections across a pool of
+pre-allocated worker threads via a round-robin dispatch mechanism. Each
+worker thread runs its own <code>libevent</code> instance using
+kernel-level event multiplexing (such as <code>epoll</code> on Linux or
+<code>kqueue</code> on BSD/macOS).</p>
+<p>When a connection terminates unexpectedly, Memcached detects it
+through non-blocking I/O event notifications:</p>
+<ul>
+<li><strong>Zero-Byte Reads:</strong> If a client abruptly closes a TCP
+socket, the read event triggers a standard system call
+(<code>recv()</code> or <code>read()</code>), which returns
+<code>0</code>, signaling <code>EOF</code>.</li>
+<li><strong>Kernel Error Flags:</strong> If the connection is reset via
+a TCP <code>RST</code> or a broken pipe occurs, the kernel generates
+flags such as <code>EPOLLRDHUP</code>, <code>EPOLLERR</code>, or
+<code>EPOLLHUP</code>.</li>
+<li><strong>Write Failures:</strong> When Memcached attempts to flush
+response data to a dropped connection, the underlying system call yields
+<code>EPIPE</code> or <code>ECONNRESET</code>.</li>
+</ul>
+<h3 id="connection-state-machine-and-teardown">Connection State Machine
+and Teardown</h3>
+<p>Memcached tracks every network interaction using an explicit
+connection state machine. Once an I/O error or <code>EOF</code> is
+detected, the worker thread shifts the connection state to
+<code>conn_closing</code>.</p>
+<p>The teardown process follows a strict sequence:</p>
+<ol type="1">
+<li><strong>Unregistering Events:</strong> The worker thread immediately
+removes the socket’s file descriptor from its active
+<code>libevent</code> monitoring list to stop processing subsequent
+events.</li>
+<li><strong>Closing the Socket:</strong> The system call
+<code>close()</code> is invoked on the file descriptor. This releases
+the kernel-level socket resources and allows the operating system to
+initiate the TCP teardown sequence (e.g., entering the
+<code>TIME_WAIT</code> or <code>CLOSED</code> state).</li>
+<li><strong>Buffer Management:</strong> Dynamic read and write buffers
+allocated to that specific connection are returned to Memcached’s
+internal buffer pools or deallocated, preventing memory bloat during
+massive connection churn.</li>
+</ol>
+<h3 id="resource-recycling-via-connection-pools">Resource Recycling via
+Connection Pools</h3>
+<p>Allocating memory structures repeatedly during traffic spikes
+degrades CPU performance due to heap fragmentation and lock contention.
+Memcached mitigates this by maintaining a free list of internal
+connection objects (<code>conn</code> structs).</p>
+<p>Instead of freeing the underlying <code>conn</code> structure back to
+the system heap via <code>free()</code>, the connection teardown routine
+cleans its state, resets its counters, and returns the pointer to a
+per-thread or global free list. When a new client arrives, Memcached
+retrieves an existing <code>conn</code> structure from the pool,
+minimizing allocation overhead during heavy traffic bursts.</p>
+<h3 id="thread-isolation-and-concurrency-protection">Thread Isolation
+and Concurrency Protection</h3>
+<p>Because Memcached uses a shared-nothing model for network I/O, a
+connection drop on one worker thread does not disrupt or block
+others.</p>
+<ul>
+<li><strong>No Global Lock Contention:</strong> Network cleanup occurs
+entirely within the context of the worker thread managing that
+connection. Only item lookups and slab operations acquire global or
+fine-grained hash table locks; connection teardown itself operates
+purely on thread-local event loops.</li>
+<li><strong>Mitigating "Slowloris" and Timeouts:</strong> If thousands
+of connections fail simultaneously due to upstream timeouts, each worker
+thread processes socket closures as standard non-blocking events in its
+queue. The O(1) nature of socket deregistration ensures that the event
+loop remains responsive to healthy client connections.</li>
+<li><strong>Protection Against Descriptor Exhaustion:</strong> Memcached
+tracks active connections against the <code>-c</code> (max connections)
+threshold. If dropped connections linger at the TCP level, Memcached
+stops accepting new incoming sockets at the listener thread until active
+connections fall back below the limit, preventing process crashes caused
+by <code>EMFILE</code> (Too many open files) errors.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-connection-drops-at-peak-load';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Why Memcached Is Lightweight Compared to Databases - memcached</title>
+    <meta name="description" content="Memcached achieves exceptional speed and a minimal footprint by intentionally omitting the complex subsystems found in full-featured database engines. Rather than managing complex relational structures, transactions, and persistent disk storage, Memcached">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/why-memcached-is-lightweight-compared-to-databases">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Why Memcached Is Lightweight Compared to Databases - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/why-memcached-is-lightweight-compared-to-databases" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached achieves exceptional speed and a minimal footprint by intentionally omitting the complex subsystems found in full-featured database engines. Rather than managing complex relational structures, transactions, and persistent disk storage, Memcached" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="why-memcached-is-lightweight-compared-to-databases">Why
+Memcached Is Lightweight Compared to Databases</h1>
+<p>Memcached achieves exceptional speed and a minimal footprint by
+intentionally omitting the complex subsystems found in full-featured
+database engines. Rather than managing complex relational structures,
+transactions, and persistent disk storage, Memcached operates strictly
+as a distributed, in-memory key-value cache. This article examines the
+core architectural decisions—including its simple hash-table model,
+custom slab memory allocator, lack of ACID persistence mechanisms, and
+non-blocking event-driven network architecture—that make Memcached
+dramatically more lightweight than traditional database engines.</p>
+<h3 id="pure-in-memory-operations-without-persistence">Pure In-Memory
+Operations Without Persistence</h3>
+<p>Traditional databases incur significant overhead because they must
+guarantee data durability. Writing to disk, maintaining a Write-Ahead
+Log (WAL), handling crash recovery, and managing data flush checkpoints
+all consume substantial CPU cycles and I/O bandwidth.</p>
+<p>Memcached skips persistence entirely. It stores data exclusively in
+volatile RAM. Because it treats data loss as an acceptable trade-off for
+speed (assuming the underlying primary database can re-populate the
+cache), it completely eliminates the file system abstractions,
+synchronization locks, and disk-commit latency that govern database
+engine design.</p>
+<h3 id="minimalist-key-value-architecture">Minimalist Key-Value
+Architecture</h3>
+<p>Relational and document databases must interpret queries, maintain
+schemas, optimize execution plans, and navigate complex index trees
+(such as B-Trees or LSM-Trees). These features require substantial
+runtime metadata, complex parsers, and memory-intensive execution
+engines.</p>
+<p>In contrast, Memcached provides a simple <span
+class="math inline">\(O(1)\)</span> key-value data model. It relies on a
+single internal hash table for data retrieval and storage. The server
+does not inspect payload contents, evaluate secondary indexes, or
+support filtering, joins, or aggregations. By treating keys and values
+merely as raw strings or byte arrays, the CPU overhead per request
+remains exceptionally low.</p>
+<h3 id="slab-memory-allocation">Slab Memory Allocation</h3>
+<p>Standard operating system memory allocation (<code>malloc</code> and
+<code>free</code>) can introduce severe memory fragmentation over time,
+leading to degraded performance and unpredictable memory spikes.</p>
+<p>Memcached solves this using a specialized slab allocator:</p>
+<ul>
+<li>Memory is pre-allocated in large chunks (slabs), typically 1 MB in
+size.</li>
+<li>Slabs are divided into smaller, uniform chunks tailored to specific
+data size classes.</li>
+<li>When an item is stored, Memcached places it into the closest fitting
+pre-allocated chunk.</li>
+</ul>
+<p>By reusing these fixed-size memory slots instead of constantly
+allocating and deallocating memory from the OS, Memcached avoids memory
+fragmentation and keeps garbage collection overhead at near zero.</p>
+<h3 id="omission-of-acid-transactions-and-locking-overhead">Omission of
+ACID Transactions and Locking Overhead</h3>
+<p>Full-featured database engines maintain transactional integrity
+(Atomicity, Consistency, Isolation, Durability) via complex mechanisms
+such as Multi-Version Concurrency Control (MVCC), table- or row-level
+locking, and distributed two-phase commits. These mechanisms introduce
+high coordination costs across threads.</p>
+<p>Memcached completely discards transactional semantics. Individual
+operations are atomic at the single-key level, but multi-key
+transactions, rollbacks, and isolation levels do not exist. Eviction is
+handled straightforwardly via a Least Recently Used (LRU) algorithm;
+when memory is full, the oldest, least active data is quietly
+overwritten. This eliminates the need to manage lock contention, undo
+logs, or read views.</p>
+<h3 id="event-driven-multi-threaded-io">Event-Driven, Multi-Threaded
+I/O</h3>
+<p>Memcached uses a non-blocking network I/O model built around the
+<code>libevent</code> library. A master thread handles incoming
+connections and delegates them to a fixed pool of worker threads through
+simple connection queues.</p>
+<p>Because operations are pure memory lookups with execution times
+measured in microseconds, worker threads rarely block. Memcached
+requires only a minimal network protocol—available in simple text or
+lightweight binary formats—to parse incoming requests with minimal CPU
+instruction counts. This allows a single Memcached instance to handle
+hundreds of thousands of concurrent requests per second with negligible
+resource consumption.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/why-memcached-is-lightweight-compared-to-databases';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

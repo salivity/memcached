@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached vs Redis Memory Allocation Strategies - memcached</title>
+    <meta name="description" content="This article examines the core differences in memory allocation strategies between Memcached and Redis. While Memcached relies on a pre-allocated slab allocation mechanism designed to eliminate external memory fragmentation, Redis uses dynamic memory allo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-vs-redis-memory-allocation-strategies">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached vs Redis Memory Allocation Strategies - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-vs-redis-memory-allocation-strategies" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines the core differences in memory allocation strategies between Memcached and Redis. While Memcached relies on a pre-allocated slab allocation mechanism designed to eliminate external memory fragmentation, Redis uses dynamic memory allo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-vs-redis-memory-allocation-strategies">Memcached vs
+Redis Memory Allocation Strategies</h1>
+<p>This article examines the core differences in memory allocation
+strategies between Memcached and Redis. While Memcached relies on a
+pre-allocated slab allocation mechanism designed to eliminate external
+memory fragmentation, Redis uses dynamic memory allocation via
+general-purpose allocators like jemalloc to support rich data
+structures. Understanding these distinct approaches clarifies how each
+engine handles memory overhead, fragmentation, and performance under
+varying workloads.</p>
+<h3 id="memcached-slab-allocation-mechanism">Memcached: Slab Allocation
+Mechanism</h3>
+<p>Memcached manages memory through a deterministic system known as
+<strong>slab allocation</strong>. When Memcached starts, it reserves a
+large, contiguous block of memory and divides it into smaller units to
+avoid calling system-level allocation primitives continuously.</p>
+<ul>
+<li><strong>Slab Classes and Chunks:</strong> Memory is organized into
+slab classes. Each class contains 1 MB pages divided into fixed-size
+chunks. For example, Slab Class 1 might contain 96-byte chunks, Slab
+Class 2 might contain 120-byte chunks, scaling up exponentially by a
+configurable growth factor (default 1.25).</li>
+<li><strong>Allocation Process:</strong> When a key-value pair is
+stored, Memcached identifies the smallest chunk size capable of holding
+the data and assigns the item to that slab class.</li>
+<li><strong>Internal Fragmentation:</strong> Because chunk sizes are
+fixed, any unused space within a chunk is wasted. If an 80-byte item is
+placed into a 120-byte chunk, the remaining 40 bytes cannot be used by
+other keys.</li>
+<li><strong>Elimination of External Fragmentation:</strong> Because
+slabs are uniformly sized (1 MB) and chunks within a class are
+identical, the underlying operating system does not suffer from
+address-space fragmentation. Memory reuse within the same slab class is
+immediate and fast.</li>
+</ul>
+<h3 id="redis-dynamic-allocation-via-general-purpose-allocators">Redis:
+Dynamic Allocation via General-Purpose Allocators</h3>
+<p>Unlike Memcached, Redis does not pre-allocate a monolithic block of
+memory divided into static buckets. Instead, Redis delegates memory
+management to general-purpose allocators—primarily
+<strong>jemalloc</strong> by default on Linux, though it can compile
+with <code>glibc malloc</code> or <code>tcmalloc</code>.</p>
+<ul>
+<li><strong>On-Demand Allocation:</strong> Redis allocates and frees
+memory dynamically as data arrives, shrinks, or expands. This model
+accommodates complex data types such as Lists, Hashes, Sets, and Sorted
+Sets, which require variable, non-uniform memory layouts.</li>
+<li><strong>Compact Encoding:</strong> Redis optimizes memory at the
+data-structure level using compact encodings (such as
+<code>ziplist</code> or <code>listpack</code>). When collections contain
+small elements, Redis encodes them as continuous byte arrays,
+dramatically reducing pointer overhead.</li>
+<li><strong>External Fragmentation:</strong> Dynamic allocation can lead
+to external memory fragmentation over time. When keys of varying sizes
+are allocated and freed unpredictably, free memory becomes scattered in
+non-contiguous fragments, increasing the Resident Set Size (RSS) even
+when logical memory usage is low.</li>
+<li><strong>Active Defragmentation:</strong> To counter external
+fragmentation, Redis includes an active defragmentation engine. When
+enabled, Redis identifies fragmented memory regions at runtime, copies
+the data into continuous memory pages, and releases the fragmented pages
+back to the operating system without downtime.</li>
+</ul>
+<h3 id="direct-comparison-of-allocation-strategies">Direct Comparison of
+Allocation Strategies</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Feature</th>
+<th style="text-align: left;">Memcached</th>
+<th style="text-align: left;">Redis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Allocation Model</strong></td>
+<td style="text-align: left;">Pre-allocated Slab Allocator</td>
+<td style="text-align: left;">Dynamic On-Demand (jemalloc/malloc)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Primary Fragmentation
+Risk</strong></td>
+<td style="text-align: left;">Internal (unused space inside fixed
+chunks)</td>
+<td style="text-align: left;">External (scattered free memory across
+pages)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Memory Efficiency for
+Primitives</strong></td>
+<td style="text-align: left;">High for uniformly sized strings</td>
+<td style="text-align: left;">High, with minimal padding</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Complex Data Structure
+Handling</strong></td>
+<td style="text-align: left;">Not supported (values are raw byte
+blobs)</td>
+<td style="text-align: left;">Native support with optimized internal
+encodings</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Memory Reclamation</strong></td>
+<td style="text-align: left;">Reuses slots in matching slab classes; LRU
+per class</td>
+<td style="text-align: left;">System free via allocator; global LRU/LFU
+eviction</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Defragmentation
+Handling</strong></td>
+<td style="text-align: left;">Slab reassigning / automove across
+classes</td>
+<td style="text-align: left;">In-memory active defragmentation</td>
+</tr>
+</tbody>
+</table>
+<h3 id="architectural-trade-offs">Architectural Trade-Offs</h3>
+<p>Memcached's slab model prioritizes predictability and raw read/write
+throughput for simple key-value data. The operating system rarely
+intervenes in memory management once the daemon is running, minimizing
+system-call overhead and avoiding memory compaction pauses. The
+trade-off is potential memory inefficiency if key sizes do not align
+closely with slab chunk increments.</p>
+<p>Redis's dynamic approach prioritizes versatility and granular memory
+usage. By allocating only the exact bytes required and utilizing compact
+encodings, Redis maximizes data density for varied datasets. However, it
+requires an intelligent allocator like jemalloc and background
+defragmentation routines to manage the inherent memory fragmentation
+caused by dynamic allocations and deletions.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-vs-redis-memory-allocation-strategies';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

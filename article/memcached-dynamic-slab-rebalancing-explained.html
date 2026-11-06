@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Dynamic Slab Rebalancing Explained - memcached</title>
+    <meta name="description" content="Modern versions of Memcached resolve critical memory allocation inefficiencies—historically perceived as memory leaks or &quot;slab calcification&quot;—by utilizing dynamic slab rebalancing. This article explores how Memcached manages memory through its slab alloca">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-dynamic-slab-rebalancing-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Dynamic Slab Rebalancing Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-dynamic-slab-rebalancing-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Modern versions of Memcached resolve critical memory allocation inefficiencies—historically perceived as memory leaks or &quot;slab calcification&quot;—by utilizing dynamic slab rebalancing. This article explores how Memcached manages memory through its slab alloca" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-dynamic-slab-rebalancing-explained">Memcached Dynamic
+Slab Rebalancing Explained</h1>
+<p>Modern versions of Memcached resolve critical memory allocation
+inefficiencies—historically perceived as memory leaks or "slab
+calcification"—by utilizing dynamic slab rebalancing. This article
+explores how Memcached manages memory through its slab allocation
+architecture, why static allocation historically trapped memory in
+unused classes, and how modern background automove engines dynamically
+reassign 1MB memory pages to eliminate artificial capacity bottlenecks
+without service restarts.</p>
+<h3 id="the-foundation-the-slab-allocation-system">The Foundation: The
+Slab Allocation System</h3>
+<p>To prevent OS-level memory fragmentation caused by frequent
+allocations and deallocations, Memcached divides allocated memory into
+1MB pages. These pages are assigned to specific <strong>slab
+classes</strong>, where each class caters to items within a defined size
+range by carving the 1MB page into equal, fixed-size chunks (e.g., 96
+bytes, 120 bytes, 150 bytes, up to 1MB).</p>
+<p>When an item is stored, Memcached determines the smallest chunk that
+can accommodate the data and places it in the corresponding slab
+class.</p>
+<h3 id="the-problem-slab-calcification">The Problem: Slab
+Calcification</h3>
+<p>In earlier versions of Memcached, page assignments to slab classes
+were permanent. Once a 1MB page was assigned to a slab class, it could
+never be reassigned to another.</p>
+<p>This behavior caused an issue known as <strong>slab
+calcification</strong>:</p>
+<ul>
+<li>If an application's access patterns shifted—such as transitioning
+from caching large JSON payloads (requiring large chunk classes) to
+small session tokens (requiring small chunk classes)—the memory
+allocated to large chunks remained locked.</li>
+<li>Even if the large chunks were entirely idle, Memcached could not
+repurpose their 1MB pages for the high-demand smaller chunks.</li>
+<li>As a result, the smaller slab classes ran out of space and
+aggressively evicted active, valid items (Least Recently Used or LRU
+evictions), despite a large portion of the total memory pool sitting
+idle.</li>
+</ul>
+<p>To system administrators and developers, this behavior mimicked a
+memory leak: available RAM was locked up and unavailable for new data,
+degrading cache hit ratios and driving unnecessary hardware scaling.</p>
+<h3 id="how-dynamic-slab-rebalancing-works">How Dynamic Slab Rebalancing
+Works</h3>
+<p>Dynamic slab rebalancing eliminates slab calcification by allowing
+Memcached to migrate 1MB memory pages from underutilized slab classes to
+classes experiencing high eviction rates.</p>
+<h4 id="1-the-maintenance-thread-and-safe-migration">1. The Maintenance
+Thread and Safe Migration</h4>
+<p>Page migration is handled asynchronously by a dedicated maintenance
+thread. When dynamic rebalancing is triggered:</p>
+<ol type="1">
+<li><strong>Donor Selection:</strong> A 1MB page is selected from an
+underutilized slab class (the donor).</li>
+<li><strong>Item Eviction/Drain:</strong> The items currently occupying
+that page are cleanly purged or allowed to expire. The thread
+coordinates with worker threads using fine-grained locks to avoid
+blocking read/write operations on other pages.</li>
+<li><strong>Re-slicing:</strong> Once cleared, the 1MB page is detached
+from the donor slab class, attached to the recipient slab class, and
+divided into the recipient's chunk size.</li>
+<li><strong>Availability:</strong> The newly formatted chunks become
+immediately available for allocation in the starved class.</li>
+</ol>
+<h4 id="2-the-automove-mechanism">2. The Automove Mechanism</h4>
+<p>While administrators can trigger manual moves via the
+<code>slabs reassign &lt;source&gt; &lt;target&gt;</code> command,
+modern deployments rely on the automated engine enabled with
+<code>slab_automove</code>.</p>
+<p>Modern Memcached versions (1.4.25 and later) offer refined automove
+algorithms, primarily <strong>automove version 2</strong>:</p>
+<ul>
+<li><strong>Continuous Monitoring:</strong> The engine analyzes windowed
+performance metrics across all slab classes.</li>
+<li><strong>Eviction vs. Idle Tracking:</strong> It checks if a class
+has had consecutive evictions over a short window while another class
+has had free chunks or pages with no read/write activity for an extended
+period.</li>
+<li><strong>Conservative Reallocation:</strong> To prevent thrashing
+(moving pages back and forth rapidly), the algorithm imposes a cooldown
+window and moves only one page per interval, ensuring stable memory
+rebalancing.</li>
+</ul>
+<h3 id="key-operational-benefits">Key Operational Benefits</h3>
+<ul>
+<li><strong>Elimination of Artificial "Leaks":</strong> Memory that
+would previously sit dormant after schema changes or workload shifts is
+automatically reclaimed and applied where needed.</li>
+<li><strong>Zero Downtime:</strong> Memory reallocation occurs online in
+small, isolated steps, removing the need to flush cache contents or
+restart instances to restore balanced memory.</li>
+<li><strong>Higher Cache Hit Ratios:</strong> RAM is consistently
+distributed to match current real-time demand, maximizing item retention
+and lowering downstream database load.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-dynamic-slab-rebalancing-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

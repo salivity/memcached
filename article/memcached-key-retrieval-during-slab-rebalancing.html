@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Key Retrieval During Slab Rebalancing - memcached</title>
+    <meta name="description" content="Memcached maintains high availability and continuous read operations even while memory pages migrate between slab classes through a background process called slab rebalancing. When memory needs shift, Memcached moves 1MB memory pages from underutilized sl">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-key-retrieval-during-slab-rebalancing">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Key Retrieval During Slab Rebalancing - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-key-retrieval-during-slab-rebalancing" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains high availability and continuous read operations even while memory pages migrate between slab classes through a background process called slab rebalancing. When memory needs shift, Memcached moves 1MB memory pages from underutilized sl" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-key-retrieval-during-slab-rebalancing">Memcached Key
+Retrieval During Slab Rebalancing</h1>
+<p>Memcached maintains high availability and continuous read operations
+even while memory pages migrate between slab classes through a
+background process called slab rebalancing. When memory needs shift,
+Memcached moves 1MB memory pages from underutilized slab classes to
+classes experiencing memory pressure without taking the cache offline.
+Key retrieval during this migration relies on fine-grained hash table
+locking, immediate item unlinking, and non-blocking read paths that
+prioritize low latency at the expense of evicting active keys residing
+on the migrating page.</p>
+<h3 id="the-slab-rebalancing-architecture">The Slab Rebalancing
+Architecture</h3>
+<p>Memcached allocates memory in fixed 1MB pages divided into chunks
+corresponding to specific slab classes. When the slab automove thread
+identifies an imbalance, it initiates a migration process to reassign a
+1MB page from a donor class to a target class.</p>
+<p>This migration runs asynchronously via a dedicated background
+maintenance thread (<code>slab_rebalance_thread</code>). By offloading
+the heavy lifting of page reallocation to this background thread, worker
+threads handling incoming client requests—including key retrieval
+commands like <code>get</code>—are spared from global blocking
+operations.</p>
+<h3 id="fine-grained-locking-and-concurrency">Fine-Grained Locking and
+Concurrency</h3>
+<p>Memcached does not use a global lock to freeze the cache during page
+reassignment. Instead, concurrency is handled through item-level lock
+buckets keyed to the item's hash:</p>
+<ul>
+<li><strong>Bucket Item Locks:</strong> Worker threads processing
+<code>get</code> commands acquire a read/write lock for the specific
+hash bucket of the requested key.</li>
+<li><strong>Granular Interference:</strong> The rebalance thread only
+acquires the specific item lock corresponding to the chunk it is
+currently evicting.</li>
+<li><strong>Lock Contention:</strong> Requests for keys located on
+different pages or in different hash buckets execute with zero lock
+contention. A client reading a key currently being processed by the
+rebalance thread will briefly wait for the granular item lock to
+release.</li>
+</ul>
+<h3 id="key-retrieval-lifecycle-during-migration">Key Retrieval
+Lifecycle During Migration</h3>
+<p>When a page is targeted for migration, the memory chunks on that page
+must be emptied. The retrieval behavior for any key residing on that
+page depends on the exact stage of the migration:</p>
+<ol type="1">
+<li><strong>Before the Item Is Processed:</strong> If a client requests
+a key residing on a page scheduled for reassignment before the rebalance
+thread reaches that specific chunk, the hash table lookup succeeds
+normally. The item is read from memory and returned to the client as a
+cache hit.</li>
+<li><strong>During Item Eviction:</strong> When the rebalance thread
+processes a chunk on the donor page, it acquires the item's hash lock.
+It removes the item from the central hash table and the LRU (Least
+Recently Used) doubly linked list. Any incoming <code>get</code> request
+for this key pauses until the item is unlinked.</li>
+<li><strong>After Eviction:</strong> Once unlinked from the primary hash
+table, the key is no longer discoverable. Any subsequent
+<code>get</code> command hashing to this key immediately results in a
+cache miss (<code>END</code> or <code>NOT_FOUND</code>). The client
+application must handle this miss by fetching the source data from the
+primary database and repopulating the cache.</li>
+</ol>
+<h3 id="memory-safety-and-reference-counting">Memory Safety and
+Reference Counting</h3>
+<p>Memcached ensures that in-flight reads do not read corrupted memory
+if a page's layout is repurposed while data is actively being sent
+across the network socket.</p>
+<p>Every item in Memcached maintains an internal reference counter
+(<code>refcount</code>). When a worker thread finds an item during a
+<code>get</code> command, it increments the item's reference count. Even
+if the rebalance thread evicts the item from the hash table immediately
+afterward, the underlying memory chunk is protected from physical
+overwrite until the worker thread finishes transmitting the payload and
+decrements the counter back to zero. Once all references drop to zero,
+the rebalance thread completes the reclamation, wiping and reformatting
+the 1MB page for its new slab class.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-key-retrieval-during-slab-rebalancing';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

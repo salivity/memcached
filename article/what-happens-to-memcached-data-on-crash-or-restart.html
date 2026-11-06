@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>What Happens to Memcached Data on Crash or Restart? - memcached</title>
+    <meta name="description" content="When the Memcached daemon crashes, restarts, or experiences a server reboot, all data stored in the cache is completely and permanently lost. Because Memcached is an entirely in-memory, volatile key-value store, it does not write data to persistent storag">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/what-happens-to-memcached-data-on-crash-or-restart">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="What Happens to Memcached Data on Crash or Restart? - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/what-happens-to-memcached-data-on-crash-or-restart" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When the Memcached daemon crashes, restarts, or experiences a server reboot, all data stored in the cache is completely and permanently lost. Because Memcached is an entirely in-memory, volatile key-value store, it does not write data to persistent storag" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="what-happens-to-memcached-data-on-crash-or-restart">What Happens
+to Memcached Data on Crash or Restart?</h1>
+<p>When the Memcached daemon crashes, restarts, or experiences a server
+reboot, all data stored in the cache is completely and permanently lost.
+Because Memcached is an entirely in-memory, volatile key-value store, it
+does not write data to persistent storage like solid-state drives or
+hard disks. Consequently, any restart clears the entire memory
+allocation, requiring client applications to treat Memcached as an
+ephemeral cache and retrieve missing data from the primary database or
+backend source.</p>
+<h3 id="the-in-memory-architecture">The In-Memory Architecture</h3>
+<p>Memcached is engineered strictly for speed and low-latency
+operations. To achieve sub-millisecond response times, it allocates a
+dedicated chunk of the host system's Random Access Memory (RAM) using an
+internal slab allocator.</p>
+<p>Unlike persistent data stores, Memcached does not support:</p>
+<ul>
+<li>Append-only files (AOF)</li>
+<li>Disk snapshots (RDB-style backups)</li>
+<li>Replication across nodes natively</li>
+</ul>
+<p>Because RAM is volatile memory, it requires continuous power and an
+active operating system process to retain state. When the
+<code>memcached</code> process terminates—whether intentionally via a
+service restart (<code>systemctl restart memcached</code>) or
+unexpectedly due to an Out of Memory (OOM) killer event or segmentation
+fault—the operating system instantly reclaims the allocated memory
+pages. All keys, values, and expiration metadata cease to exist.</p>
+<h3 id="system-behavior-after-a-restart">System Behavior After a
+Restart</h3>
+<p>Once the Memcached service comes back online, it starts with a
+completely empty cache (a "cold cache"). This introduces specific
+operational behaviors:</p>
+<ol type="1">
+<li><strong>Cache Misses:</strong> Every subsequent query sent by the
+application will result in a cache miss until the data is
+re-cached.</li>
+<li><strong>The Thundering Herd Problem:</strong> If high-traffic
+endpoints rely on the cache, a sudden restart can cause thousands of
+concurrent requests to bypass the cache simultaneously. These requests
+hit the primary database at once, potentially causing severe latency
+spikes, resource exhaustion, or database outages.</li>
+</ol>
+<h3 id="how-applications-should-handle-restarts">How Applications Should
+Handle Restarts</h3>
+<p>Because data loss is an expected characteristic of Memcached by
+design, systems relying on it must be built with resilience in mind.</p>
+<ul>
+<li><strong>Cache-Aside Pattern:</strong> Applications should always
+check Memcached first. If a key is missing (cache miss), the application
+must query the primary database, return the data to the user, and
+asynchronously write that value back to Memcached with an appropriate
+Time-To-Live (TTL).</li>
+<li><strong>Cache Warming:</strong> For critical, high-volume datasets,
+run automated warming scripts after scheduled maintenance to
+pre-populate frequently requested keys before routing production traffic
+back to the node.</li>
+<li><strong>Connection Pooling and Circuit Breaking:</strong> Ensure
+database connection pools are sized appropriately and implement circuit
+breakers to prevent backend databases from crashing under a sudden
+influx of read operations.</li>
+</ul>
+<p>If an application requires cached data to survive service crashes,
+process restarts, or server reboots, a persistent in-memory database
+like Redis or a dedicated distributed key-value store with
+disk-persistence capabilities should be evaluated instead of
+Memcached.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/what-happens-to-memcached-data-on-crash-or-restart';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

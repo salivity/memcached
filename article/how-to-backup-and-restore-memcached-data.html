@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Backup and Restore Memcached Data - memcached</title>
+    <meta name="description" content="Memcached is fundamentally an in-memory, volatile caching system designed without native data persistence, meaning all stored keys are lost when the service restarts. However, operational requirements—such as maintenance, node migrations, or cold-start pr">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-backup-and-restore-memcached-data">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Backup and Restore Memcached Data - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-backup-and-restore-memcached-data" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is fundamentally an in-memory, volatile caching system designed without native data persistence, meaning all stored keys are lost when the service restarts. However, operational requirements—such as maintenance, node migrations, or cold-start pr" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-backup-and-restore-memcached-data">How to Backup and
+Restore Memcached Data</h1>
+<p>Memcached is fundamentally an in-memory, volatile caching system
+designed without native data persistence, meaning all stored keys are
+lost when the service restarts. However, operational requirements—such
+as maintenance, node migrations, or cold-start prevention—often demand
+strategies to extract and reload this transient data. This article
+explores practical methods for backing up and restoring Memcached data,
+covering command-line extraction utilities, process-level snapshotting,
+application-layer warming patterns, and persistent proxy
+architectures.</p>
+<h2 id="1-extracting-data-with-native-and-community-tools">1. Extracting
+Data with Native and Community Tools</h2>
+<p>Because Memcached stores data in memory slabs, you can inspect and
+dump active keys using native management protocols and client tools.</p>
+<h3 id="using-memcdump-and-custom-fetch-scripts">Using
+<code>memcdump</code> and Custom Fetch Scripts</h3>
+<p>The <code>libmemcached-tools</code> package provides
+<code>memcdump</code>, which connects to a running Memcached instance
+and outputs a list of all current keys:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcdump</span> <span class="at">--servers</span><span class="op">=</span>127.0.0.1:11211 <span class="op">&gt;</span> memcached_keys.txt</span></code></pre></div>
+<p>Once the keys are extracted, a script (written in Python, Go, or
+Bash) can iterate through the list, perform a <code>get</code> command
+for each key, serialize the key-value pairs (along with their flags and
+TTLs) into a JSON or binary file, and write them to disk. To restore,
+the script simply iterates over the saved file and executes
+<code>set</code> or <code>add</code> commands against the target
+Memcached instance.</p>
+<p><em>Note: In production environments with high key volumes, dumping
+all keys sequentially can degrade performance or cause temporary latency
+spikes.</em></p>
+<h3 id="using-memcached-tool">Using <code>memcached-tool</code></h3>
+<p>The Perl script <code>memcached-tool</code>, often packaged directly
+with Memcached, allows you to dump data directly using the slab dump
+feature:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached-tool</span> 127.0.0.1:11211 dump <span class="op">&gt;</span> memcached_backup.txt</span></code></pre></div>
+<p>This utility dumps keys and values directly. You can restore this
+data by piping the generated set commands back into the Memcached port
+using <code>nc</code> (netcat):</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">nc</span> 127.0.0.1 11211 <span class="op">&lt;</span> memcached_backup.txt</span></code></pre></div>
+<h2 id="2-os-level-process-checkpointing-criu">2. OS-Level Process
+Checkpointing (CRIU)</h2>
+<p>When you need an exact byte-for-byte state preservation without
+querying individual keys, you can leverage Checkpoint/Restore in
+Userspace (CRIU) on Linux.</p>
+<ul>
+<li><strong>Backup:</strong> CRIU freezes the running Memcached process
+and copies its entire memory space and socket states to disk files.</li>
+<li><strong>Restore:</strong> CRIU reconstructs the process state
+directly from those files, resuming execution with all in-memory keys
+intact.</li>
+</ul>
+<p>This approach is particularly useful during scheduled host reboots or
+kernel upgrades, as it avoids cache cold-starts entirely without
+modifying application logic.</p>
+<h2 id="3-application-level-cache-warming">3. Application-Level Cache
+Warming</h2>
+<p>In standard distributed architectures, Memcached is treated as
+strictly ephemeral. Rather than taking physical backups of the cache,
+organizations implement automated cache warming pipelines.</p>
+<ul>
+<li><strong>Rebuilding from the Primary Datastore:</strong> If Memcached
+acts as a read-through or lookaside cache, a background worker can query
+the primary database (e.g., PostgreSQL, MySQL) for high-frequency
+records and repopulate Memcached before directing user traffic to the
+instance.</li>
+<li><strong>Access Log Replay:</strong> Web server access logs or
+streaming replication logs (e.g., via Apache Kafka) can be replayed
+against a fresh Memcached instance to pre-populate popular keys based on
+real-world traffic patterns.</li>
+</ul>
+<h2 id="4-replicated-architectures-and-routing-proxies">4. Replicated
+Architectures and Routing Proxies</h2>
+<p>Instead of traditional point-in-time file backups, high availability
+setups prevent data loss during single-node failure by mirroring data
+across multiple nodes.</p>
+<ul>
+<li><strong>Mcrouter:</strong> Developed by Facebook, Mcrouter is a
+Memcached protocol router. It can be configured with prefix routing,
+replication, and "shadowing." By configuring Mcrouter to mirror writes
+to multiple distinct Memcached clusters, one cluster acts as a live
+backup of the other. If one instance fails or restarts, the secondary
+cluster supplies the data.</li>
+<li><strong>Persistent Protocols:</strong> If business requirements
+mandate continuous persistence, consider deploying a storage engine that
+speaks the Memcached ASCII/binary protocol but includes native disk
+persistence, such as KeyDB or Couchbase.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-backup-and-restore-memcached-data';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

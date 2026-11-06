@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached on NUMA: Multi-Socket Hardware Trade-Offs - memcached</title>
+    <meta name="description" content="Deploying Memcached on multi-socket Non-Uniform Memory Access (NUMA) architecture forces a compromise between shared memory capacity and low-latency throughput. While a single large Memcached instance maximizes key-space capacity and simplifies operationa">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-on-numa-multi-socket-hardware-trade-offs">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached on NUMA: Multi-Socket Hardware Trade-Offs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-on-numa-multi-socket-hardware-trade-offs" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Deploying Memcached on multi-socket Non-Uniform Memory Access (NUMA) architecture forces a compromise between shared memory capacity and low-latency throughput. While a single large Memcached instance maximizes key-space capacity and simplifies operationa" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-on-numa-multi-socket-hardware-trade-offs">Memcached on
+NUMA: Multi-Socket Hardware Trade-Offs</h1>
+<p>Deploying Memcached on multi-socket Non-Uniform Memory Access (NUMA)
+architecture forces a compromise between shared memory capacity and
+low-latency throughput. While a single large Memcached instance
+maximizes key-space capacity and simplifies operational management,
+cross-node memory access and inter-socket bus saturation degrade
+performance. Alternatively, partitioning Memcached into node-pinned
+instances delivers predictable, ultra-low latency at the expense of
+memory efficiency, operational complexity, and data duplication
+risks.</p>
+<h3 id="the-numa-problem-in-memcached">The NUMA Problem in
+Memcached</h3>
+<p>In modern multi-socket systems, each CPU socket governs its own
+dedicated local memory bank and communicates with adjacent sockets over
+high-speed interconnects (such as Intel UPI or AMD Infinity Fabric).
+Accessing memory attached to a remote socket incurs substantially higher
+latency (often 1.5x to 3x) and lower throughput compared to accessing
+local memory.</p>
+<p>Memcached relies on high concurrency, fast thread synchronization,
+and shared in-memory data structures. When run as a single process
+spanning multiple NUMA nodes, it inevitably triggers cross-socket memory
+reads and writes, creating several structural bottlenecks.</p>
+<h3 id="architectural-trade-offs">Architectural Trade-Offs</h3>
+<h4 id="1-cross-socket-latency-vs-global-cache-utilization">1.
+Cross-Socket Latency vs. Global Cache Utilization</h4>
+<ul>
+<li><strong>Single Instance across Sockets:</strong> Running one large
+Memcached instance exposes the entire physical RAM of all sockets to a
+unified cache. However, threads running on Socket 0 frequently access
+key-value pairs stored in RAM physically wired to Socket 1. This
+cross-traffic traverses the processor interconnect, inflating read/write
+latencies and lowering requests per second (RPS).</li>
+<li><strong>Partitioned Instances (NUMA-Pinning):</strong> Running
+isolated Memcached instances pinned via <code>numactl</code> or
+<code>taskset</code> to specific NUMA nodes guarantees all memory access
+remains local. While latency drops dramatically and scales linearly,
+total cache space is fragmented. Clients must implement hash rings
+across multiple ports or endpoints on the same host, and an imbalance in
+key popularity can lead to premature evictions on one node while another
+remains underutilized.</li>
+</ul>
+<h4 id="2-thread-synchronization-and-interconnect-saturation">2. Thread
+Synchronization and Interconnect Saturation</h4>
+<p>Memcached uses fine-grained locking, particularly around hash table
+buckets and slab allocators, but core synchronization primitives (atomic
+instructions, mutexes, cache-line invalidations) must cross the
+interconnect when threads are distributed across sockets.</p>
+<p>When a thread on Socket 0 modifies an item or updates an LRU list,
+the cache coherence protocol must invalidate the relevant cache lines
+across all sockets. High write workloads induce severe interconnect
+saturation, resulting in CPU stalls, cache coherence storms, and
+increased lock wait times.</p>
+<h4 id="3-slab-allocation-and-memory-fragmentation">3. Slab Allocation
+and Memory Fragmentation</h4>
+<p>Memcached pre-allocates memory using a slab allocator. In a
+non-NUMA-aware deployment:</p>
+<ul>
+<li>Memory pages backing slab classes are allocated dynamically or
+uniformly striped across NUMA nodes based on the operating system’s
+allocation policy (e.g., default round-robin or first-touch).</li>
+<li>If a worker thread on Socket 1 frequently grabs items allocated on
+memory wired to Socket 0, the latency penalty is sustained permanently
+for the lifecycle of those slabs.</li>
+<li>Conversely, splitting Memcached into one process per NUMA node
+avoids cross-socket allocations but multiplies internal fragmentation.
+Each instance must independently maintain its own set of slab classes,
+leading to more unused reserved memory across the system.</li>
+</ul>
+<h4 id="4-network-and-io-locality">4. Network and I/O Locality</h4>
+<p>Network Interface Cards (NICs) connect to specific PCIe root
+complexes tied to a single NUMA node.</p>
+<ul>
+<li>If Memcached worker threads reside on Socket 1, but the 100GbE NIC
+is attached to Socket 0, all network packet transfers (via DMA and CPU
+processing of packet queues) must traverse the inter-socket
+interconnect.</li>
+<li>Achieving peak throughput requires binding network interrupts
+(IRQs), socket handling threads, and Memcached worker threads to the
+specific NUMA node hosting the active NIC. In a multi-instance setup,
+instances running on non-NIC-attached sockets still incur PCIe traversal
+penalties unless dual-NICs or NUMA-aware I/O routing are explicitly
+configured.</li>
+</ul>
+<h3 id="recommended-architectural-strategy">Recommended Architectural
+Strategy</h3>
+<p>To achieve deterministic performance and maximize multi-socket
+hardware:</p>
+<ol type="1">
+<li><p><strong>Avoid the Single-Instance Approach:</strong> Do not run a
+single Memcached process spanning multiple NUMA nodes for
+high-throughput, low-latency requirements.</p></li>
+<li><p><strong>Deploy Multiple Pinned Instances:</strong> Run one
+Memcached daemon per NUMA domain, pinning CPU cores and memory
+allocations strictly to that domain using:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">numactl</span> <span class="at">--cpunodebind</span><span class="op">=&lt;</span>node<span class="op">&gt;</span> --membind=<span class="op">&lt;</span>node<span class="op">&gt;</span> memcached <span class="at">-m</span> <span class="op">&lt;</span>allocated_ram<span class="op">&gt;</span> -t <span class="op">&lt;</span>threads_per_socket<span class="op">&gt;</span> -p <span class="op">&lt;</span>port<span class="op">&gt;</span></span></code></pre></div></li>
+<li><p><strong>Align Network IRQs:</strong> Map the network queues of
+the local NIC to the corresponding NUMA node, or utilize multi-NIC
+configurations where each NUMA node directly handles its own I/O
+pipeline.</p></li>
+<li><p><strong>Abstract with Client-Side Hashing:</strong> Shift cache
+aggregation to the client level using consistent hashing to route
+traffic across the per-node local instances running on different ports
+of the same physical host.</p></li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-on-numa-multi-socket-hardware-trade-offs';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

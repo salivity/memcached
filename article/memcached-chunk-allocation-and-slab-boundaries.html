@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Chunk Allocation and Slab Boundaries - memcached</title>
+    <meta name="description" content="This article explains how Memcached manages chunk allocation when data sizes sit close to slab class boundaries. Memcached employs a slab allocation system to manage memory efficiently and prevent external fragmentation. When a key-value pair approaches o">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-chunk-allocation-and-slab-boundaries">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Chunk Allocation and Slab Boundaries - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-chunk-allocation-and-slab-boundaries" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how Memcached manages chunk allocation when data sizes sit close to slab class boundaries. Memcached employs a slab allocation system to manage memory efficiently and prevent external fragmentation. When a key-value pair approaches o" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-chunk-allocation-and-slab-boundaries">Memcached Chunk
+Allocation and Slab Boundaries</h1>
+<p>This article explains how Memcached manages chunk allocation when
+data sizes sit close to slab class boundaries. Memcached employs a slab
+allocation system to manage memory efficiently and prevent external
+fragmentation. When a key-value pair approaches or marginally exceeds a
+slab threshold, the engine evaluates the full item footprint—including
+internal metadata and key size—and allocates the smallest chunk that
+fits the item. This boundary behavior can trigger internal
+fragmentation, shift memory pressure between slab classes, and require
+targeted configuration tuning to maintain peak performance.</p>
+<h3 id="the-slab-allocation-architecture">The Slab Allocation
+Architecture</h3>
+<p>Memcached bypasses standard operating system dynamic memory
+allocation (<code>malloc</code>/<code>free</code>) to eliminate external
+memory fragmentation. It allocates memory in 1 MB units called slab
+pages. Each slab page is sliced into uniform chunks.</p>
+<p>The sizing of these chunks across different slab classes is governed
+by a growth factor (defaulting to 1.25). For example:</p>
+<ul>
+<li>Slab Class 1: 96 bytes</li>
+<li>Slab Class 2: 120 bytes</li>
+<li>Slab Class 3: 152 bytes</li>
+</ul>
+<p>Each sequential slab class provides incrementally larger chunks to
+house larger items.</p>
+<h3 id="total-item-size-calculation">Total Item Size Calculation</h3>
+<p>When evaluating whether an item fits within a slab boundary,
+Memcached does not evaluate the key and value in isolation. The engine
+calculates the total item size using:</p>
+<ol type="1">
+<li><strong>Item Header:</strong> The internal <code>item</code> struct
+(typically 48 to 56 bytes on 64-bit systems).</li>
+<li><strong>Key Length:</strong> The raw byte size of the key
+string.</li>
+<li><strong>Suffix Data:</strong> Text-based representations of flags,
+value length, and CAS (Check-And-Set) counters.</li>
+<li><strong>Value Payload:</strong> The raw data being stored.</li>
+</ol>
+<p>The total byte count of all four elements dictates which slab class
+must accept the write.</p>
+<h3 id="behavior-at-slab-boundaries">Behavior at Slab Boundaries</h3>
+<p>When the calculated item size is near a slab boundary, one of two
+scenarios occurs:</p>
+<h4 id="1-total-size-is-just-below-the-boundary">1. Total Size Is Just
+Below the Boundary</h4>
+<p>If an item's combined size is marginally smaller than the chunk size
+of Slab Class <span class="math inline">\(N\)</span>, it is stored in
+Slab Class <span class="math inline">\(N\)</span>. This is the ideal
+scenario for memory density, as nearly all allocated bytes inside that
+chunk are utilized.</p>
+<h4 id="2-total-size-crosses-the-boundary">2. Total Size Crosses the
+Boundary</h4>
+<p>If an item exceeds the chunk size of Slab Class <span
+class="math inline">\(N\)</span> by even a single byte, it cannot be
+accommodated in that class. Memcached rounds up to the next available
+tier: Slab Class <span class="math inline">\(N+1\)</span>.</p>
+<p>For example, if Slab Class 5 provides 240-byte chunks and Slab Class
+6 provides 300-byte chunks, an item measuring 241 bytes is allocated a
+300-byte chunk in Class 6.</p>
+<h3 id="consequences-of-crossing-boundaries">Consequences of Crossing
+Boundaries</h3>
+<h4 id="internal-fragmentation-slack-space">Internal Fragmentation
+(Slack Space)</h4>
+<p>Crossing a boundary introduces internal fragmentation. In the
+241-byte example assigned to a 300-byte chunk, 59 bytes of memory
+(nearly 20% of the chunk) remain allocated but unused. When millions of
+keys exhibit this pattern, significant portions of memory become wasted
+"slack space."</p>
+<h4 id="disproportionate-evictions">Disproportionate Evictions</h4>
+<p>Memcached allocates memory dynamically by assigning 1 MB pages to
+slab classes as demand dictates. If an application update increases
+average payload size just enough to cross a boundary, items jump to the
+next slab class. If that target slab class is out of free chunks and
+cannot acquire new pages, Memcached begins evicting items via the Least
+Recently Used (LRU) algorithm in that specific class—even if the
+previous slab class has ample free capacity.</p>
+<h3 id="mitigating-slab-boundary-inefficiencies">Mitigating Slab
+Boundary Inefficiencies</h3>
+<p>To control memory distribution and limit slack space near slab
+boundaries, administrators can tune Memcached runtime parameters:</p>
+<ul>
+<li><strong>Adjust the Growth Factor (<code>-f</code>):</strong>
+Lowering the factor (e.g., <code>-f 1.1</code> instead of
+<code>1.25</code>) creates smaller gaps between slab classes. More
+granular chunk sizes reduce the maximum possible internal fragmentation
+when an item crosses a boundary.</li>
+<li><strong>Enable Slab Automove (<code>-o slab_automove=1</code> or
+<code>2</code>):</strong> Modern versions of Memcached can detect
+imbalances where one slab class suffers evictions while others hold
+dormant memory, dynamically reassigning 1 MB pages between classes.</li>
+<li><strong>Optimize Key and Metadata Overhead:</strong> Because keys
+and suffixes count toward the boundary threshold, keeping key names
+concise can prevent items from spilling into higher, less efficient slab
+classes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-chunk-allocation-and-slab-boundaries';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

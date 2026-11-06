@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Stats Slabs: Detect Inefficient Memory - memcached</title>
+    <meta name="description" content="Memcached organizes memory into slab classes with fixed-size chunks, but poor sizing factors or mismatched item distributions can lead to significant memory waste. The stats slabs command exposes low-level allocation telemetry for each slab class, allowin">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-slabs-detect-inefficient-memory">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Stats Slabs: Detect Inefficient Memory - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-slabs-detect-inefficient-memory" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached organizes memory into slab classes with fixed-size chunks, but poor sizing factors or mismatched item distributions can lead to significant memory waste. The stats slabs command exposes low-level allocation telemetry for each slab class, allowin" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-stats-slabs-detect-inefficient-memory">Memcached Stats
+Slabs: Detect Inefficient Memory</h1>
+<p>Memcached organizes memory into slab classes with fixed-size chunks,
+but poor sizing factors or mismatched item distributions can lead to
+significant memory waste. The <code>stats slabs</code> command exposes
+low-level allocation telemetry for each slab class, allowing
+administrators to diagnose both internal chunk fragmentation and
+stranded memory. This article breaks down the essential metrics provided
+by <code>stats slabs</code>—specifically <code>mem_requested</code>,
+<code>used_chunks</code>, <code>total_chunks</code>, and
+<code>free_chunks</code>—and explains how to use them to identify and
+resolve inefficient memory utilization.</p>
+<h3
+id="1-mem_requested-vs-allocated-chunk-capacity-internal-fragmentation">1.
+<code>mem_requested</code> vs. Allocated Chunk Capacity (Internal
+Fragmentation)</h3>
+<p>Internal fragmentation occurs when stored data is substantially
+smaller than the chunk size of the slab class holding it.</p>
+<ul>
+<li><strong><code>mem_requested</code></strong>: The exact number of
+bytes used by stored keys, values, and flags within a specific slab
+class.</li>
+<li><strong><code>chunk_size</code></strong>: The fixed byte size
+allocated to every item assigned to that slab class.</li>
+<li><strong><code>used_chunks</code></strong>: The number of chunks
+actively storing data.</li>
+</ul>
+<p>To detect internal fragmentation, compare the total allocated chunk
+capacity against the actual requested memory:</p>
+<p><span class="math display">\[\text{Wasted Chunk Bytes} =
+(\text{used\_chunks} \times \text{chunk\_size}) -
+\text{mem\_requested}\]</span></p>
+<p>If <code>mem_requested</code> is significantly lower than
+<code>used_chunks * chunk_size</code>, items are wasting the tail end of
+their assigned chunks. This usually indicates that the chunk growth
+factor (the <code>-f</code> configuration flag) is too aggressive,
+resulting in wide gaps between slab sizes.</p>
+<h3 id="2-free_chunks-and-free_chunks_end-stranded-slab-capacity">2.
+<code>free_chunks</code> and <code>free_chunks_end</code> (Stranded Slab
+Capacity)</h3>
+<p>Memcached allocates memory in 1 MB pages. Once a page is assigned to
+a slab class, it remains dedicated to that chunk size by default.</p>
+<ul>
+<li><strong><code>total_chunks</code></strong>: Total capacity of the
+slab class across all allocated pages
+(<code>total_pages * chunks_per_page</code>).</li>
+<li><strong><code>free_chunks</code></strong>: Chunks that were
+previously used but have been freed (via deletions or expirations) and
+are waiting for new data.</li>
+<li><strong><code>free_chunks_end</code></strong>: Chunks at the end of
+the most recently allocated 1 MB page that have never been written
+to.</li>
+</ul>
+<p>A consistently high ratio of <code>free_chunks</code> +
+<code>free_chunks_end</code> to <code>total_chunks</code> in a specific
+slab class means memory is locked up and unavailable to other slab
+classes that might be starved. If other slab classes are actively
+evicting items while one slab maintains a large pool of free chunks, you
+are experiencing slab calcification.</p>
+<h3 id="3-total_pages-vs-working-set-distribution">3.
+<code>total_pages</code> vs. Working Set Distribution</h3>
+<ul>
+<li><strong><code>total_pages</code></strong>: The number of 1 MB pages
+permanently allocated to the slab class.</li>
+</ul>
+<p>Examining <code>total_pages</code> across all active slab classes
+reveals your memory footprint distribution. If slabs with large chunk
+sizes consume a disproportionate number of pages but have low read/write
+activity, large items are monopolizing memory that could be better
+utilized by high-frequency, smaller items.</p>
+<h3 id="key-remediation-steps">Key Remediation Steps</h3>
+<ul>
+<li><strong>Adjust Chunk Growth Factor (<code>-f</code>)</strong>: If
+<code>mem_requested</code> reveals high internal fragmentation, lower
+the growth factor (e.g., from the default <code>1.25</code> down to
+<code>1.1</code> or <code>1.05</code>) to create slab classes closer in
+size to your actual payload sizes.</li>
+<li><strong>Enable Dynamic Slab Reassignment</strong>: If you notice
+stranded <code>free_chunks</code> alongside evictions in other classes,
+run Memcached with <code>-o slab_reassign,slab_automove=1</code> (or
+<code>2</code>) to allow the engine to automatically move unused memory
+pages to slab classes facing eviction pressure.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-slabs-detect-inefficient-memory';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

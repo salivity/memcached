@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Protocol Overhead for Small Writes - memcached</title>
+    <meta name="description" content="When storing small key-value pairs in Memcached, network protocol overhead often dwarfs the actual data payload being transmitted. This article examines the cumulative overhead introduced at both the transport layer (TCP/IP) and the application layer (Mem">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-protocol-overhead-for-small-writes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Protocol Overhead for Small Writes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-protocol-overhead-for-small-writes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When storing small key-value pairs in Memcached, network protocol overhead often dwarfs the actual data payload being transmitted. This article examines the cumulative overhead introduced at both the transport layer (TCP/IP) and the application layer (Mem" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-protocol-overhead-for-small-writes">Memcached Protocol
+Overhead for Small Writes</h1>
+<p>When storing small key-value pairs in Memcached, network protocol
+overhead often dwarfs the actual data payload being transmitted. This
+article examines the cumulative overhead introduced at both the
+transport layer (TCP/IP) and the application layer (Memcached's text and
+binary protocols), analyzes why small writes suffer from low bandwidth
+efficiency, and outlines methods to reduce this overhead.</p>
+<h3 id="the-problem-with-small-writes">The Problem with Small
+Writes</h3>
+<p>In distributed caching, a "small write" typically refers to keys and
+values that are only a few bytes to tens of bytes in size (for example,
+storing user session flags, numeric counters, or status indicators).
+When an application issues a write command, the data does not travel
+alone; it is encapsulated within multiple networking layers. As payload
+size decreases, the ratio of protocol metadata to actual payload
+increases drastically, leading to network inefficiencies, increased
+latency, and higher packet processing costs on network interfaces.</p>
+<h3 id="application-layer-overhead-text-vs-binary-protocols">Application
+Layer Overhead: Text vs. Binary Protocols</h3>
+<p>Memcached supports two primary application protocols: the legacy
+ASCII text protocol and the binary protocol. Both introduce significant
+per-request overhead for small writes.</p>
+<h4 id="1-ascii-text-protocol">1. ASCII Text Protocol</h4>
+<p>The text protocol requires human-readable commands separated by
+carriage-return line-feeds (<code>\r\n</code>). A standard write takes
+the following format:</p>
+<pre class="text"><code>set &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n
+&lt;data&gt;\r\n</code></pre>
+<p>For a 4-byte key (<code>user</code>) and a 4-byte value
+(<code>true</code>), the command looks like:
+<code>set user 0 0 4\r\ntrue\r\n</code></p>
+<ul>
+<li><strong>Command overhead:</strong> ~25 to 35 bytes of command text
+and delimiters.</li>
+<li><strong>Server response:</strong> Unless <code>noreply</code> is
+specified, the server replies with <code>STORED\r\n</code> (8 bytes),
+generating another packet or payload exchange.</li>
+</ul>
+<h4 id="2-binary-protocol">2. Binary Protocol</h4>
+<p>The binary protocol removes text-parsing requirements by using a
+structured byte format. However, it enforces a rigid header:</p>
+<ul>
+<li><strong>Fixed Header:</strong> 24 bytes (specifies magic byte,
+opcode, key length, extra length, data type, vbucket/status, total body
+length, opaque identifier, and CAS).</li>
+<li><strong>Command Extras:</strong> 8 bytes for <code>set</code>
+commands (4 bytes for flags, 4 bytes for expiration).</li>
+<li><strong>Total Application Overhead:</strong> 32 bytes minimum before
+adding the key and value.</li>
+<li><strong>Server Response:</strong> A corresponding 24-byte binary
+response header indicating success or failure.</li>
+</ul>
+<p>While the binary protocol is faster for CPU parsing and avoids
+formatting nuances, it still introduces at least 32 bytes of request
+overhead and 24 bytes of response overhead per write operation.</p>
+<h3 id="network-and-transport-layer-overhead-l2l4">Network and Transport
+Layer Overhead (L2–L4)</h3>
+<p>Before leaving the host, the Memcached packet is wrapped in
+transport, internet, and data link headers:</p>
+<ul>
+<li><strong>TCP Header:</strong> 20 bytes minimum (up to 32–40 bytes
+with standard TCP options like timestamps).</li>
+<li><strong>IP Header (IPv4):</strong> 20 bytes (or 40 bytes if using
+IPv6).</li>
+<li><strong>Ethernet Frame:</strong> 14 bytes for the header, plus a
+4-byte Frame Check Sequence (FCS) and 20 bytes of preamble and
+interpacket gap at the physical layer.</li>
+</ul>
+<p>Combined, standard TCP/IPv4 over Ethernet requires approximately
+<strong>54 to 74 bytes of lower-layer overhead per packet</strong>,
+completely independent of the application data inside.</p>
+<h3 id="total-overhead-analysis-for-a-10-byte-payload">Total Overhead
+Analysis for a 10-Byte Payload</h3>
+<p>Consider storing a 10-byte key and a 10-byte value:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Layer</th>
+<th style="text-align: left;">Component</th>
+<th style="text-align: left;">Approximate Size</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>L2–L4</strong></td>
+<td style="text-align: left;">Ethernet + IPv4 + TCP Headers</td>
+<td style="text-align: left;">~54–66 bytes</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>L7 (Memcached)</strong></td>
+<td style="text-align: left;">Binary Header + Extras + Key</td>
+<td style="text-align: left;">~42 bytes (32-byte header/extras + 10-byte
+key)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Payload</strong></td>
+<td style="text-align: left;">Value Data</td>
+<td style="text-align: left;"><strong>10 bytes</strong></td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Total Wire Size</strong></td>
+<td style="text-align: left;">Single Write Request</td>
+<td style="text-align: left;"><strong>~106–118 bytes</strong></td>
+</tr>
+</tbody>
+</table>
+<p>In this scenario, actual business data constitutes less than 10% of
+the transmitted bytes. When taking into account TCP acknowledgments
+(ACKs) and Memcached response packets, the cumulative wire traffic can
+exceed 200 bytes for a single 10-byte write.</p>
+<h3 id="latency-and-kernel-overhead">Latency and Kernel Overhead</h3>
+<p>Protocol overhead is not merely a bandwidth issue; it directly
+impacts compute resources:</p>
+<ul>
+<li><strong>System Call Overhead:</strong> Issuing isolated socket
+writes per small item causes excessive context switching between user
+space and kernel space.</li>
+<li><strong>TCP Interaction Issues:</strong> When multiple individual
+writes are sent, the interaction between Nagle’s algorithm
+(<code>TCP_NODELAY</code>) and TCP Delayed Acknowledgments can introduce
+artificial latencies of up to 40ms per write if not properly
+configured.</li>
+<li><strong>Interrupt Processing:</strong> Generating hundreds of
+thousands of individual packets per second stresses CPU cores with
+interrupt handling and softirqs.</li>
+</ul>
+<h3 id="optimization-strategies">Optimization Strategies</h3>
+<p>To mitigate network protocol overhead for small writes, several
+engineering practices can be applied:</p>
+<ul>
+<li><strong>Pipelining and Batching:</strong> Instead of issuing
+separate writes, send multiple write commands over a single TCP
+connection within a single buffer. This amortizes the L2–L4
+(TCP/IP/Ethernet) headers across dozens or hundreds of key-value
+pairs.</li>
+<li><strong>Use <code>noreply</code> / Quiet Commands:</strong> In the
+text protocol, appending <code>noreply</code> suppresses the server's
+<code>STORED</code> confirmation. In the binary protocol, "quiet"
+opcodes (e.g., <code>SetQ</code>) prevent the server from sending
+response packets for successful operations, cutting return traffic
+entirely.</li>
+<li><strong>Data Packing:</strong> Aggregate related small values into a
+unified data structure (such as a serialized JSON, MessagePack, or
+Protocol Buffer payload) under a single key. This reduces total command
+metadata and lowers the key-to-value ratio.</li>
+<li><strong>Persistent Connections:</strong> Maintain persistent
+connection pools with <code>TCP_NODELAY</code> enabled to eliminate TCP
+three-way handshake overhead and prevent Nagle-related buffering
+delays.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-protocol-overhead-for-small-writes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

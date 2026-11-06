@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Threading Model for Concurrent Requests - memcached</title>
+    <meta name="description" content="Memcached achieves high-throughput concurrency by employing a multi-threaded, event-driven architecture powered by libevent. Rather than isolating threads strictly into separate &quot;reader&quot; and &quot;writer&quot; pools, Memcached deploys a master thread dedicated to l">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-threading-model-for-concurrent-requests">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Threading Model for Concurrent Requests - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-threading-model-for-concurrent-requests" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached achieves high-throughput concurrency by employing a multi-threaded, event-driven architecture powered by libevent. Rather than isolating threads strictly into separate &quot;reader&quot; and &quot;writer&quot; pools, Memcached deploys a master thread dedicated to l" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-threading-model-for-concurrent-requests">Memcached
+Threading Model for Concurrent Requests</h1>
+<p>Memcached achieves high-throughput concurrency by employing a
+multi-threaded, event-driven architecture powered by
+<code>libevent</code>. Rather than isolating threads strictly into
+separate "reader" and "writer" pools, Memcached deploys a master thread
+dedicated to listening for new network connections, which it then
+delegates to a fixed pool of general worker threads. Each worker thread
+handles both reading incoming requests and writing back responses for
+its assigned client connections, relying on fine-grained locking and
+non-blocking I/O to access the shared cache without bottlenecking the
+system.</p>
+<h3 id="the-master-dispatcher-thread">The Master Dispatcher Thread</h3>
+<p>When Memcached initializes, it creates a main thread (often referred
+to as the dispatcher thread) and starts a user-configured number of
+worker threads. The primary responsibility of the master thread is to
+bind to the listening network socket and accept incoming client
+connections.</p>
+<p>Upon accepting a new TCP connection, the master thread encapsulates
+the client socket descriptor into a connection object. It then assigns
+this connection to one of the worker threads using a simple round-robin
+algorithm. Communication between the master thread and worker threads
+takes place through a dedicated internal pipe (or eventfd on Linux). The
+master thread writes a notification byte to the pipe of the selected
+worker thread, signaling it to register the new connection into its own
+event loop.</p>
+<h3 id="worker-threads-and-asynchronous-io">Worker Threads and
+Asynchronous I/O</h3>
+<p>Each worker thread runs its own instance of <code>libevent</code> to
+monitor the file descriptors assigned to it. Once a worker thread takes
+ownership of a client connection, it assumes responsibility for the
+entire lifecycle of that connection—including reading commands, parsing
+protocols, and writing back responses.</p>
+<p>Because network operations are non-blocking, a worker thread handles
+reading and writing dynamically:</p>
+<ul>
+<li><strong>Reading Phase:</strong> When a client sends data,
+<code>libevent</code> alerts the assigned worker thread that the socket
+is readable. The thread reads the request bytes into an internal buffer,
+parses the protocol (text or binary), and determines the target command
+(e.g., <code>GET</code>, <code>SET</code>, <code>DELETE</code>).</li>
+<li><strong>Execution Phase:</strong> The worker thread executes the
+command directly against the in-memory hash table and slab
+allocator.</li>
+<li><strong>Writing Phase:</strong> Once the command is processed, the
+worker thread prepares the response into write buffers. If the network
+socket is ready to accept data, the thread immediately transmits the
+response. If the socket buffer is full, the thread registers the socket
+with <code>libevent</code> for write events, suspending further writes
+for that specific client until the socket drains, freeing the thread to
+process events on other connections in the interim.</li>
+</ul>
+<h3 id="concurrency-and-shared-cache-access">Concurrency and Shared
+Cache Access</h3>
+<p>Because multiple worker threads simultaneously execute reads and
+writes against the same global memory space, Memcached relies on
+targeted synchronization primitives to prevent data corruption while
+maximizing throughput:</p>
+<ul>
+<li><strong>Item Locks:</strong> Memcached uses a segmented array of
+locks (hash table bucket locks) rather than a single global lock. When a
+worker thread executes a write operation (such as <code>SET</code> or
+<code>ADD</code>), it only locks the specific hash bucket corresponding
+to that cache key. Other worker threads can simultaneously read or write
+keys that hash to different buckets.</li>
+<li><strong>Cache Evictions and LRU:</strong> Memory allocation via
+slabs and updates to the Least Recently Used (LRU) lists are guarded by
+dedicated slab and LRU locks. Modern versions of Memcached split the LRU
+into segmented sub-queues (HOT, WARM, COLD) and utilize background
+threads for maintenance, reducing the lock contention worker threads
+experience during write-heavy workloads.</li>
+<li><strong>Global Stats:</strong> High-frequency metrics and counters
+are tracked using thread-local storage or atomic operations, preventing
+worker threads from contending for global lock structures during
+standard read/write cycles.</li>
+</ul>
+<p>This model ensures that all available CPU cores are utilized
+efficiently, as worker threads independently multiplex reads,
+executions, and writes across thousands of concurrent client
+connections.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-threading-model-for-concurrent-requests';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

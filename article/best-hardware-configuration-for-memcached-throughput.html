@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Best Hardware Configuration for Memcached Throughput - memcached</title>
+    <meta name="description" content="Achieving the highest throughput in enterprise Memcached deployments requires eliminating hardware-level bottlenecks across networking, memory architecture, and processor topology. Because Memcached is an in-memory, highly concurrent key-value store, stan">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/best-hardware-configuration-for-memcached-throughput">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Best Hardware Configuration for Memcached Throughput - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/best-hardware-configuration-for-memcached-throughput" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Achieving the highest throughput in enterprise Memcached deployments requires eliminating hardware-level bottlenecks across networking, memory architecture, and processor topology. Because Memcached is an in-memory, highly concurrent key-value store, stan" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="best-hardware-configuration-for-memcached-throughput">Best
+Hardware Configuration for Memcached Throughput</h1>
+<p>Achieving the highest throughput in enterprise Memcached deployments
+requires eliminating hardware-level bottlenecks across networking,
+memory architecture, and processor topology. Because Memcached is an
+in-memory, highly concurrent key-value store, standard horizontal
+scaling often falls short without deliberate bare-metal hardware
+selection. Maximum performance relies on balancing multi-channel
+high-frequency RAM, modern high-bandwidth network interfaces, and
+low-latency CPU core topologies with dedicated NUMA isolation.</p>
+<h3 id="high-frequency-cpus-and-numa-topologies">High-Frequency CPUs and
+NUMA Topologies</h3>
+<p>Memcached scales linearly across multiple threads up to a threshold,
+after which internal lock contention limits performance gains. Modern
+enterprise processors, such as AMD EPYC (Genoa/Bergamo) or Intel Xeon
+Scalable (Sapphire/Emerald Rapids), provide the optimal balance when
+configured properly:</p>
+<ul>
+<li><strong>Clock Speed over Core Count:</strong> Prioritize CPUs with
+high base and boost frequencies (3.0 GHz or higher) over extreme core
+counts. Memcached performance per thread scales directly with raw clock
+speed and cache access times.</li>
+<li><strong>NUMA Node Isolation:</strong> Non-Uniform Memory Access
+(NUMA) traversals over interconnects like AMD Infinity Fabric or Intel
+UPI introduce significant memory latency. For maximum throughput, choose
+single-socket systems or strictly isolate memory access on dual-socket
+systems by running distinct Memcached processes pinned to specific NUMA
+domains using <code>numactl</code>.</li>
+<li><strong>Thread Tuning:</strong> Avoid running a single Memcached
+instance across more than 8 to 16 threads. For high-core-count servers,
+deploy multiple independent Memcached instances per host, binding each
+instance to a distinct set of physical CPU cores.</li>
+</ul>
+<h3 id="memory-subsystem-configuration">Memory Subsystem
+Configuration</h3>
+<p>Because all operations occur in RAM, memory bandwidth and latency
+dictate overall request serving speeds:</p>
+<ul>
+<li><strong>Full Channel Population:</strong> Modern enterprise
+architectures feature 8-channel or 12-channel memory interfaces. Ensure
+that every memory channel per socket is populated with identical DIMMs.
+Running in a suboptimal channel configuration directly reduces memory
+bandwidth.</li>
+<li><strong>High-Frequency, Low-Latency DDR5:</strong> Deploy DDR5-4800
+or DDR5-5600 Registered ECC memory. The increased bandwidth of DDR5
+significantly reduces wait states during high-concurrency read and write
+spikes.</li>
+<li><strong>Transparent Huge Pages (THP) Deactivation:</strong> While
+not purely a hardware specification, memory controllers must be paired
+with an OS configuration that disables Transparent Huge Pages. Memcached
+allocates memory in discrete slabs; THP introduces fragmentation,
+latency spikes, and page allocation stalls.</li>
+</ul>
+<h3 id="high-bandwidth-multi-queue-networking">High-Bandwidth,
+Multi-Queue Networking</h3>
+<p>At high operations per second (OPS), the network subsystem is the
+most common hardware bottleneck. Standard 10GbE interfaces will saturate
+on packet rates long before modern CPUs reach full utilization:</p>
+<ul>
+<li><strong>25GbE to 100GbE PCIe Gen 4/Gen 5 NICs:</strong> Deploy
+enterprise-grade network interfaces (such as NVIDIA Mellanox ConnectX-6
+or ConnectX-7). These adapters sustain the packet-per-second (PPS) rates
+required to handle millions of queries per second.</li>
+<li><strong>Receive Side Scaling (RSS) and Multi-Queue Support:</strong>
+Ensure the network card supports hardware RSS with enough receive and
+transmit queues to allocate dedicated queues to each Memcached worker
+thread. Pin these network interrupts to the same CPU cores handling the
+corresponding worker threads to keep network processing within the local
+L3 cache.</li>
+<li><strong>Kernel Bypass and eBPF/XDP:</strong> For extreme throughput
+environments exceeding several million operations per second per node,
+consider running setups capable of utilizing DPDK (Data Plane
+Development Kit) or AF_XDP to bypass standard kernel network stack
+overhead.</li>
+</ul>
+<h3 id="storage-and-pcie-bus-considerations">Storage and PCIe Bus
+Considerations</h3>
+<p>While Memcached does not write active data to persistent storage, the
+system bus architecture impacts performance:</p>
+<ul>
+<li><strong>Dedicated PCIe Lanes:</strong> Ensure that network interface
+cards are installed in PCIe slots directly attached to the primary CPU
+socket, avoiding multiplexers or secondary PCIe switches that introduce
+latency.</li>
+<li><strong>High-Endurance NVMe for Operating System and
+Logging:</strong> Use enterprise NVMe storage strictly for system
+overhead, operating system logs, and metric collection to prevent I/O
+blocking from background operating system tasks affecting
+memory-resident processes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/best-hardware-configuration-for-memcached-throughput';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

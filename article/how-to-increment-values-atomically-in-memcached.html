@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Increment Values Atomically in Memcached - memcached</title>
+    <meta name="description" content="This article explains how to atomically increment an integer value in Memcached to handle real-time counters safely without race conditions. You will learn the exact command used for atomic increments, its syntax and parameters, expected server responses,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-increment-values-atomically-in-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Increment Values Atomically in Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-increment-values-atomically-in-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how to atomically increment an integer value in Memcached to handle real-time counters safely without race conditions. You will learn the exact command used for atomic increments, its syntax and parameters, expected server responses," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-increment-values-atomically-in-memcached">How to
+Increment Values Atomically in Memcached</h1>
+<p>This article explains how to atomically increment an integer value in
+Memcached to handle real-time counters safely without race conditions.
+You will learn the exact command used for atomic increments, its syntax
+and parameters, expected server responses, and critical behavioral
+constraints required to execute the operation successfully.</p>
+<h2 id="the-atomic-increment-command-incr">The Atomic Increment Command:
+<code>incr</code></h2>
+<p>In Memcached, the command used to increment an integer value
+atomically is <code>incr</code>.</p>
+<p>Atomicity guarantees that even if multiple clients attempt to modify
+the same counter simultaneously, each operation is processed
+sequentially without conflicting or overwriting concurrent updates. This
+eliminates the need for external locking mechanisms when tracking
+metrics such as page views, rate limits, or inventory counts.</p>
+<h3 id="syntax">Syntax</h3>
+<p>The protocol syntax for the <code>incr</code> command is:</p>
+<pre class="text"><code>incr &lt;key&gt; &lt;value&gt; [noreply]\r\n</code></pre>
+<ul>
+<li><strong><code>&lt;key&gt;</code></strong>: The identifier of the
+item you want to increment.</li>
+<li><strong><code>&lt;value&gt;</code></strong>: The amount by which to
+increment the key's current value. This must be an unsigned 64-bit
+integer.</li>
+<li><strong><code>[noreply]</code></strong>: An optional parameter
+instructing the server not to send a response, reducing network
+round-trip overhead for high-throughput write operations.</li>
+</ul>
+<h3 id="expected-responses">Expected Responses</h3>
+<p>When the <code>noreply</code> flag is not specified, Memcached
+returns one of the following responses:</p>
+<ul>
+<li><strong><code>&lt;new_value&gt;\r\n</code></strong>: Indicates
+success. The server returns the updated numeric value of the key.</li>
+<li><strong><code>NOT_FOUND\r\n</code></strong>: Returned if the target
+key does not exist. Memcached will not automatically create a missing
+key when calling <code>incr</code>.</li>
+<li><strong><code>CLIENT_ERROR cannot increment or decrement non-numeric value\r\n</code></strong>:
+Returned if the stored data is not an ASCII representation of an
+integer.</li>
+</ul>
+<h3 id="key-requirements-and-constraints">Key Requirements and
+Constraints</h3>
+<ol type="1">
+<li><strong>Pre-existing Key</strong>: Because <code>incr</code> does
+not initialize keys, the key must first be initialized using a storage
+command such as <code>set</code> or <code>add</code>.</li>
+<li><strong>Data Format</strong>: The value must be stored as a string
+representation of a decimal integer (e.g., <code>"10"</code>).
+Binary-serialized integers or non-numeric strings will result in a
+client error.</li>
+<li><strong>Integer Bounds and Overflow</strong>: Memcached counters are
+unsigned 64-bit integers ranging from <code>0</code> to
+<code>18,446,744,073,709,551,615</code>. If an increment causes the
+value to exceed this upper limit, the counter wraps around to
+<code>0</code>.</li>
+<li><strong>No Negative Values</strong>: The <code>incr</code> command
+cannot accept negative values. To decrease a counter atomically, use the
+corresponding <code>decr</code> command.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-increment-values-atomically-in-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

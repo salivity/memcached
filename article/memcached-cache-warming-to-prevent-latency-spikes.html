@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Cache Warming to Prevent Latency Spikes - memcached</title>
+    <meta name="description" content="When a Memcached node restarts, its in-memory storage is completely wiped, leaving behind a cold cache. If live user traffic is immediately routed to this empty instance, the application can suffer from cache stampedes—simultaneous database queries that t">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-cache-warming-to-prevent-latency-spikes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Cache Warming to Prevent Latency Spikes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-cache-warming-to-prevent-latency-spikes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When a Memcached node restarts, its in-memory storage is completely wiped, leaving behind a cold cache. If live user traffic is immediately routed to this empty instance, the application can suffer from cache stampedes—simultaneous database queries that t" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-cache-warming-to-prevent-latency-spikes">Memcached
+Cache Warming to Prevent Latency Spikes</h1>
+<p>When a Memcached node restarts, its in-memory storage is completely
+wiped, leaving behind a cold cache. If live user traffic is immediately
+routed to this empty instance, the application can suffer from cache
+stampedes—simultaneous database queries that trigger severe latency
+spikes and potential system outages. To mitigate this risk, developers
+implement cache warming strategies that proactively populate critical
+data before or immediately after traffic shifts. This article covers the
+primary patterns engineering teams use to execute cache warming
+effectively, including scripted pre-population, proxy-based traffic
+mirroring, rolling deploys with connection pooling, and CDC-driven data
+streaming.</p>
+<h3 id="1-script-driven-pre-population">1. Script-Driven
+Pre-Population</h3>
+<p>The most direct approach involves running dedicated warming scripts
+before routing application traffic to the restarted Memcached
+instance.</p>
+<ul>
+<li><strong>Top-N Key Identification:</strong> Teams identify
+high-frequency keys by analyzing query logs, APM metrics, or read-heavy
+application paths (such as site navigation, user session templates, or
+top-selling product catalogs).</li>
+<li><strong>Batch Ingestion:</strong> An initialization worker or
+deployment script queries the primary database or read replicas, formats
+the records into key-value pairs, and writes them directly into
+Memcached using multi-set operations (<code>set_multi</code>) to
+minimize network overhead.</li>
+<li><strong>Health Check Integration:</strong> In orchestrated
+environments like Kubernetes, this warming process runs inside an init
+container or during a startup probe. The proxy or load balancer will not
+mark the Memcached pod as <code>Ready</code> until the pre-population
+script completes successfully.</li>
+</ul>
+<h3 id="2-traffic-duplication-with-proxies">2. Traffic Duplication with
+Proxies</h3>
+<p>Instead of manually predicting which keys to populate, teams
+frequently use intelligent proxy layers such as Mcrouter, Twemproxy, or
+Envoy to mirror production traffic.</p>
+<ul>
+<li><strong>Dual-Routing Configuration:</strong> When replacing or
+restarting a node, developers spin up the new Memcached instance in
+parallel with the active one. The proxy is configured to route read
+queries to the active cluster while duplicating all write/update
+commands to both the old and new instances.</li>
+<li><strong>Shadow Read Warming:</strong> Proxies can also be configured
+to forward read misses on the cold instance silently to the database or
+fallback node in the background, populating the new instance without
+penalizing user-facing response times.</li>
+<li><strong>Cutover:</strong> Once the new node reaches an acceptable
+hit-rate threshold or time-to-live (TTL) consistency window, traffic is
+routed fully to the new instance, and the old node is
+decommissioned.</li>
+</ul>
+<h3 id="3-change-data-capture-cdc-and-event-driven-ingestion">3. Change
+Data Capture (CDC) and Event-Driven Ingestion</h3>
+<p>For large-scale architectures, event streams decouple cache hydration
+from application web requests entirely.</p>
+<ul>
+<li><strong>Message Bus Streaming:</strong> When a database state
+changes, transactional outbox patterns or CDC tools (such as Debezium)
+publish events to an Apache Kafka or RabbitMQ topic.</li>
+<li><strong>Continuous Ingestion Consumers:</strong> Dedicated consumer
+services subscribe to these topics and continuously format and write
+active records into Memcached.</li>
+<li><strong>Cold-Start Hydration:</strong> Following a restart,
+consumers can temporarily reset their stream offsets backwards to replay
+recent mutations, populating the cache with the freshest and most
+frequently updated application states.</li>
+</ul>
+<h3 id="4-memory-state-dumps-and-reloads">4. Memory State Dumps and
+Reloads</h3>
+<p>For planned maintenance where Memcached must be restarted (e.g., OS
+patching or instance resizing), developers extract existing keys before
+shutdown.</p>
+<ul>
+<li><strong>Slab Dumping:</strong> Using tools like
+<code>memcached-tool</code> or the Memcached protocol's
+<code>lru_crawler metadump</code> command, automated teardown scripts
+dump existing keys and expiration timestamps to local persistent storage
+or a high-throughput network drive.</li>
+<li><strong>Rapid Restoration:</strong> A launch hook parses the
+exported dump and issues bulk set commands immediately after the daemon
+boots. This method avoids querying the persistent datastore altogether,
+preserving database capacity.</li>
+</ul>
+<h3 id="5-application-level-concurrency-guards">5. Application-Level
+Concurrency Guards</h3>
+<p>While cache warming significantly reduces cold misses, developers
+pair pre-warming strategies with in-app concurrency guards to handle any
+remaining missing keys.</p>
+<ul>
+<li><strong>Mutex / Probabilistic Locking:</strong> When a cache miss
+occurs, the application attempts to acquire a short-lived local or
+distributed lock for that specific key. Only the worker that secures the
+lock queries the database and updates Memcached; all other concurrent
+requests wait or temporarily serve stale data.</li>
+<li><strong>Probabilistic Early Expiration (XFetch):</strong>
+Applications calculate a dynamic threshold based on read volume and
+compute cost. As a key nears its TTL, the application asynchronously
+regenerates the cached value in the background before the key officially
+expires, eliminating sudden cold drops.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-cache-warming-to-prevent-latency-spikes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

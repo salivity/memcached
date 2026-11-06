@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Memory Locking via mlockall - memcached</title>
+    <meta name="description" content="This article explores how Memcached implements the mlockall system call to preserve ultra-low latency by preventing its allocated memory from being swapped to disk. By locking its virtual address space into physical RAM, Memcached avoids the severe perfor">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-memory-locking-via-mlockall">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Memory Locking via mlockall - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-memory-locking-via-mlockall" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how Memcached implements the mlockall system call to preserve ultra-low latency by preventing its allocated memory from being swapped to disk. By locking its virtual address space into physical RAM, Memcached avoids the severe perfor" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-memory-locking-via-mlockall">Memcached Memory Locking
+via mlockall</h1>
+<p>This article explores how Memcached implements the
+<code>mlockall</code> system call to preserve ultra-low latency by
+preventing its allocated memory from being swapped to disk. By locking
+its virtual address space into physical RAM, Memcached avoids the severe
+performance penalties associated with operating system paging. Below is
+an examination of why paging degrades in-memory cache performance, how
+Memcached executes memory locking, the necessary system configurations
+required, and the operational trade-offs involved.</p>
+<h3 id="the-problem-with-paging-in-memcached">The Problem with Paging in
+Memcached</h3>
+<p>Memcached is designed for high-throughput, low-latency key-value
+storage. Its primary performance guarantee relies on serving requests
+directly from physical RAM, typically yielding sub-millisecond response
+times.</p>
+<p>When a host system experiences memory pressure, the operating system
+kernel's virtual memory manager attempts to free physical memory by
+moving inactive pages to swap space on disk. If pages belonging to the
+Memcached process are swapped out, any subsequent read or write to those
+memory addresses triggers a page fault. Resolving this fault requires
+fetching data from disk storage (even fast NVMe drives), introducing
+latencies that can be hundreds to thousands of times slower than direct
+RAM access. This introduces unpredictable latency spikes and can cascade
+into application-level timeouts.</p>
+<h3 id="how-memcached-uses-mlockall">How Memcached Uses
+<code>mlockall</code></h3>
+<p>To eliminate swapping risks entirely, Memcached includes an option to
+lock its entire address space into physical memory using the POSIX
+<code>mlockall</code> system call.</p>
+<p>Administrators enable this feature at startup by passing the
+<code>-k</code> (or <code>--lock-memory</code>) flag to the
+<code>memcached</code> daemon. When this flag is set, Memcached
+calls:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>mlockall<span class="op">(</span>MCL_CURRENT <span class="op">|</span> MCL_FUTURE<span class="op">);</span></span></code></pre></div>
+<p>The parameters utilized instruct the operating system kernel how to
+handle the process memory:</p>
+<ul>
+<li><strong><code>MCL_CURRENT</code></strong>: Directs the kernel to
+immediately lock all pages currently mapped into the process's virtual
+address space, ensuring that existing allocations are in RAM and cannot
+be paged out.</li>
+<li><strong><code>MCL_FUTURE</code></strong>: Directs the kernel to
+automatically lock any pages that are mapped into the process’s address
+space in the future. This is critical for Memcached because it
+dynamically allocates memory for its slab allocator and item storage as
+connections are made and data is stored.</li>
+</ul>
+<p>Once <code>mlockall</code> is successfully executed, the kernel marks
+these memory pages as unevictable. The kernel will never select them as
+targets for swapping, guaranteeing that all cache operations remain in
+physical RAM.</p>
+<h3 id="prerequisites-and-system-configuration">Prerequisites and System
+Configuration</h3>
+<p>Because locking memory limits the kernel's flexibility in managing
+system resources, unprivileged users are restricted from calling
+<code>mlockall</code>. Running Memcached with <code>-k</code> requires
+proper permission and resource limit configurations:</p>
+<ol type="1">
+<li><strong>Process Capabilities</strong>: The process must possess the
+<code>CAP_IPC_LOCK</code> capability, or it must be initially started as
+<code>root</code> (which can subsequently drop privileges using the
+<code>-u</code> flag after locking memory).</li>
+<li><strong>Resource Limits (<code>ulimit</code>)</strong>: The system
+enforces a maximum locked-memory limit per process
+(<code>RLIMIT_MEMLOCK</code>). If this limit is lower than the amount of
+memory Memcached attempts to lock, the daemon will fail to start or
+abort during allocations. Administrators must configure
+<code>ulimit -l unlimited</code> or set a high value in
+<code>/etc/security/limits.conf</code> or the corresponding systemd
+service unit:</li>
+</ol>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[Service]</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">LimitMEMLOCK</span><span class="ot">=</span><span class="st">infinity</span></span></code></pre></div>
+<h3 id="operational-considerations-and-risks">Operational Considerations
+and Risks</h3>
+<p>While <code>mlockall</code> eliminates swap-induced latency, it
+shifts risk to system stability. When memory is locked:</p>
+<ul>
+<li><strong>No Fallback on Exhaustion</strong>: If the system runs
+entirely out of free physical RAM, the kernel cannot page out Memcached
+to protect other processes.</li>
+<li><strong>OOM Killer Invocation</strong>: System memory exhaustion in
+a locked-memory environment typically results in the kernel's
+Out-Of-Memory (OOM) killer terminating processes to recover pages, which
+often targets Memcached itself if it occupies the largest memory
+footprint.</li>
+<li><strong>Capacity Planning</strong>: Memcached memory limits (set via
+<code>-m</code>) must be planned conservatively. Administrators must
+ensure sufficient overhead exists for OS kernel buffers, network socket
+buffers, and other essential system processes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-memory-locking-via-mlockall';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

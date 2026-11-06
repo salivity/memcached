@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Understanding Memcached stats sizes Command - memcached</title>
+    <meta name="description" content="The stats sizes command in Memcached is a diagnostic tool used to map the exact distribution of item sizes currently stored in memory. By categorizing cached items into 32-byte increments, this command allows administrators to visualize data footprints, i">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/understanding-memcached-stats-sizes-command">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Understanding Memcached stats sizes Command - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/understanding-memcached-stats-sizes-command" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The stats sizes command in Memcached is a diagnostic tool used to map the exact distribution of item sizes currently stored in memory. By categorizing cached items into 32-byte increments, this command allows administrators to visualize data footprints, i" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="understanding-memcached-stats-sizes-command">Understanding
+Memcached stats sizes Command</h1>
+<p>The <code>stats sizes</code> command in Memcached is a diagnostic
+tool used to map the exact distribution of item sizes currently stored
+in memory. By categorizing cached items into 32-byte increments, this
+command allows administrators to visualize data footprints, identify
+memory fragmentation, and calibrate slab allocation settings. While it
+provides indispensable insights into how application data utilizes
+allocated memory, its execution requires caution due to its impact on
+active production environments.</p>
+<h2 id="how-the-stats-sizes-command-works">How the stats sizes Command
+Works</h2>
+<p>Memcached allocates memory using a slab allocator system, grouping
+memory into pages cut into chunks of specific sizes (slab classes). The
+<code>stats sizes</code> command bypasses these predefined slab
+boundaries to examine the actual raw size of every key-value pair,
+metadata included, across the entire cache.</p>
+<p>When invoked, the command groups the raw item sizes into 32-byte
+buckets. Each bucket counts how many stored items fall within that
+specific size boundary, rounded up to the nearest multiple of 32
+bytes.</p>
+<p>The command produces output in a two-column format:</p>
+<pre class="text"><code>STAT &lt;size_bucket&gt; &lt;item_count&gt;</code></pre>
+<ul>
+<li><strong>Size Bucket:</strong> The upper limit of the 32-byte range
+(e.g., 64, 96, 128, 160 bytes).</li>
+<li><strong>Item Count:</strong> The number of items in the cache whose
+combined key, value, and overhead size fits into that specific
+range.</li>
+</ul>
+<h2 id="primary-functions-and-use-cases">Primary Functions and Use
+Cases</h2>
+<h3 id="1-fine-tuning-the-slab-growth-factor">1. Fine-Tuning the Slab
+Growth Factor</h3>
+<p>Memcached uses a growth factor (configured via the <code>-f</code>
+flag) to determine the size multiplier between successive slab classes.
+If the growth factor does not match the actual distribution of your
+data, you risk significant internal fragmentation—space wasted when
+small items occupy overly large chunks. The distribution mapped by
+<code>stats sizes</code> reveals the real-world clustering of your data,
+enabling you to set a growth factor that closely matches your payload
+profiles.</p>
+<h3 id="2-identifying-internal-memory-fragmentation">2. Identifying
+Internal Memory Fragmentation</h3>
+<p>By comparing the distribution returned by <code>stats sizes</code>
+with the output of <code>stats slabs</code> (which shows the slab class
+boundaries), you can see how much space is left unused within each
+chunk. If the bulk of your objects measure 260 bytes, but your slab
+classes jump from 256 bytes to 384 bytes, those items will occupy the
+384-byte chunks, wasting roughly 120 bytes per item.</p>
+<h3 id="3-detecting-data-drift-and-application-anomalies">3. Detecting
+Data Drift and Application Anomalies</h3>
+<p>Over time, changes to an application's codebase or payload structures
+can shift the average size of cached objects. Running
+<code>stats sizes</code> periodically helps detect unexpected increases
+in key or value sizes, unintentional payload bloat, or sudden influxes
+of unusually large items that push older data out via the Least Recently
+Used (LRU) eviction mechanism.</p>
+<h2 id="critical-production-considerations">Critical Production
+Considerations</h2>
+<p>While <code>stats sizes</code> provides a complete view of item
+distribution, it is computationally expensive.</p>
+<p>Unlike the standard <code>stats</code> or <code>stats slabs</code>
+commands—which read pre-calculated metrics—<code>stats sizes</code>
+traverses every item in the cache. To accomplish this safely, the
+command acquires the global cache lock, blocking all incoming read and
+write requests for the duration of the scan. In large caches holding
+millions of items, running <code>stats sizes</code> can freeze the
+Memcached instance for seconds, leading to connection timeouts and
+cascading latency spikes in connected applications.</p>
+<p>Because of this behavior, it is best practice to run
+<code>stats sizes</code> only during maintenance windows, on read
+replicas, or within isolated staging environments that mirror production
+data.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/understanding-memcached-stats-sizes-command';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

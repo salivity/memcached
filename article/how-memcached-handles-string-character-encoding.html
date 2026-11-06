@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles String Character Encoding - memcached</title>
+    <meta name="description" content="Memcached treats all stored values as opaque byte arrays, meaning the server itself is entirely agnostic to character encoding. When client libraries from languages such as Python, Java, Go, or PHP send string values, Memcached stores the payload as raw b">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-string-character-encoding">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles String Character Encoding - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-string-character-encoding" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached treats all stored values as opaque byte arrays, meaning the server itself is entirely agnostic to character encoding. When client libraries from languages such as Python, Java, Go, or PHP send string values, Memcached stores the payload as raw b" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-string-character-encoding">How Memcached
+Handles String Character Encoding</h1>
+<p>Memcached treats all stored values as opaque byte arrays, meaning the
+server itself is entirely agnostic to character encoding. When client
+libraries from languages such as Python, Java, Go, or PHP send string
+values, Memcached stores the payload as raw bytes without parsing,
+converting, or validating the text. Consequently, character encoding and
+decoding responsibilities fall completely on the client-side drivers,
+which use protocol-level metadata flags to track and coordinate data
+formats across systems.</p>
+<h3 id="the-byte-array-storage-model">The Byte-Array Storage Model</h3>
+<p>Memcached’s internal storage engine operates on a simple key-value
+model where the value is treated as an arbitrary stream of bytes.
+Whether a value is an ASCII string, a UTF-8 encoded sequence, a
+compressed payload, or a binary-serialized object, the server stores the
+byte length and the raw bytes in memory.</p>
+<p>Because Memcached does not inspect strings for character boundaries
+or multi-byte sequences, it never performs character set conversions
+(such as UTF-8 to UTF-16). If invalid byte sequences are sent, Memcached
+stores them without raising errors, relying on the application layer to
+manage data integrity.</p>
+<h3 id="the-role-of-language-clients">The Role of Language Clients</h3>
+<p>The client library in any programming language is responsible for
+translating native string types into the byte streams that travel over
+the TCP connection.</p>
+<ul>
+<li><strong>Serialization and Encoding:</strong> Modern clients
+typically default to UTF-8 encoding. For example, a Python client will
+take a native <code>str</code> object, encode it into bytes using UTF-8,
+and write those bytes to the socket. A Go or Node.js client will
+similarly emit the UTF-8 byte buffers underlying their native string
+implementations.</li>
+<li><strong>Deserialization:</strong> When fetching data
+(<code>GET</code>), the client reads the stored byte sequence and
+decodes it back into the language’s native string representation. If the
+receiving client uses an encoding different from the sending client,
+decoding errors or mojibake (garbled text) will occur.</li>
+</ul>
+<h3 id="the-protocol-flag-field">The Protocol Flag Field</h3>
+<p>To help clients determine how to interpret stored bytes, the
+Memcached protocol (both ASCII and binary) provides a 16-bit (or 32-bit
+in the binary protocol) integer known as the <code>flags</code>
+field.</p>
+<p>When a client executes a <code>SET</code> command, it passes a
+<code>flags</code> value along with the key and value:</p>
+<ol type="1">
+<li><strong>Storage:</strong> Memcached stores the <code>flags</code>
+integer alongside the byte chunk in memory. The server does not
+interpret the bits in this field.</li>
+<li><strong>Retrieval:</strong> Upon a <code>GET</code> command,
+Memcached returns the identical <code>flags</code> integer to the client
+along with the byte stream.</li>
+<li><strong>Client Interpretation:</strong> Client libraries use these
+flags to track metadata, such as whether a value is a plain string, a
+serialized object, a compressed block (via zlib/gzip), or a specific
+primitive type.</li>
+</ol>
+<h3 id="cross-language-considerations">Cross-Language
+Considerations</h3>
+<p>Because there is no universal standard across different language
+drivers for what specific flag values mean, sharing string values across
+heterogeneous environments requires coordination:</p>
+<ul>
+<li><strong>Mismatched Flags:</strong> One language's client might mark
+a plain UTF-8 string with flag <code>0</code>, while another library
+might use flag <code>1</code> for strings and <code>2</code> for JSON.
+If a client receives a flag it does not recognize, it may return raw
+bytes instead of a decoded string or throw an unpickling/deserialization
+exception.</li>
+<li><strong>Standardizing on UTF-8:</strong> Applications sharing data
+across multiple programming languages should explicitly configure
+clients to bypass proprietary serialization, enforce standard UTF-8
+encoding for all string values, and harmonize flag handling or treat the
+output as raw bytes to be decoded manually by the consumer.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-string-character-encoding';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

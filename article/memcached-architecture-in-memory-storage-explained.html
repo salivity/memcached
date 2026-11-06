@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Architecture: In-Memory Storage Explained - memcached</title>
+    <meta name="description" content="Memcached operates entirely without disk persistent storage by using an ephemeral, purely in-memory architecture backed by a specialized slab allocation mechanism and automated cache eviction policies. Designed as a transient caching layer rather than a p">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-architecture-in-memory-storage-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Architecture: In-Memory Storage Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-architecture-in-memory-storage-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached operates entirely without disk persistent storage by using an ephemeral, purely in-memory architecture backed by a specialized slab allocation mechanism and automated cache eviction policies. Designed as a transient caching layer rather than a p" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-architecture-in-memory-storage-explained">Memcached
+Architecture: In-Memory Storage Explained</h1>
+<p>Memcached operates entirely without disk persistent storage by using
+an ephemeral, purely in-memory architecture backed by a specialized slab
+allocation mechanism and automated cache eviction policies. Designed as
+a transient caching layer rather than a primary database, it maintains
+all key-value pairs strictly in volatile system RAM, eliminating disk
+input/output (I/O) bottlenecks to deliver sub-millisecond response
+times.</p>
+<h3 id="pure-ram-residency">Pure RAM Residency</h3>
+<p>The fundamental mechanism enabling Memcached to bypass disk storage
+is its strict in-memory execution model. When an item is stored,
+Memcached writes the data directly into the host system’s random-access
+memory (RAM). Because Memcached is engineered to sit alongside primary
+databases (such as MySQL or PostgreSQL) in a cache-aside pattern, it
+relies on those external databases to handle long-term persistence and
+durability. If Memcached restarts or experiences an outage, the data in
+RAM is discarded, and the application simply repopulates the cache from
+the persistent database on demand.</p>
+<h3 id="slab-allocation-engine">Slab Allocation Engine</h3>
+<p>To manage high volumes of dynamic data in RAM without causing
+operating system memory fragmentation, Memcached uses a custom slab
+allocator. Instead of repeatedly allocating and freeing memory using
+standard system calls, Memcached pre-allocates memory in 1 MB pages.
+These pages are partitioned into smaller, fixed-size chunks grouped into
+"slab classes." When a new key-value pair arrives, Memcached places it
+into the slab class that best matches its byte size. This deterministic
+memory model prevents fragmentation, avoids unpredictable garbage
+collection, and ensures the application never needs to swap memory
+chunks to a disk paging file.</p>
+<h3 id="internal-hash-table-and-o1-lookups">Internal Hash Table and O(1)
+Lookups</h3>
+<p>Memcached tracks all in-memory chunks using a globally managed hash
+table. When a client performs a read or write operation, Memcached
+computes a hash of the key to immediately locate the corresponding
+memory address in constant time—O(1) complexity. This process completely
+bypasses the operating system's filesystem, file descriptors, and
+disk-based B-tree indexes, processing transactions entirely through
+memory pointers.</p>
+<h3 id="least-recently-used-lru-eviction">Least Recently Used (LRU)
+Eviction</h3>
+<p>Because RAM is finite, Memcached relies on an automated Least
+Recently Used (LRU) algorithm instead of expanding data storage onto
+local disks. When a particular slab class runs out of available memory
+chunks, Memcached identifies and removes the oldest, least active keys
+within that slab to accommodate new entries. Additionally, items can be
+configured with explicit expiration times (Time-To-Live, or TTL). Once
+an item expires, its assigned memory chunk is immediately returned to
+the allocation pool for reuse, allowing the service to run indefinitely
+within a fixed RAM footprint without ever touching persistent physical
+storage.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-architecture-in-memory-storage-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

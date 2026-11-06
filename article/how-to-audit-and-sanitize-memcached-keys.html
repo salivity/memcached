@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Audit and Sanitize Memcached Keys - memcached</title>
+    <meta name="description" content="Auditing and sanitizing key formats in a Memcached instance is essential for preventing silent key truncation, cache poisoning, performance degradation, and unexpected application errors. This article outlines practical methods to discover non-compliant o">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-audit-and-sanitize-memcached-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Audit and Sanitize Memcached Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-audit-and-sanitize-memcached-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Auditing and sanitizing key formats in a Memcached instance is essential for preventing silent key truncation, cache poisoning, performance degradation, and unexpected application errors. This article outlines practical methods to discover non-compliant o" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-audit-and-sanitize-memcached-keys">How to Audit and
+Sanitize Memcached Keys</h1>
+<p>Auditing and sanitizing key formats in a Memcached instance is
+essential for preventing silent key truncation, cache poisoning,
+performance degradation, and unexpected application errors. This article
+outlines practical methods to discover non-compliant or inefficient keys
+currently residing in Memcached, followed by architectural techniques to
+sanitize and standardize key structures across your applications.</p>
+<h2 id="memcached-key-constraints">Memcached Key Constraints</h2>
+<p>Before auditing, establish the baseline technical constraints
+enforced by the Memcached ASCII and binary protocols:</p>
+<ul>
+<li><strong>Length:</strong> Maximum 250 bytes per key.</li>
+<li><strong>Characters:</strong> The ASCII protocol forbids whitespace
+(spaces, tabs, newlines) and control characters. While the binary
+protocol is more permissive, using raw binary or whitespace creates
+interoperability issues across client libraries.</li>
+<li><strong>Namespacing:</strong> Memcached provides a flat key space;
+logical partitioning must be handled through string prefixes.</li>
+</ul>
+<h2 id="techniques-for-auditing-key-formats">Techniques for Auditing Key
+Formats</h2>
+<p>Auditing allows you to identify malformed, overly long, or
+non-standard keys without disrupting active traffic.</p>
+<h3 id="1-using-lru-crawler-metadump">1. Using LRU Crawler Metadump</h3>
+<p>Modern versions of Memcached (1.4.31+) include an asynchronous
+metadata crawler that dumps keys with minimal impact on performance.</p>
+<p>Connect to the instance via <code>telnet</code> or <code>nc</code>
+and issue:</p>
+<pre class="text"><code>lru_crawler metadump all</code></pre>
+<p>This returns URL-encoded keys along with their expiration times and
+size metadata. You can pipe this output into an analysis script to check
+for:</p>
+<ul>
+<li>Keys approaching the 250-byte threshold.</li>
+<li>Invalid characters that were auto-escaped or encoded.</li>
+<li>Inconsistent namespace patterns (e.g., <code>user:123</code> vs
+<code>user_123</code> vs <code>User-123</code>).</li>
+</ul>
+<h3 id="2-traffic-inspection-with-proxies">2. Traffic Inspection with
+Proxies</h3>
+<p>Tools like <code>mcrouter</code> or custom reverse proxies can log or
+sample keys on read/write paths. Setting up temporary request logging on
+<code>set</code> and <code>add</code> operations reveals real-time key
+generation behavior directly from client calls, including the presence
+of unescaped query parameters or raw object IDs.</p>
+<h3 id="3-static-code-analysis-and-linters">3. Static Code Analysis and
+Linters</h3>
+<p>Audit your codebase for direct client calls (e.g.,
+<code>$cache-&gt;set($key, $val)</code>). Look for:</p>
+<ul>
+<li>Dynamic string concatenations without sanitization wrappers.</li>
+<li>Interpolation of user input directly into keys.</li>
+<li>Absence of key length checks.</li>
+</ul>
+<h2 id="techniques-for-sanitizing-key-formats">Techniques for Sanitizing
+Key Formats</h2>
+<p>Sanitization ensures keys adhere to structural, size, and character
+standards before reaching the Memcached daemon.</p>
+<h3 id="1-centralized-key-generation-layer">1. Centralized Key
+Generation Layer</h3>
+<p>Do not allow individual application modules to format cache keys
+directly. Implement a centralized key builder or repository pattern:</p>
+<ul>
+<li><strong>Prefixing/Namespacing:</strong> Prefix every key with the
+service name and entity type (e.g.,
+<code>catalog:product:v1:89421</code>).</li>
+<li><strong>Delimiter Standardization:</strong> Use a single delimiter
+(commonly <code>:</code> or <code>|</code>) and forbid its raw usage in
+dynamic variable values.</li>
+</ul>
+<h3 id="2-character-whitelisting-and-normalization">2. Character
+Whitelisting and Normalization</h3>
+<p>Strip or encode illegal characters at the client layer:</p>
+<ul>
+<li>Enforce an alphanumeric regex whitelist (e.g.,
+<code>^[a-zA-Z0-9_\-:]+$</code>).</li>
+<li>Replace spaces and control characters with safe substitutes, such as
+underscores (<code>_</code>).</li>
+<li>Apply consistent casing (e.g., standardizing all keys to lowercase)
+to avoid duplicate cache entries.</li>
+</ul>
+<h3 id="3-length-management-and-hashing-fallbacks">3. Length Management
+and Hashing Fallbacks</h3>
+<p>To safely handle keys that might exceed the 250-byte limit (such as
+complex search queries, URLs, or composite IDs):</p>
+<ul>
+<li>Implement a deterministic hashing fallback (e.g., SHA-256 or
+MD5).</li>
+<li>If <code>length(key) &gt; 200</code>, compute the hash of the
+variable part while retaining the human-readable namespace prefix:
+<ul>
+<li>Format: <code>namespace:v1:hash:&lt;sha256_hex&gt;</code> (produces
+a reliable 64-character payload).</li>
+</ul></li>
+</ul>
+<h3 id="4-client-side-validation-middleware">4. Client-Side Validation
+Middleware</h3>
+<p>Add a strict validation layer inside your Memcached client
+configuration. Configure the wrapper to throw runtime exceptions in
+staging or development environments if an invalid key format,
+unsupported character, or over-length string is generated, while logging
+a warning and safely sanitizing it in production environments.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-audit-and-sanitize-memcached-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Worker Thread Assignment in Rapid Bursts - memcached</title>
+    <meta name="description" content="Memcached manages sudden spikes in incoming client traffic through a dedicated single-threaded listener architecture that dispatches connections across an array of worker threads using a non-blocking round-robin model. This article explores how Memcached">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-worker-thread-assignment-in-rapid-bursts">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Worker Thread Assignment in Rapid Bursts - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-worker-thread-assignment-in-rapid-bursts" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached manages sudden spikes in incoming client traffic through a dedicated single-threaded listener architecture that dispatches connections across an array of worker threads using a non-blocking round-robin model. This article explores how Memcached" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-worker-thread-assignment-in-rapid-bursts">Memcached
+Worker Thread Assignment in Rapid Bursts</h1>
+<p>Memcached manages sudden spikes in incoming client traffic through a
+dedicated single-threaded listener architecture that dispatches
+connections across an array of worker threads using a non-blocking
+round-robin model. This article explores how Memcached decouples
+connection acceptance from request processing, utilizes per-thread
+connection queues, and leverages event-driven notifications to absorb
+high-concurrency traffic bursts without degrading cache performance or
+dropping sockets.</p>
+<h3 id="the-main-listener-thread-and-non-blocking-acceptance">The Main
+Listener Thread and Non-Blocking Acceptance</h3>
+<p>At the core of Memcached's network architecture is a strict
+separation between connection acceptance and request execution. When
+Memcached initializes, it designates a single primary thread to run the
+main network event loop via <code>libevent</code>.</p>
+<p>This main thread is the only thread bound to the listening socket.
+When a connection burst hits the server, the kernel buffers incoming TCP
+handshakes in the socket's listen backlog queue (configured via the
+<code>-b</code> command-line argument). The main thread invokes
+non-blocking <code>accept()</code> or <code>accept4()</code> system
+calls in a loop. Because connection acceptance is lightweight and free
+of data-parsing overhead, the main thread can accept thousands of
+incoming TCP sockets per second without stalling.</p>
+<h3 id="round-robin-distribution-to-worker-threads">Round-Robin
+Distribution to Worker Threads</h3>
+<p>Once the main thread accepts a socket, it immediately delegates
+responsibility to a worker thread. Memcached achieves this using a
+strict round-robin scheduling algorithm:</p>
+<ol type="1">
+<li><strong>Target Selection:</strong> The main thread maintains an
+internal pointer representing the last assigned worker. For every
+accepted socket, it increments this pointer to identify the next thread
+in sequence:
+<code>target_thread = (last_thread + 1) % total_threads</code>.</li>
+<li><strong>Item Allocation:</strong> The main thread encapsulates the
+newly accepted socket file descriptor and initial connection state into
+a lightweight <code>CQ_ITEM</code> (connection queue item)
+structure.</li>
+<li><strong>Queue Insertion:</strong> The <code>CQ_ITEM</code> is pushed
+to the tail of the target worker thread's dedicated, mutex-protected
+connection queue.</li>
+</ol>
+<p>By utilizing round-robin dispatching, Memcached guarantees an even
+distribution of incoming connection requests across all configured
+worker threads, preventing individual threads from becoming hotspots
+during a burst.</p>
+<h3 id="inter-thread-notification-via-pipes-and-eventfd">Inter-Thread
+Notification via Pipes and Eventfd</h3>
+<p>Worker threads run their own independent <code>libevent</code> loops
+to manage established connections. However, because a worker thread
+might be idle or waiting on network I/O, the main thread must notify it
+that a new connection is available in its queue.</p>
+<p>To communicate across threads without complex locking:</p>
+<ul>
+<li><strong>Pipes / Eventfd:</strong> Each worker thread possesses a
+dedicated notification channel (a pipe or, on Linux, an
+<code>eventfd</code>). The read end is registered inside the worker's
+<code>libevent</code> instance, while the write end is controlled by the
+main thread.</li>
+<li><strong>Notification Byte:</strong> After pushing the
+<code>CQ_ITEM</code> to the worker's queue, the main thread writes a
+single byte (<code>"c"</code>) to the notification channel.</li>
+<li><strong>Event Loop Wake-Up:</strong> The worker thread’s event loop
+detects the read event, wakes up immediately, and calls the connection
+handler function.</li>
+</ul>
+<h3 id="draining-the-connection-queue">Draining the Connection
+Queue</h3>
+<p>Once woken, the worker thread locks its connection queue, extracts
+all pending <code>CQ_ITEM</code> structures, and unlocks the queue. This
+batching mechanism is critical during high-volume bursts: even if the
+main thread enqueues dozens of connections before the worker finishes
+its current task, the worker retrieves and processes the entire backlog
+in a single operation.</p>
+<p>For each item popped from the queue:</p>
+<ul>
+<li>The worker creates a full Memcached connection object
+(<code>conn</code>).</li>
+<li>The accepted socket file descriptor is registered with the worker’s
+local <code>libevent</code> instance for read/write monitoring.</li>
+<li>The worker enters the connection state machine, ready to parse
+client binary or text protocol commands.</li>
+</ul>
+<h3 id="mitigating-burst-bottlenecks">Mitigating Burst Bottlenecks</h3>
+<p>Under extreme arrival rates, Memcached maintains stability through
+several defensive layers:</p>
+<ul>
+<li><strong>TCP Backlog Tuning:</strong> If incoming connections arrive
+faster than the main thread can call <code>accept()</code>, the
+operating system retains them in the TCP listen backlog. Sizing this
+queue appropriately prevents TCP SYN packets from being rejected during
+instantaneous spikes.</li>
+<li><strong>Minimal Mutex Contention:</strong> Locking is confined
+exclusively to pushing and popping from the connection queues. Worker
+threads do not contend for the listening socket, eliminating the
+"thundering herd" problem common in multi-threaded network servers.</li>
+<li><strong>Worker Isolation:</strong> Once registered to a worker
+thread, a client connection remains tied to that thread for the duration
+of its lifecycle. This thread-affinity prevents cross-thread
+synchronization overhead during subsequent data reads and writes,
+allowing the system to absorb high transaction loads immediately
+following connection bursts.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-worker-thread-assignment-in-rapid-bursts';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

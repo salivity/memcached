@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Append on Non-Existent Keys - memcached</title>
+    <meta name="description" content="This article explains how Memcached handles the append command when the target key is not present in the cache. In short, Memcached will not create a new key-value pair if the key is missing; instead, it rejects the operation and returns a NOTSTORED respo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-append-on-non-existent-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Append on Non-Existent Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-append-on-non-existent-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how Memcached handles the append command when the target key is not present in the cache. In short, Memcached will not create a new key-value pair if the key is missing; instead, it rejects the operation and returns a NOTSTORED respo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-append-on-non-existent-keys">Memcached Append on
+Non-Existent Keys</h1>
+<p>This article explains how Memcached handles the <code>append</code>
+command when the target key is not present in the cache. In short,
+Memcached will not create a new key-value pair if the key is missing;
+instead, it rejects the operation and returns a <code>NOT_STORED</code>
+response code. Understanding this behavior is essential for preventing
+silent cache misses and ensuring proper state management in application
+caching layers.</p>
+<p>In the Memcached protocol, the <code>append</code> command is
+strictly an update mechanism rather than an upsert. Its purpose is to
+attach raw data to the end of an already existing key's value. Because
+the command is designed solely to modify existing records, it requires a
+pre-existing target to execute successfully.</p>
+<p>When a client sends an <code>append</code> request, Memcached checks
+its internal hash table for the specified key. If the lookup determines
+that the key does not exist, or has already expired due to its
+time-to-live (TTL), the server terminates the operation immediately. In
+the ASCII text protocol, the server responds with:</p>
+<pre class="text"><code>NOT_STORED</code></pre>
+<p>In the binary protocol, Memcached returns a status code of
+<code>0x0005</code> (<code>KEY_ENOENT</code>), indicating that the key
+was not found.</p>
+<p>The reason for this behavior lies in how Memcached manages metadata.
+Every stored item requires operational flags and an expiration time. The
+<code>append</code> command syntax does not include parameters to
+specify these metadata fields; instead, it retains the flags and TTL of
+the original item. If Memcached were to create a new key upon an append
+attempt, it would have no valid TTL or flag definitions to assign to the
+new entry.</p>
+<p>To handle cases where a key may not yet exist, applications should
+implement fallback logic. When an <code>append</code> operation returns
+<code>NOT_STORED</code>, the application should catch this response and
+initialize the key using a standard <code>add</code> or <code>set</code>
+command with the appropriate data, flags, and expiration time.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-append-on-non-existent-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

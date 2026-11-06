@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Chunk Size and Memory Fragmentation - memcached</title>
+    <meta name="description" content="Memcached utilizes a slab allocation mechanism to manage memory and prevent operating system-level memory fragmentation. Adjusting the chunk size directly affects internal and slab-level memory fragmentation by altering how closely allocated memory blocks">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-chunk-size-and-memory-fragmentation">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Chunk Size and Memory Fragmentation - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-chunk-size-and-memory-fragmentation" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached utilizes a slab allocation mechanism to manage memory and prevent operating system-level memory fragmentation. Adjusting the chunk size directly affects internal and slab-level memory fragmentation by altering how closely allocated memory blocks" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-chunk-size-and-memory-fragmentation">Memcached Chunk
+Size and Memory Fragmentation</h1>
+<p>Memcached utilizes a slab allocation mechanism to manage memory and
+prevent operating system-level memory fragmentation. Adjusting the chunk
+size directly affects internal and slab-level memory fragmentation by
+altering how closely allocated memory blocks match the actual size of
+cached items. Understanding the relationship between custom chunk sizes,
+the growth factor, and your application's data profile is essential for
+maximizing cache efficiency and preventing premature evictions.</p>
+<h3 id="the-slab-allocation-system">The Slab Allocation System</h3>
+<p>Memcached divides assigned memory into 1 MB pages, which are then
+subdivided into smaller, fixed-size memory slots known as chunks. Slabs
+are organized into slab classes, where each class contains chunks of a
+specific size. When an item is stored, Memcached does not allocate the
+exact byte count required by the data; instead, it places the item into
+the smallest slab class with chunks large enough to accommodate the key,
+data, flags, and internal metadata (typically 48 to 56 bytes).</p>
+<h3 id="impact-on-internal-fragmentation">Impact on Internal
+Fragmentation</h3>
+<p>Internal fragmentation occurs when the allocated chunk size is larger
+than the item being stored. The unused bytes within the chunk cannot be
+allocated to other data, resulting in wasted memory.</p>
+<ul>
+<li><strong>Oversized Chunk Settings:</strong> If the minimum chunk size
+(configured via the <code>-s</code> or <code>--chunk-size</code> flag)
+is set significantly higher than the average size of small keys and
+payloads, every stored item in that class leaves a large portion of its
+chunk empty. For instance, storing a 60-byte payload in a 256-byte chunk
+wastes nearly 75% of that chunk's capacity.</li>
+<li><strong>Granular Chunk Settings:</strong> Decreasing the initial
+chunk size to closely match your smallest typical item reduces this
+wasted space. Smaller chunks allow Memcached to pack more items into
+each 1 MB page, directly decreasing internal fragmentation for smaller
+workloads.</li>
+</ul>
+<h3 id="slab-class-distribution-and-external-imbalance">Slab Class
+Distribution and External Imbalance</h3>
+<p>While fine-tuning the initial chunk size minimizes internal waste, it
+influences how memory spreads across slab classes. Memcached assigns
+pages permanently to slab classes on demand (unless dynamic slab
+rebalancing is active).</p>
+<ul>
+<li><strong>Chunk Size Growth Factor Interaction:</strong> The chunk
+size works in tandem with the growth factor (<code>-f</code>). The
+growth factor determines the exponential multiplier between successive
+slab classes. Setting a small initial chunk size with a steep growth
+factor can create wide gaps between chunk classes, causing items that
+slightly exceed one class to jump to a much larger class, reintroducing
+internal fragmentation.</li>
+<li><strong>Underutilized Pages:</strong> Creating too many distinct
+slab classes through very low initial chunk sizes and small growth
+factors can fragment memory across multiple slab classes. Each class
+claims full 1 MB pages. If an application writes only a few items into
+several intermediate slab classes, those pages remain mostly empty,
+leading to slab-level memory stranding.</li>
+</ul>
+<h3 id="configuring-for-optimal-memory-utilization">Configuring for
+Optimal Memory Utilization</h3>
+<p>To minimize memory fragmentation using custom chunk sizes:</p>
+<ol type="1">
+<li><strong>Profile Item Sizes:</strong> Analyze existing cache
+distributions using commands like <code>stats slabs</code> and
+<code>stats items</code> to determine the median and minimum object
+sizes, accounting for key lengths and metadata overhead.</li>
+<li><strong>Align Minimum Chunk Size:</strong> Set <code>-s</code> close
+to the sum of the smallest item size and metadata overhead, preventing
+small items from consuming oversized default chunks.</li>
+<li><strong>Calibrate the Growth Factor:</strong> Balance the
+<code>-f</code> flag alongside the custom chunk size. A lower factor
+(e.g., 1.1 to 1.25) creates closely spaced chunk sizes that minimize the
+gap between item size and chunk size, reducing internal fragmentation at
+the cost of supporting more slab classes.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-chunk-size-and-memory-fragmentation';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

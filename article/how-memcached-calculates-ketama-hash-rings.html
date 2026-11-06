@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Calculates Ketama Hash Rings - memcached</title>
+    <meta name="description" content="Ketama is a consistent hashing algorithm designed to map cache keys to multiple Memcached servers without invalidating the entire cache when nodes are added or removed. This article explains how client libraries construct the Ketama continuum, distribute">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-calculates-ketama-hash-rings">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Calculates Ketama Hash Rings - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-calculates-ketama-hash-rings" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Ketama is a consistent hashing algorithm designed to map cache keys to multiple Memcached servers without invalidating the entire cache when nodes are added or removed. This article explains how client libraries construct the Ketama continuum, distribute" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-calculates-ketama-hash-rings">How Memcached
+Calculates Ketama Hash Rings</h1>
+<p>Ketama is a consistent hashing algorithm designed to map cache keys
+to multiple Memcached servers without invalidating the entire cache when
+nodes are added or removed. This article explains how client libraries
+construct the Ketama continuum, distribute virtual nodes using MD5
+hashes, and map cache keys to target servers using fast binary
+lookups.</p>
+<h3 id="the-purpose-of-consistent-hashing-in-memcached">The Purpose of
+Consistent Hashing in Memcached</h3>
+<p>In traditional modulo-based hashing
+(<code>hash(key) % server_count</code>), adding or removing a single
+server changes the destination of almost every key, causing a
+catastrophic cache miss storm. Ketama solves this by representing the
+available hash space as a continuous circle (or ring) ranging from
+<code>0</code> to <code>2^32 - 1</code>. Both cache servers and cache
+keys are placed onto this ring based on their hash values.</p>
+<h3 id="step-1-generating-virtual-nodes-points">Step 1: Generating
+Virtual Nodes (Points)</h3>
+<p>Directly hashing physical server identifiers (like IP addresses) onto
+the ring results in an uneven distribution of data, causing "hot spots."
+Ketama resolves this by creating multiple "virtual nodes" for each
+physical server.</p>
+<p>By standard Ketama specification:</p>
+<ol type="1">
+<li>Each physical server is assigned a weight (defaulting to 1). A
+standard weight typically translates to 160 virtual points on the
+ring.</li>
+<li>The client calculates the number of 4-point groups needed (e.g., 40
+groups for 160 points).</li>
+<li>For each group index <span class="math inline">\(i\)</span> from 0
+to 39, the client creates a specific string identifier formatted as:
+<code>"&lt;server_ip&gt;:&lt;port&gt;-&lt;i&gt;"</code> (e.g.,
+<code>10.0.0.1:11211-0</code>, <code>10.0.0.1:11211-1</code>).</li>
+</ol>
+<h3 id="step-2-hashing-servers-onto-the-ring">Step 2: Hashing Servers
+onto the Ring</h3>
+<p>Ketama uses the MD5 cryptographic hash function to compute points.
+Even though MD5 is slow for general hashing, it is only computed once
+during client initialization or topology changes.</p>
+<ol type="1">
+<li><strong>MD5 Computation:</strong> The client runs an MD5 hash over
+the formatted virtual node string. MD5 produces a 16-byte (128-bit)
+digest.</li>
+<li><strong>Splitting into 32-bit Integers:</strong> The 16-byte digest
+is sliced into four distinct 4-byte integers using little-endian byte
+ordering:
+<ul>
+<li>Point 1: Bytes 0 to 3</li>
+<li>Point 2: Bytes 4 to 7</li>
+<li>Point 3: Bytes 8 to 11</li>
+<li>Point 4: Bytes 12 to 15</li>
+</ul></li>
+<li>Each 4-byte slice is converted into an unsigned 32-bit integer
+(<span class="math inline">\(0\)</span> to <span
+class="math inline">\(4,294,967,295\)</span>).</li>
+<li>Because one MD5 computation yields four points, 40 MD5 operations
+produce the standard 160 virtual points per server.</li>
+</ol>
+<h3 id="step-3-sorting-the-hash-ring">Step 3: Sorting the Hash Ring</h3>
+<p>The client stores all generated points in an internal array or
+balanced search tree structure. Each entry contains two elements:</p>
+<ul>
+<li><strong>The 32-bit point value</strong> (the coordinate on the
+ring).</li>
+<li><strong>The server reference</strong> (the actual physical server to
+contact).</li>
+</ul>
+<p>Once all virtual nodes for all configured servers are generated, the
+client sorts the ring in ascending order based on the 32-bit integer
+values. This sorted array constitutes the Ketama continuum.</p>
+<h3 id="step-4-key-mapping-and-lookup">Step 4: Key Mapping and
+Lookup</h3>
+<p>When an application reads or writes a cache key (such as
+<code>user:profile:100</code>):</p>
+<ol type="1">
+<li><strong>Hash the Key:</strong> The client hashes the cache key using
+MD5 (or another fast hash like Murmur3 if the specific implementation
+allows, though standard Ketama mandates MD5). The first 4 bytes of the
+hash digest are decoded into an unsigned 32-bit integer.</li>
+<li><strong>Locate the Node:</strong> The client searches the sorted
+array for the first virtual node whose point value is greater than or
+equal to the key's hash value. Because the array is sorted, this lookup
+runs in <span class="math inline">\(O(\log N)\)</span> time using a
+standard binary search (e.g., <code>bisect</code> or
+<code>std::lower_bound</code>).</li>
+<li><strong>Wrap Around (The Ring Behavior):</strong> If the key's
+32-bit hash value is greater than the highest point on the ring, the
+binary search wraps around to the beginning, selecting the very first
+node in the array (index 0).</li>
+<li><strong>Execute Request:</strong> The client retrieves the physical
+server associated with the matched virtual node and sends the command
+over that connection.</li>
+</ol>
+<h3 id="handling-server-changes">Handling Server Changes</h3>
+<p>When a server fails or a new instance is added, the client
+recalculates the ring. Because the positions of unaffected servers
+remain unchanged on the <span class="math inline">\(2^{32}\)</span>
+spectrum, only keys that fall directly in the sector of the ring
+belonging to the altered node are remapped. All other keys continue
+routing to their existing servers, maintaining high cache hit
+ratios.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-calculates-ketama-hash-rings';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

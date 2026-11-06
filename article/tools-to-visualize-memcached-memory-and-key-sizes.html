@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tools to Visualize Memcached Memory and Key Sizes - memcached</title>
+    <meta name="description" content="Visualizing key size distribution and slab memory allocation in Memcached is critical for optimizing cache hit ratios, tuning slab class configurations, and preventing premature evictions. Because Memcached allocates memory in predetermined slab classes r">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/tools-to-visualize-memcached-memory-and-key-sizes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Tools to Visualize Memcached Memory and Key Sizes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/tools-to-visualize-memcached-memory-and-key-sizes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Visualizing key size distribution and slab memory allocation in Memcached is critical for optimizing cache hit ratios, tuning slab class configurations, and preventing premature evictions. Because Memcached allocates memory in predetermined slab classes r" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="tools-to-visualize-memcached-memory-and-key-sizes">Tools to
+Visualize Memcached Memory and Key Sizes</h1>
+<p>Visualizing key size distribution and slab memory allocation in
+Memcached is critical for optimizing cache hit ratios, tuning slab class
+configurations, and preventing premature evictions. Because Memcached
+allocates memory in predetermined slab classes rather than arbitrary
+byte boundaries, mismatched item sizes can lead to memory fragmentation.
+This guide covers the primary command-line utilities, web dashboards,
+and enterprise observability tools available for monitoring and
+visualizing these metrics.</p>
+<h3 id="1-prometheus-and-grafana-memcached_exporter">1. Prometheus and
+Grafana (memcached_exporter)</h3>
+<p>The combination of the official Prometheus
+<code>memcached_exporter</code> and Grafana is the most flexible, modern
+solution for visualizing Memcached memory internals:</p>
+<ul>
+<li><strong>How it works:</strong> The exporter scrapes the native
+<code>stats slabs</code> and <code>stats items</code> endpoints,
+transforming raw counters into time-series metrics.</li>
+<li><strong>Key Metrics:</strong> Metrics like
+<code>memcached_slab_chunk_size_bytes</code>,
+<code>memcached_slab_current_chunks</code>,
+<code>memcached_slab_used_chunks</code>, and
+<code>memcached_slab_mem_requested_bytes</code> provide granular
+detail.</li>
+<li><strong>Visualization:</strong> In Grafana, you can plot bar charts
+and histograms showing how keys are distributed across slab chunk sizes,
+highlight unused slack space (internal fragmentation) per slab, and
+monitor eviction trends over time.</li>
+</ul>
+<h3 id="2-phpmemcachedadmin">2. phpMemcachedAdmin</h3>
+<p>phpMemcachedAdmin is a lightweight, web-based management and
+monitoring interface designed specifically for Memcached:</p>
+<ul>
+<li><strong>Visualization Features:</strong> It provides graphical
+breakdowns of memory usage per slab class, chunk sizes, and page
+allocations.</li>
+<li><strong>Key Inspection:</strong> The tool includes an integrated
+slab viewer that queries keys within specific slab classes, letting you
+inspect key lengths, value sizes, and expiration times directly.</li>
+<li><strong>Setup:</strong> Runs as a standalone PHP web application
+without requiring heavy database dependencies.</li>
+</ul>
+<h3 id="3-memcached-tool">3. memcached-tool</h3>
+<p>Shipped directly with the Memcached source distribution,
+<code>memcached-tool</code> is an indispensable Perl script for
+terminal-based visualization:</p>
+<ul>
+<li><strong>Usage:</strong> Running
+<code>memcached-tool &lt;host:port&gt; display</code> prints a
+structured ASCII table showing slab ID, chunk size, max item count, used
+items, total memory allocated, and evictions.</li>
+<li><strong>Key Size Insight:</strong> Because each slab corresponds to
+an item size boundary, the table provides an immediate, text-based
+distribution curve of item sizes across your instance.</li>
+</ul>
+<h3 id="4-memkeys-and-mctop">4. memkeys and mctop</h3>
+<p>For real-time inspection of key traffic and payload sizes directly on
+the wire or host:</p>
+<ul>
+<li><strong>memkeys:</strong> A curses-based tool that sniffs Memcached
+network traffic using <code>libpcap</code>. It ranks keys in real time
+similar to the Unix <code>top</code> command, displaying request rates,
+read/write bandwidth, and payload sizes.</li>
+<li><strong>mctop:</strong> A Python-based CLI tool that passively
+sniffs traffic to display real-time operation frequency, key
+distribution, and traffic volume per key pattern.</li>
+</ul>
+<h3 id="5-datadog-and-new-relic-integrations">5. Datadog and New Relic
+Integrations</h3>
+<p>Enterprise monitoring platforms offer out-of-the-box dashboards for
+Memcached memory telemetry:</p>
+<ul>
+<li><strong>Slab Breakdown Dashboards:</strong> These integrations
+automatically parse slab-level stats to display stacked area charts of
+memory consumption (used bytes vs. allocated bytes).</li>
+<li><strong>Alerting on Wastage:</strong> They allow you to set
+thresholds for memory fragmentation—identifying slabs where allocated
+chunks significantly exceed actual requested bytes.</li>
+</ul>
+<h3 id="6-custom-dump-analysis-python--jupyter">6. Custom Dump Analysis
+(Python / Jupyter)</h3>
+<p>For one-off, deep-dive audits of exact key and value
+distributions:</p>
+<ul>
+<li>Using the <code>memcached-tool &lt;host:port&gt; dump</code> command
+or the Memcached text protocol command
+<code>stats cachedump &lt;slab_id&gt; &lt;limit&gt;</code>, you can
+export key names and byte sizes.</li>
+<li>Importing this data into a Python environment (such as Pandas and
+Matplotlib/Seaborn) allows you to plot exact key-length histograms,
+byte-distribution curves, and detect anomalous outlier keys that force
+items into unnecessarily large slab classes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/tools-to-visualize-memcached-memory-and-key-sizes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

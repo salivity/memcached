@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Write-Behind Caching with Memcached and Queues - memcached</title>
+    <meta name="description" content="Write-behind (or write-back) caching optimizes database write performance by updating the in-memory cache immediately and offloading the persistent database updates to an asynchronous background worker. This article explains how to design and implement a">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/write-behind-caching-with-memcached-and-queues">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Write-Behind Caching with Memcached and Queues - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/write-behind-caching-with-memcached-and-queues" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Write-behind (or write-back) caching optimizes database write performance by updating the in-memory cache immediately and offloading the persistent database updates to an asynchronous background worker. This article explains how to design and implement a" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="write-behind-caching-with-memcached-and-queues">Write-Behind
+Caching with Memcached and Queues</h1>
+<p>Write-behind (or write-back) caching optimizes database write
+performance by updating the in-memory cache immediately and offloading
+the persistent database updates to an asynchronous background worker.
+This article explains how to design and implement a write-behind caching
+architecture using Memcached for fast data retrieval and a message queue
+system (such as RabbitMQ, Apache Kafka, or Redis Streams) to guarantee
+reliable, deferred persistence to your primary database.</p>
+<h2 id="architecture-overview">Architecture Overview</h2>
+<p>In a typical write-behind pattern with Memcached:</p>
+<ol type="1">
+<li><strong>Application Write:</strong> The client application receives
+a write request.</li>
+<li><strong>Cache Update:</strong> The application immediately updates
+the record in Memcached.</li>
+<li><strong>Queue Enqueue:</strong> Simultaneously, the application
+pushes an event containing the mutation details to a message queue.</li>
+<li><strong>Immediate Response:</strong> The application returns a
+success response to the client with minimal latency.</li>
+<li><strong>Asynchronous Persistence:</strong> A background consumer
+process pulls messages from the queue, batches or debounces the updates,
+and persists the changes to the primary database.</li>
+</ol>
+<p>Because Memcached is purely an in-memory key-value store without
+native persistence or transactional integration, the message queue acts
+as the temporary durability layer ensuring updates are not lost if
+Memcached restarts or evicts keys.</p>
+<h2 id="implementation-steps">Implementation Steps</h2>
+<h3 id="1-structure-the-queue-payload">1. Structure the Queue
+Payload</h3>
+<p>The message sent to the queue should contain sufficient context for
+the background worker to execute the database write without needing to
+read back from Memcached. A typical JSON payload includes:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;entity&quot;</span><span class="fu">:</span> <span class="st">&quot;user_profile&quot;</span><span class="fu">,</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;operation&quot;</span><span class="fu">:</span> <span class="st">&quot;UPDATE&quot;</span><span class="fu">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;primary_key&quot;</span><span class="fu">:</span> <span class="dv">48291</span><span class="fu">,</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;data&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;display_name&quot;</span><span class="fu">:</span> <span class="st">&quot;JaneDoe&quot;</span><span class="fu">,</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;active&quot;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;timestamp&quot;</span><span class="fu">:</span> <span class="dv">1710000000</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="2-handle-application-writes">2. Handle Application Writes</h3>
+<p>When an update occurs, update Memcached first, then enqueue the
+event. If the queue publish fails, invalidate or roll back the Memcached
+entry to maintain consistency:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> update_user_profile(user_id, updated_data):</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    cache_key <span class="op">=</span> <span class="ss">f&quot;user:</span><span class="sc">{</span>user_id<span class="sc">}</span><span class="ss">&quot;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="co"># 1. Update Memcached</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    memcached_client.<span class="bu">set</span>(cache_key, updated_data, expire<span class="op">=</span><span class="dv">3600</span>)</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># 2. Push mutation event to the message queue</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    message <span class="op">=</span> {</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;entity&quot;</span>: <span class="st">&quot;user&quot;</span>,</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;operation&quot;</span>: <span class="st">&quot;UPDATE&quot;</span>,</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;primary_key&quot;</span>: user_id,</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;data&quot;</span>: updated_data,</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;timestamp&quot;</span>: time.time()</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">try</span>:</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>        queue_client.publish(<span class="st">&quot;db_write_queue&quot;</span>, message)</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> e:</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Prevent dirty cache state if queueing fails</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>        memcached_client.delete(cache_key)</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>        <span class="cf">raise</span> DatabaseSyncException(<span class="st">&quot;Failed to enqueue write operation&quot;</span>) <span class="im">from</span> e</span></code></pre></div>
+<h3 id="3-build-the-asynchronous-consumer">3. Build the Asynchronous
+Consumer</h3>
+<p>The worker listens to the queue and persists incoming payloads to the
+database. To maximize database throughput, process messages in
+micro-batches:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> process_write_queue():</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="va">True</span>:</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>        messages <span class="op">=</span> queue_client.fetch_batch(<span class="st">&quot;db_write_queue&quot;</span>, batch_size<span class="op">=</span><span class="dv">100</span>, timeout<span class="op">=</span><span class="fl">1.0</span>)</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">not</span> messages:</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>            <span class="cf">continue</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">try</span>:</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Consolidate updates by primary key to prevent redundant writes</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>            consolidated_writes <span class="op">=</span> deduplicate_updates(messages)</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Execute batch update inside a database transaction</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>            db.bulk_update(consolidated_writes)</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Acknowledge messages after successful persistence</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>            queue_client.ack(messages)</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> err:</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Route failed records to a Dead-Letter Queue (DLQ) for inspection</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>            handle_failure(messages, err)</span></code></pre></div>
+<h2 id="critical-production-considerations">Critical Production
+Considerations</h2>
+<h3 id="idempotency-and-write-ordering">Idempotency and Write
+Ordering</h3>
+<p>Network retries and concurrent consumers can lead to out-of-order
+writes. Ensure the database worker only updates a record if the
+message's timestamp or version is newer than the record currently stored
+in the database. Alternatively, partition queue topics by entity ID
+(e.g., Kafka partition keys) to enforce sequential processing for
+individual records.</p>
+<h3 id="memcached-eviction-handling">Memcached Eviction Handling</h3>
+<p>Memcached utilizes an LRU (Least Recently Used) eviction policy. If a
+key is evicted before the worker writes the change to the database,
+subsequent read operations may query the database and retrieve stale
+data. Keeping queue processing latency low (sub-second or a few seconds)
+minimizes this window of inconsistency.</p>
+<h3 id="failure-handling-and-dead-letter-queues-dlq">Failure Handling
+and Dead-Letter Queues (DLQ)</h3>
+<p>Database outages or schema validation failures will cause consumer
+writes to fail. Implement an exponential backoff retry mechanism. If a
+message repeatedly fails, forward it to a dead-letter queue rather than
+halting the consumer pipeline, allowing developers to manually replay
+the failed operations.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/write-behind-caching-with-memcached-and-queues';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

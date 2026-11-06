@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Client Connection Resets - memcached</title>
+    <meta name="description" content="When a client unexpectedly aborts an active transmission by sending a TCP reset (RST) packet, Memcached detects and absorbs the failure without interrupting worker threads or crashing the server. By pairing non-blocking sockets with the libevent asynchron">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-client-connection-resets">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Client Connection Resets - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-client-connection-resets" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When a client unexpectedly aborts an active transmission by sending a TCP reset (RST) packet, Memcached detects and absorbs the failure without interrupting worker threads or crashing the server. By pairing non-blocking sockets with the libevent asynchron" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-client-connection-resets">How Memcached
+Handles Client Connection Resets</h1>
+<p>When a client unexpectedly aborts an active transmission by sending a
+TCP reset (RST) packet, Memcached detects and absorbs the failure
+without interrupting worker threads or crashing the server. By pairing
+non-blocking sockets with the <code>libevent</code> asynchronous I/O
+framework, Memcached immediately catches the broken connection at the
+system call level, systematically unwinds active transmission states,
+decrements reference counters on in-flight cache items, and recycles
+connection resources back to its internal thread pools.</p>
+<h3 id="signal-handling-and-failure-detection">Signal Handling and
+Failure Detection</h3>
+<p>When a client resets a socket during an active read or write,
+subsequent network operations on that file descriptor fail. During an
+active transmission, Memcached typically pushes outgoing data via
+non-blocking write calls such as <code>writev()</code> or
+<code>sendmsg()</code>. Writing to a reset socket would normally trigger
+a kernel-level <code>SIGPIPE</code> signal, which terminates an
+unconfigured process.</p>
+<p>To prevent this, Memcached explicitly ignores this signal on startup
+using <code>signal(SIGPIPE, SIG_IGN)</code>. As a result, the failed
+system call returns <code>-1</code> and sets the thread-local
+<code>errno</code> to <code>EPIPE</code> or <code>ECONNRESET</code>. If
+the reset occurs while Memcached is reading requests,
+<code>recv()</code> or <code>read()</code> similarly returns
+<code>0</code> (EOF) or <code>-1</code> with
+<code>ECONNRESET</code>.</p>
+<h3 id="the-state-machine-and-libevent">The State Machine and
+libevent</h3>
+<p>Memcached assigns client connections to worker threads, each driving
+an independent <code>libevent</code> event base. Every active connection
+is tracked via a connection structure (<code>conn</code>) governed by an
+internal finite state machine.</p>
+<p>Upon encountering <code>ECONNRESET</code> or <code>EPIPE</code>, the
+worker thread immediately halts its transmission loop. Instead of
+retrying the operation, the worker thread transitions the connection
+state to <code>conn_closing</code>. The event loop ceases polling the
+associated socket descriptor for both read and write readiness,
+detaching the event from <code>libevent</code> to avoid busy-wait loops
+or descriptor leaks.</p>
+<h3 id="resource-cleanup-and-item-dereferencing">Resource Cleanup and
+Item Dereferencing</h3>
+<p>A critical part of handling an abrupt disconnect during transmission
+is ensuring memory consistency, particularly for large objects spanning
+multiple network packets.</p>
+<p>When Memcached begins transmitting a cached entry to a client, it
+increments the reference count of the corresponding <code>item</code>
+structure within the slab allocator. This prevents the LRU (Least
+Recently Used) cache eviction engine from freeing or overwriting the
+item while it is being read from memory.</p>
+<p>When the state machine moves to <code>conn_closing</code>:</p>
+<ol type="1">
+<li><strong>Item Dereferencing:</strong> Memcached iterates through any
+partially transmitted or queued items attached to the connection's I/O
+vectors (<code>iovec</code>) and calls <code>item_remove()</code>. This
+safely decrements their reference counters, allowing the items to be
+evicted or updated normally in the future.</li>
+<li><strong>Buffer Reclamation:</strong> Any dynamic transmit buffers
+allocated for protocol headers or responses are reset or returned to the
+thread’s memory cache.</li>
+<li><strong>Descriptor Teardown:</strong> The socket file descriptor is
+closed using standard system calls (<code>close()</code>), alerting the
+kernel to clean up remaining TCP buffer control blocks.</li>
+<li><strong>Structure Recycling:</strong> Rather than freeing the
+<code>conn</code> struct via <code>free()</code>, Memcached places it
+into a pre-allocated pool of free connection objects managed by that
+worker thread, eliminating memory fragmentation and reducing allocation
+overhead for incoming connections.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-client-connection-resets';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

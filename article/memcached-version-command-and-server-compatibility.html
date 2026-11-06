@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Version Command and Server Compatibility - memcached</title>
+    <meta name="description" content="The Memcached version command allows client libraries to query the exact version of a running server instance, providing the foundational telemetry needed to verify feature support dynamically. By reading the version string during connection establishment">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-version-command-and-server-compatibility">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Version Command and Server Compatibility - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-version-command-and-server-compatibility" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The Memcached version command allows client libraries to query the exact version of a running server instance, providing the foundational telemetry needed to verify feature support dynamically. By reading the version string during connection establishment" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-version-command-and-server-compatibility">Memcached
+Version Command and Server Compatibility</h1>
+<p>The Memcached <code>version</code> command allows client libraries to
+query the exact version of a running server instance, providing the
+foundational telemetry needed to verify feature support dynamically. By
+reading the version string during connection establishment, applications
+can enable modern protocol features, activate backward-compatible
+fallbacks, and prevent runtime syntax errors caused by sending
+unsupported commands to older daemons.</p>
+<h3 id="how-the-version-command-operates">How the <code>version</code>
+Command Operates</h3>
+<p>In both the traditional ASCII protocol and the binary protocol, the
+<code>version</code> command is a lightweight, non-blocking request. In
+the ASCII protocol, the client sends:</p>
+<pre class="text"><code>version\r\n</code></pre>
+<p>The server responds immediately with the keyword and its semantic
+version string:</p>
+<pre class="text"><code>VERSION 1.6.22\r\n</code></pre>
+<p>Because this command has been present since early releases of
+Memcached, it is universally supported across virtually all deployments.
+This makes it an ideal baseline check during the initial connection
+handshake.</p>
+<h3 id="key-ways-clients-use-the-version-for-compatibility">Key Ways
+Clients Use the Version for Compatibility</h3>
+<h4 id="1-dynamic-feature-detection">1. Dynamic Feature Detection</h4>
+<p>Memcached frequently introduces major architectural and command
+enhancements across releases. Rather than requiring developers to
+hardcode configuration flags, client libraries parse the semantic
+version returned by the server to determine feature availability.
+Examples include:</p>
+<ul>
+<li><strong>Meta Protocol Commands:</strong> Memcached 1.6.0 introduced
+the modern meta text protocol (<code>mg</code>, <code>ms</code>,
+<code>md</code>, <code>mn</code>), which replaces older ASCII and binary
+commands with faster, pipelined requests. Clients check for version
+<code>&gt;= 1.6.0</code> before issuing meta commands.</li>
+<li><strong>Extstore Support:</strong> Support for external SSD-backed
+storage (Extstore) requires version 1.5.4 or higher.</li>
+<li><strong>TLS and Network Features:</strong> Native TLS encryption
+flags and optimizations were stabilized in versions 1.6.x.</li>
+</ul>
+<h4 id="2-graceful-fallbacks-and-backward-compatibility">2. Graceful
+Fallbacks and Backward Compatibility</h4>
+<p>When managing a fleet of heterogeneous Memcached clusters—common
+during rolling server upgrades—a single application might talk to
+multiple server versions simultaneously. Checking the version enables
+client drivers to dynamically branch their logic:</p>
+<ul>
+<li>If the server is on an older version (e.g., 1.4.x), the client
+routes requests using classic <code>get</code>, <code>set</code>, and
+<code>cas</code> commands.</li>
+<li>If the server is updated (e.g., 1.6.x+), the client automatically
+switches to high-efficiency meta commands without restarting the
+application.</li>
+</ul>
+<h4 id="3-preventing-protocol-and-connection-errors">3. Preventing
+Protocol and Connection Errors</h4>
+<p>Sending an unrecognized command to a Memcached server results in a
+generic <code>CLIENT_ERROR</code> or <code>ERROR</code> response, and in
+some protocol modes, it can lead to pipeline stalls or unexpected socket
+closures. Proactively validating the server version prevents the client
+from transmitting invalid opcodes or directives, maintaining socket
+stability and avoiding unnecessary connection churn.</p>
+<h4 id="4-pre-flight-health-and-environment-validation">4. Pre-Flight
+Health and Environment Validation</h4>
+<p>Client connection pools often run the <code>version</code> command as
+a simple "ping" or pre-flight check upon initial socket creation. This
+verifies two requirements at once: it confirms active network
+connectivity with the daemon and ensures the remote instance meets the
+application's minimum version requirements before any production traffic
+is routed to the node.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-version-command-and-server-compatibility';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

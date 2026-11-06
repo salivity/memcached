@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Slab Allocation Chunk Size Parameters - memcached</title>
+    <meta name="description" content="Memcached utilizes a slab allocation mechanism to efficiently manage memory and avoid fragmentation by grouping memory into pre-allocated pages containing fixed-size chunks. This article provides a technical breakdown of the core startup parameters—specif">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-slab-allocation-chunk-size-parameters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Slab Allocation Chunk Size Parameters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-slab-allocation-chunk-size-parameters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached utilizes a slab allocation mechanism to efficiently manage memory and avoid fragmentation by grouping memory into pre-allocated pages containing fixed-size chunks. This article provides a technical breakdown of the core startup parameters—specif" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-slab-allocation-chunk-size-parameters">Memcached Slab
+Allocation Chunk Size Parameters</h1>
+<p>Memcached utilizes a slab allocation mechanism to efficiently manage
+memory and avoid fragmentation by grouping memory into pre-allocated
+pages containing fixed-size chunks. This article provides a technical
+breakdown of the core startup parameters—specifically <code>-n</code>
+(minimum chunk size), <code>-f</code> (slab growth factor), and
+<code>-I</code> (maximum item size)—that directly control the sizing,
+scaling, and distribution of item chunks across Memcached slab
+classes.</p>
+<h3 id="how-memcached-allocates-memory">How Memcached Allocates
+Memory</h3>
+<p>Memcached divides its allocated memory into 1 MB pages (by default),
+which are then assigned to specific <strong>slab classes</strong>. Each
+slab class is subdivided into equal-sized slots called
+<strong>chunks</strong>. When an item (key, value, and internal
+metadata) is stored, Memcached assigns it to the slab class containing
+the smallest chunk size capable of fitting the item.</p>
+<p>The dimensions of these chunks across different slab classes are
+governed by three primary command-line parameters.</p>
+<hr />
+<h3 id="key-parameters-controlling-chunk-sizes">Key Parameters
+Controlling Chunk Sizes</h3>
+<h4 id="1-minimum-item-size--n-or---min-item-size">1. Minimum Item Size
+(<code>-n</code> or <code>--min-item-size</code>)</h4>
+<ul>
+<li><strong>Default Value:</strong> 48 bytes</li>
+<li><strong>Function:</strong> Sets the base chunk size for Slab Class
+1, the smallest allocation tier.</li>
+<li><strong>Impact:</strong> Every item requires memory not only for its
+payload but also for its key, internal flags, and pointer overhead
+(typically around 32 to 48 bytes of metadata depending on architecture).
+Setting <code>-n</code> ensures that the smallest chunk can comfortably
+house small keys and their associated overhead without allocating
+unnecessary space.</li>
+</ul>
+<h4 id="2-slab-growth-factor--f-or---slab-growth-factor">2. Slab Growth
+Factor (<code>-f</code> or <code>--slab-growth-factor</code>)</h4>
+<ul>
+<li><strong>Default Value:</strong> 1.25</li>
+<li><strong>Function:</strong> Dictates the multiplier used to determine
+the chunk size of each subsequent slab class relative to the previous
+one.</li>
+<li><strong>Impact:</strong> The chunk size of class <span
+class="math inline">\(k\)</span> is calculated approximately as: <span
+class="math display">\[\text{Chunk Size}_k = \text{Chunk Size}_{k-1}
+\times f\]</span> A lower growth factor (e.g., <code>1.1</code>) creates
+more slab classes with granular size differences, reducing internal
+memory waste (slack space) at the cost of using more memory to maintain
+class metadata. A higher growth factor (e.g., <code>1.5</code> or
+<code>2.0</code>) creates fewer slab classes with wider gaps, which can
+lead to higher internal fragmentation if item sizes vary widely.</li>
+</ul>
+<h4 id="3-maximum-item-size--i-or---max-item-size">3. Maximum Item Size
+(<code>-I</code> or <code>--max-item-size</code>)</h4>
+<ul>
+<li><strong>Default Value:</strong> 1m (1,048,576 bytes)</li>
+<li><strong>Function:</strong> Defines the upper boundary for an
+individual item and the absolute maximum chunk size in the slab
+structure. It also sets the slab page size.</li>
+<li><strong>Impact:</strong> Memcached terminates the creation of new
+slab classes once the chunk size reaches the value specified by
+<code>-I</code>. Any item larger than this value is rejected by the
+server. Increasing this value allows storage of larger objects (e.g.,
+<code>-I 5m</code>), but it also increases the base slab page allocation
+to match the new maximum size.</li>
+</ul>
+<hr />
+<h3 id="how-chunk-sizes-are-calculated">How Chunk Sizes Are
+Calculated</h3>
+<p>During startup, Memcached builds the slab class table
+sequentially:</p>
+<ol type="1">
+<li><strong>Class 1 Initialization:</strong> Slab Class 1 starts with
+the value set by <code>-n</code> (aligned to an 8-byte boundary).</li>
+<li><strong>Exponential Scaling:</strong> Each subsequent class
+calculates its chunk size by multiplying the previous chunk size by
+<code>-f</code>.</li>
+<li><strong>Memory Alignment:</strong> Chunk sizes are rounded up to the
+nearest 8-byte boundary to maintain memory alignment requirements.</li>
+<li><strong>Termination:</strong> The process repeats until the next
+calculated chunk size meets or exceeds <code>-I</code>, which forms the
+final slab class.</li>
+</ol>
+<hr />
+<h3 id="example-configuration">Example Configuration</h3>
+<p>To configure Memcached with an 80-byte initial chunk size, a 15%
+growth rate, and a 2 MB ceiling, start the daemon using:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-n</span> 80 <span class="at">-f</span> 1.15 <span class="at">-I</span> 2m</span></code></pre></div>
+<h3 id="inspecting-configured-chunk-sizes">Inspecting Configured Chunk
+Sizes</h3>
+<p>To verify the generated chunk sizes on a running instance, execute
+the following command via <code>telnet</code> or <code>nc</code>:</p>
+<pre class="text"><code>stats slabs</code></pre>
+<p>Each slab class will report its <code>chunk_size</code>,
+<code>chunks_per_page</code>, and usage statistics, allowing you to
+monitor for internal fragmentation and tune <code>-n</code> and
+<code>-f</code> to match your application's specific item size
+profiles.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-slab-allocation-chunk-size-parameters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

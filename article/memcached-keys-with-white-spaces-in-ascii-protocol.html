@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Keys With White Spaces in ASCII Protocol - memcached</title>
+    <meta name="description" content="This article explains how Memcached interprets keys containing white spaces when using the standard ASCII protocol. In Memcached&#39;s text-based protocol, spaces function strictly as command and argument delimiters. As a result, genuine key names cannot cont">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-keys-with-white-spaces-in-ascii-protocol">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Keys With White Spaces in ASCII Protocol - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-keys-with-white-spaces-in-ascii-protocol" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how Memcached interprets keys containing white spaces when using the standard ASCII protocol. In Memcached&#39;s text-based protocol, spaces function strictly as command and argument delimiters. As a result, genuine key names cannot cont" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-keys-with-white-spaces-in-ascii-protocol">Memcached
+Keys With White Spaces in ASCII Protocol</h1>
+<p>This article explains how Memcached interprets keys containing white
+spaces when using the standard ASCII protocol. In Memcached's text-based
+protocol, spaces function strictly as command and argument delimiters.
+As a result, genuine key names cannot contain spaces; attempting to use
+them will either trigger a command syntax error or cause the server to
+parse the single key as multiple distinct keys.</p>
+<h3 id="the-ascii-protocol-key-definition">The ASCII Protocol Key
+Definition</h3>
+<p>According to the Memcached ASCII protocol specification, a key is
+defined as an arbitrary string of characters with two major
+restrictions: it cannot exceed 250 bytes in length, and it cannot
+contain control characters or whitespace (including spaces, tabs, and
+newline characters). Because the ASCII parser splits incoming command
+lines by space characters, any whitespace within a key fundamentally
+alters how the server reads the request.</p>
+<h3 id="retrieval-commands-accidental-multi-get">Retrieval Commands:
+Accidental Multi-Get</h3>
+<p>When executing retrieval commands such as <code>get</code> or
+<code>gets</code>, the ASCII protocol supports querying multiple keys
+simultaneously by separating each key with a space:</p>
+<pre class="text"><code>get key1 key2 key3\r\n</code></pre>
+<p>If an application submits a single key containing a space, such as
+<code>user profile</code>, Memcached reads the space as a separator:</p>
+<pre class="text"><code>get user profile\r\n</code></pre>
+<p>Instead of querying a single item named <code>"user profile"</code>,
+Memcached interprets this as a request for two separate items: one with
+the key <code>"user"</code> and one with the key <code>"profile"</code>.
+If neither key exists independently, the server simply returns
+<code>END</code>. If one or both happen to exist, Memcached returns data
+for those unintended keys, potentially causing silent data mismatches or
+bugs in the application.</p>
+<h3 id="storage-commands-protocol-format-errors">Storage Commands:
+Protocol Format Errors</h3>
+<p>Storage commands—including <code>set</code>, <code>add</code>,
+<code>replace</code>, <code>append</code>, and
+<code>prepend</code>—require a strict sequence of parameters:</p>
+<pre class="text"><code>&lt;command&gt; &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n</code></pre>
+<p>If a key contains spaces, the positional parsing of these parameters
+breaks. For instance, sending:</p>
+<pre class="text"><code>set user profile 0 3600 5\r\n</code></pre>
+<p>causes Memcached to parse <code>"user"</code> as the key and
+<code>"profile"</code> as the <code>&lt;flags&gt;</code> parameter.
+Because <code>&lt;flags&gt;</code> must be an integer, the parser fails
+to convert the string to a numeric value.</p>
+<p>When this happens, Memcached immediately rejects the command and
+replies with a client-side error:</p>
+<pre class="text"><code>CLIENT_ERROR bad command line format</code></pre>
+<p>The connection remains open, but the data is not stored.</p>
+<h3 id="how-to-handle-keys-requiring-spaces">How to Handle Keys
+Requiring Spaces</h3>
+<p>Applications that must map data to identifiers with spaces have
+several standard alternatives:</p>
+<ol type="1">
+<li><strong>Substitution:</strong> Replace spaces with safe separator
+characters such as underscores (<code>_</code>), colons
+(<code>:</code>), or hyphens (<code>-</code>) before issuing the
+command.</li>
+<li><strong>Hashing:</strong> Pass keys through a hashing algorithm
+(such as SHA-256 or MD5) to produce fixed-length, alphanumeric strings
+that comply with Memcached key rules.</li>
+<li><strong>Encoding:</strong> Use URL-encoding (percent-encoding) or
+Base64 encoding to convert whitespace into non-spaced ASCII
+characters.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-keys-with-white-spaces-in-ascii-protocol';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

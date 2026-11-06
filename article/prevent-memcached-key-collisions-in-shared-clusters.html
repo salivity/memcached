@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prevent Memcached Key Collisions in Shared Clusters - memcached</title>
+    <meta name="description" content="Sharing a single Memcached cluster across multiple applications or microservices is a cost-effective scaling strategy, but it introduces the risk of key collisions because Memcached uses a flat, global key-value namespace. Without isolation, one applicati">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/prevent-memcached-key-collisions-in-shared-clusters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Prevent Memcached Key Collisions in Shared Clusters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/prevent-memcached-key-collisions-in-shared-clusters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Sharing a single Memcached cluster across multiple applications or microservices is a cost-effective scaling strategy, but it introduces the risk of key collisions because Memcached uses a flat, global key-value namespace. Without isolation, one applicati" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="prevent-memcached-key-collisions-in-shared-clusters">Prevent
+Memcached Key Collisions in Shared Clusters</h1>
+<p>Sharing a single Memcached cluster across multiple applications or
+microservices is a cost-effective scaling strategy, but it introduces
+the risk of key collisions because Memcached uses a flat, global
+key-value namespace. Without isolation, one application can
+inadvertently overwrite, corrupt, or read data belonging to another.
+This article explores actionable techniques developers can use to
+prevent key collisions, including deterministic namespacing, client-side
+wrappers, dynamic prefixing, and proxy-level routing.</p>
+<h3 id="1-implement-deterministic-key-prefixing">1. Implement
+Deterministic Key Prefixing</h3>
+<p>The most common and effective solution is establishing a strict,
+standardized naming convention across all teams. Because Memcached
+treats keys as raw byte strings, you can simulate namespaces by
+prepending contextual identifiers to every key.</p>
+<p>A robust key format follows a hierarchical structure:</p>
+<p><code>[application_id]:[environment]:[entity_type]:[entity_id]</code></p>
+<p>For example:</p>
+<ul>
+<li><code>checkout:prod:cart:98234</code></li>
+<li><code>auth:prod:session:98234</code></li>
+</ul>
+<p>Including the environment (<code>prod</code>, <code>staging</code>,
+<code>dev</code>) prevents cross-environment overwrites if staging
+instances share non-production caching infrastructure.</p>
+<h3 id="2-enforce-prefixing-via-client-wrappers">2. Enforce Prefixing
+via Client Wrappers</h3>
+<p>Relying on manual string concatenation leaves room for human error.
+Developers might forget to prepend the application prefix, leading to
+silent collisions.</p>
+<p>To mitigate this, implement a centralized client-side wrapper or use
+client library features that automatically inject prefixes:</p>
+<ul>
+<li><strong>Custom Client Decorator:</strong> Wrap the standard
+Memcached client in an internal library that automatically prepends
+<code>APP_NAME:</code> to any key passed into <code>get()</code>,
+<code>set()</code>, <code>delete()</code>, or
+<code>increment()</code>.</li>
+<li><strong>Built-in Driver Namespacing:</strong> Many drivers (such as
+PHP's <code>Memcached</code> extension via
+<code>Memcached::OPT_PREFIX_KEY</code>) natively support an automatic
+key prefix option on initialization.</li>
+</ul>
+<h3 id="3-handle-long-keys-with-hashing">3. Handle Long Keys with
+Hashing</h3>
+<p>Memcached imposes a maximum key length of 250 bytes. When using
+detailed prefixes and long entity IDs (such as compound keys or URLs),
+keys can approach or exceed this limit.</p>
+<p>If a key risks exceeding the limit:</p>
+<ol type="1">
+<li>Construct the fully qualified key with its prefix.</li>
+<li>Hash the key using a fast algorithm such as SHA-256 or MD5.</li>
+<li>Prepend the application namespace to the hash (e.g.,
+<code>app1:a1b2c3d4...</code>).</li>
+</ol>
+<p>Keeping the cleartext application prefix visible ahead of the hash
+aids in debugging and operational monitoring while guaranteeing the
+overall string remains well within the 250-byte boundary.</p>
+<h3 id="4-dynamic-namespacing-for-bulk-invalidation">4. Dynamic
+Namespacing for Bulk Invalidation</h3>
+<p>Memcached lacks a native way to flush keys belonging to a specific
+application without running <code>flush_all</code>, which empties the
+entire cluster. Dynamic namespacing solves both collision prevention and
+bulk invalidation.</p>
+<p>To use dynamic namespacing:</p>
+<ol type="1">
+<li>Store a "namespace version" key for your application:
+<code>app1:ns_version = 1</code>.</li>
+<li>Construct data keys using this version:
+<code>app1:v1:user:123</code>.</li>
+<li>When you need to invalidate all of <code>app1</code>'s data,
+increment <code>app1:ns_version</code> to <code>2</code>.</li>
+</ol>
+<p>Subsequent reads will look for <code>app1:v2:user:123</code>,
+treating old keys as cache misses and allowing them to expire naturally
+through Memcached's Least Recently Used (LRU) eviction.</p>
+<h3 id="5-isolate-logic-with-connection-proxies">5. Isolate Logic with
+Connection Proxies</h3>
+<p>When strict isolation is required, consider placing an intelligent
+routing proxy such as <strong>mcrouter</strong> in front of the
+Memcached cluster.</p>
+<p>Proxies can:</p>
+<ul>
+<li>Route traffic to distinct pools of Memcached servers based on key
+prefixes.</li>
+<li>Automatically rewrite keys or assign dedicated virtual clusters to
+different applications.</li>
+<li>Apply access control rules that prevent unauthorized applications
+from reading or overwriting specified key prefixes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/prevent-memcached-key-collisions-in-shared-clusters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

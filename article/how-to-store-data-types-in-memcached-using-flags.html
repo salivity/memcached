@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Store Data Types in Memcached Using Flags - memcached</title>
+    <meta name="description" content="Memcached is fundamentally a key-value store for arbitrary byte arrays, meaning it treats all stored payloads as opaque blobs. However, the Memcached protocol includes a dedicated flags parameter—a 32-bit unsigned integer stored directly alongside the val">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-store-data-types-in-memcached-using-flags">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Store Data Types in Memcached Using Flags - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-store-data-types-in-memcached-using-flags" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is fundamentally a key-value store for arbitrary byte arrays, meaning it treats all stored payloads as opaque blobs. However, the Memcached protocol includes a dedicated flags parameter—a 32-bit unsigned integer stored directly alongside the val" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-store-data-types-in-memcached-using-flags">How to Store
+Data Types in Memcached Using Flags</h1>
+<p>Memcached is fundamentally a key-value store for arbitrary byte
+arrays, meaning it treats all stored payloads as opaque blobs. However,
+the Memcached protocol includes a dedicated <code>flags</code>
+parameter—a 32-bit unsigned integer stored directly alongside the value
+without modifying the payload itself. This article explains how
+developers can systematically use these flags to preserve data type
+signatures, handle serialization and deserialization cleanly, and
+optimize data handling across distributed environments.</p>
+<h2 id="understanding-the-memcached-flag-field">Understanding the
+Memcached Flag Field</h2>
+<p>When executing storage commands such as <code>set</code>,
+<code>add</code>, or <code>replace</code>, the Memcached protocol
+accepts four primary arguments: key, flags, expiration time, and the
+byte length of the value.</p>
+<p>The <code>flags</code> field is an arbitrary 32-bit integer reserved
+entirely for client-side use. Memcached does not interpret, modify, or
+query this value; it simply stores it in memory and returns it untouched
+when the client requests the key via commands like <code>get</code> or
+<code>gets</code>.</p>
+<p>Because the flag exists independently of the payload, it acts as
+zero-cost metadata that eliminates the need to wrap raw data inside
+complex serialization envelopes (such as wrapping a string inside a JSON
+object just to preserve its type).</p>
+<h2 id="designing-a-type-mapping-strategy">Designing a Type-Mapping
+Strategy</h2>
+<p>To use flags for type signatures, establish a predefined schema that
+maps specific integers or bitmasks to the application's supported data
+types.</p>
+<h3 id="1-simple-enum-mapping">1. Simple Enum Mapping</h3>
+<p>For simple architectures, assign sequential integers to supported
+types:</p>
+<ul>
+<li><code>0x0001</code> (1): Plain UTF-8 String</li>
+<li><code>0x0002</code> (2): Integer / Long</li>
+<li><code>0x0003</code> (3): Boolean</li>
+<li><code>0x0004</code> (4): JSON Document</li>
+<li><code>0x0005</code> (5): Binary / Raw Bytes</li>
+</ul>
+<h3 id="2-bitmask-mapping-for-complex-states">2. Bitmask Mapping for
+Complex States</h3>
+<p>A more scalable pattern uses bitmasks, enabling developers to store
+both the data type and operational transformations (like compression or
+encryption) within the same 32-bit integer:</p>
+<ul>
+<li><strong>Bits 0–7 (Data Type):</strong>
+<ul>
+<li><code>0x01</code>: String</li>
+<li><code>0x02</code>: Integer</li>
+<li><code>0x03</code>: JSON</li>
+<li><code>0x04</code>: Serialized Object</li>
+</ul></li>
+<li><strong>Bits 8–15 (Transformations):</strong>
+<ul>
+<li><code>0x0100</code>: Compressed (e.g., zlib/gzip)</li>
+<li><code>0x0200</code>: Encrypted</li>
+</ul></li>
+</ul>
+<p>With this structure, a compressed JSON payload receives a flag of
+<code>0x0103</code> (<code>0x0003 | 0x0100</code>).</p>
+<h2 id="implementation-workflow">Implementation Workflow</h2>
+<h3 id="writing-to-the-cache">Writing to the Cache</h3>
+<p>Before sending data to Memcached, inspect the variable type,
+serialize it to bytes, set the appropriate flag, and execute the storage
+command.</p>
+<ol type="1">
+<li><strong>Type Detection:</strong> Determine the native type of the
+input (e.g., dictionary, integer, string).</li>
+<li><strong>Serialization:</strong> Convert the native type into a byte
+stream (e.g., encode string to UTF-8, convert dictionary to JSON
+bytes).</li>
+<li><strong>Flag Assignment:</strong> Select the corresponding bitmask.
+If the serialized payload exceeds a specific threshold (e.g., 2 KB),
+compress the bytes and set the compression bit.</li>
+<li><strong>Storage:</strong> Send the key, generated flag, TTL, and
+byte array to Memcached.</li>
+</ol>
+<h3 id="reading-from-the-cache">Reading from the Cache</h3>
+<p>When retrieving the item, inspect the returned flag before attempting
+to decode the payload.</p>
+<ol type="1">
+<li><strong>Fetch:</strong> Execute a <code>get</code> request to
+retrieve both the raw bytes and the integer flag.</li>
+<li><strong>Decompression/Transformation:</strong> Check transformation
+bits. If a compression bit is set, decompress the byte array first.</li>
+<li><strong>Deserialization:</strong> Evaluate the base type bits to run
+the appropriate decoder:
+<ul>
+<li>String flag: Decode bytes using UTF-8.</li>
+<li>Integer flag: Parse bytes directly to an integer.</li>
+<li>JSON flag: Run the bytes through a JSON parser to restore an
+object/array.</li>
+<li>Binary flag: Return raw bytes without transformation.</li>
+</ul></li>
+</ol>
+<h2 id="key-advantages">Key Advantages</h2>
+<ul>
+<li><strong>Reduced Payload Overhead:</strong> Storing type indicators
+in the flag keeps the stored payload lean, saving memory overhead across
+millions of cached keys.</li>
+<li><strong>Polyglot Consistency:</strong> Microservices written in
+different languages (e.g., Go, Python, Node.js) can read and write to
+the same cache without type ambiguity, provided all services adhere to
+the same flag specification.</li>
+<li><strong>Fast Failure Handling:</strong> Clients do not need to guess
+the format or use trial-and-error deserialization (e.g., trying to parse
+JSON, catching an exception, and falling back to a string), which
+reduces CPU overhead during cache reads.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-store-data-types-in-memcached-using-flags';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

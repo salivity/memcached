@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Arithmetic Operations on Non-Integer Keys - memcached</title>
+    <meta name="description" content="When a client sends an arithmetic operation—such as incr (increment) or decr (decrement)—to a Memcached key holding a non-integer string, the server rejects the command with an error and leaves the existing value untouched. Memcached requires values targe">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-arithmetic-operations-on-non-integer-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Arithmetic Operations on Non-Integer Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-arithmetic-operations-on-non-integer-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When a client sends an arithmetic operation—such as incr (increment) or decr (decrement)—to a Memcached key holding a non-integer string, the server rejects the command with an error and leaves the existing value untouched. Memcached requires values targe" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-arithmetic-operations-on-non-integer-keys">Memcached
+Arithmetic Operations on Non-Integer Keys</h1>
+<p>When a client sends an arithmetic operation—such as <code>incr</code>
+(increment) or <code>decr</code> (decrement)—to a Memcached key holding
+a non-integer string, the server rejects the command with an error and
+leaves the existing value untouched. Memcached requires values targeted
+by arithmetic commands to be valid, ASCII-encoded, unsigned 64-bit
+integers. This article covers the specific error responses returned by
+the protocol, why Memcached enforces this behavior, and how to properly
+store and manage numeric values.</p>
+<h2 id="protocol-responses">Protocol Responses</h2>
+<p>The exact error returned depends on whether your client communicates
+via Memcached's text or binary protocol:</p>
+<ul>
+<li><strong>Text Protocol:</strong> The server responds with
+<code>CLIENT_ERROR cannot increment or decrement non-numeric value</code>.</li>
+<li><strong>Binary Protocol:</strong> The server responds with a failure
+status code <code>0x0006</code>
+(<code>PROTOCOL_BINARY_RESPONSE_DELTA_BADVAL</code>), signaling a
+non-numeric value error.</li>
+</ul>
+<p>In both implementations, the operation fails atomically before any
+write takes place. The original string data remains unmodified in cache
+memory, its expiration TTL remains unchanged, and no partial arithmetic
+or casting occurs.</p>
+<h2 id="why-the-error-occurs">Why the Error Occurs</h2>
+<p>Memcached does not have a dedicated integer data type; it stores all
+data values as arbitrary byte arrays (blobs).</p>
+<p>When receiving an arithmetic command, the Memcached engine reads the
+stored byte sequence and parses it into an unsigned 64-bit integer
+(<code>uint64_t</code>). The operation fails under the following
+conditions:</p>
+<ul>
+<li><strong>Alpha or Special Characters:</strong> Strings such as
+<code>"counter_1"</code> or <code>"apple"</code> cannot be parsed as
+integers.</li>
+<li><strong>Negative Numbers:</strong> Memcached arithmetic supports
+only unsigned integers (<span class="math inline">\(0\)</span> to <span
+class="math inline">\(2^{64}-1\)</span>). Values containing a negative
+sign (e.g., <code>"-5"</code>) will trigger the non-numeric error.</li>
+<li><strong>Floating-Point Numbers:</strong> Decimals such as
+<code>"10.5"</code> contain a period, which fails integer parsing.</li>
+<li><strong>Serialized Data:</strong> Many client libraries
+automatically serialize objects or primitives using JSON, MsgPack, or
+language-specific serializers (like Python's <code>pickle</code> or
+PHP's <code>serialize</code>). Even if the serialized data represents
+the number <code>1</code>, the payload contains metadata wrappers that
+invalidate raw ASCII parsing.</li>
+</ul>
+<h2 id="how-to-avoid-the-error">How to Avoid the Error</h2>
+<p>To successfully use arithmetic operations in Memcached:</p>
+<ol type="1">
+<li><strong>Write Plain Text Integers:</strong> Store values as raw
+numeric ASCII strings (e.g., byte representation of <code>"0"</code> or
+<code>"100"</code>).</li>
+<li><strong>Disable Client Serialization:</strong> When initializing
+counters, bypass client-level serializers so the value is saved as plain
+text rather than a serialized string or object.</li>
+<li><strong>Validate Existing Keys:</strong> If an application must
+increment a key that might hold non-numeric data, handle the client
+exception, overwrite the key using a standard <code>set</code> command
+with a valid numeric string, or issue a <code>delete</code> before
+setting the counter.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-arithmetic-operations-on-non-integer-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

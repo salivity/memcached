@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Slab Class Memory Allocation Parameters - memcached</title>
+    <meta name="description" content="Memcached manages memory using a slab allocation mechanism designed to eliminate memory fragmentation. Instead of allocating memory dynamically on a per-item basis, Memcached pre-allocates memory in fixed-size blocks called pages (typically 1 MB) and assi">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-slab-class-memory-allocation-parameters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Slab Class Memory Allocation Parameters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-slab-class-memory-allocation-parameters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached manages memory using a slab allocation mechanism designed to eliminate memory fragmentation. Instead of allocating memory dynamically on a per-item basis, Memcached pre-allocates memory in fixed-size blocks called pages (typically 1 MB) and assi" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-slab-class-memory-allocation-parameters">Memcached
+Slab Class Memory Allocation Parameters</h1>
+<p>Memcached manages memory using a slab allocation mechanism designed
+to eliminate memory fragmentation. Instead of allocating memory
+dynamically on a per-item basis, Memcached pre-allocates memory in
+fixed-size blocks called pages (typically 1 MB) and assigns them to
+specific slab classes that store items of similar sizes. This article
+outlines the startup parameters and runtime controls that directly
+dictate how these memory pages are divided and allocated across
+different slab classes.</p>
+<h3 id="1-total-memory-limit--m">1. Total Memory Limit
+(<code>-m</code>)</h3>
+<p>The <code>-m</code> flag defines the maximum amount of RAM (in
+megabytes) that Memcached is allowed to use for data storage. This total
+pool represents the global budget from which individual memory pages are
+allocated to different slab classes as data is written. Once this pool
+is completely consumed by assigned pages, Memcached can no longer
+allocate new pages without either evicting items (LRU) or moving pages
+between classes.</p>
+<h3 id="2-minimum-item-size--n">2. Minimum Item Size
+(<code>-n</code>)</h3>
+<p>The <code>-n</code> parameter specifies the minimum initial space
+allocated for an item's key, value, and internal flags (defaulting to 48
+bytes). This value dictates the chunk size for <strong>Slab Class
+1</strong>, which serves as the base baseline size for the smallest
+cached items. Every subsequent slab class calculates its chunk size
+upward starting from this value.</p>
+<h3 id="3-growth-factor--f">3. Growth Factor (<code>-f</code>)</h3>
+<p>The <code>-f</code> flag sets the chunk growth factor (default is
+1.25), which dictates the rate at which chunk sizes increase from one
+slab class to the next. For example, with a growth factor of 1.25, each
+successive slab class provides chunks that are 25% larger than the
+preceding class:</p>
+<ul>
+<li><strong>Class 1:</strong> <span class="math inline">\(n\)</span>
+bytes</li>
+<li><strong>Class 2:</strong> <span class="math inline">\(n \times
+f\)</span> bytes</li>
+<li><strong>Class 3:</strong> <span class="math inline">\((n \times f)
+\times f\)</span> bytes</li>
+</ul>
+<p>This parameter directly governs how many total slab classes exist and
+how finely granular the chunk sizes are between the minimum chunk size
+and the maximum item size.</p>
+<h3 id="4-maximum-item--page-size--i">4. Maximum Item / Page Size
+(<code>-I</code>)</h3>
+<p>The <code>-I</code> parameter specifies the maximum item size allowed
+in the cache (defaulting to 1 MB). Because a slab page is sized to
+accommodate at least one maximum-sized item, this parameter also defines
+the size of an individual memory page. The largest slab class will have
+a chunk size equal to this maximum limit. Consequently, this determines
+the ceiling of the slab class hierarchy.</p>
+<h3 id="5-runtime-demand-and-page-assignment">5. Runtime Demand and Page
+Assignment</h3>
+<p>At startup, memory pages are not distributed across slab classes
+equally. Instead, memory pages remain in an unallocated global pool.
+Page assignment is driven by incoming write operations:</p>
+<ul>
+<li>When an item is stored, Memcached identifies the smallest slab class
+with a chunk size large enough to hold the item.</li>
+<li>If that slab class has no free chunks left, Memcached allocates a
+new 1 MB page from the global free pool directly to that class and
+slices it into chunks.</li>
+<li>Thus, the volume and size distribution of incoming traffic determine
+which slab classes acquire pages first.</li>
+</ul>
+<h3
+id="6-dynamic-reallocation-parameters--o-slab_reassign-and-slab_automove">6.
+Dynamic Reallocation Parameters (<code>-o slab_reassign</code> and
+<code>slab_automove</code>)</h3>
+<p>Under default older behavior, once a memory page is assigned to a
+slab class, it remains with that class permanently, which can lead to
+memory starvation if traffic patterns shift. Modern Memcached versions
+mitigate this using dynamic reallocation settings:</p>
+<ul>
+<li><strong><code>slab_reassign</code></strong>: Enables the manual or
+automated moving of pages between slab classes without restarting the
+server.</li>
+<li><strong><code>slab_automove</code></strong>: Dictates the
+algorithmic behavior for automatically moving pages from idle slab
+classes to classes experiencing high eviction pressure. It accepts
+specific operating modes:
+<ul>
+<li><code>0</code>: Automove is disabled.</li>
+<li><code>1</code>: Standard automove; moves a page if a class has had
+no evictions and excess free pages, giving it to a class that is
+actively evicting items.</li>
+<li><code>2</code>: Aggressive, highly responsive page movement based on
+detailed class utilization and hit-to-eviction ratios.</li>
+</ul></li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-slab-class-memory-allocation-parameters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

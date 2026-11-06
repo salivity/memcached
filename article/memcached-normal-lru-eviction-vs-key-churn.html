@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached: Normal LRU Eviction vs Key Churn - memcached</title>
+    <meta name="description" content="Distinguishing between healthy cache recycling and pathological key churn in Memcached is critical for maintaining application throughput and predictable database loads. While both conditions cause item evictions once memory reaches capacity, normal Least">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-normal-lru-eviction-vs-key-churn">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached: Normal LRU Eviction vs Key Churn - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-normal-lru-eviction-vs-key-churn" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Distinguishing between healthy cache recycling and pathological key churn in Memcached is critical for maintaining application throughput and predictable database loads. While both conditions cause item evictions once memory reaches capacity, normal Least" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-normal-lru-eviction-vs-key-churn">Memcached: Normal
+LRU Eviction vs Key Churn</h1>
+<p>Distinguishing between healthy cache recycling and pathological key
+churn in Memcached is critical for maintaining application throughput
+and predictable database loads. While both conditions cause item
+evictions once memory reaches capacity, normal Least Recently Used (LRU)
+evictions discard long-dormant items to maintain a stable working set,
+whereas rapid key churn prematurely pushes out frequently read data.
+Monitoring tools differentiate between these states by analyzing
+age-at-eviction metrics, cache hit ratios, write-to-read ratios, and
+slab-specific allocation trends.</p>
+<h3 id="analyzing-eviction-age-age-of-evicted-items">Analyzing Eviction
+Age (Age of Evicted Items)</h3>
+<p>The primary metric for diagnosing eviction health is the age of items
+at the moment they are purged. Modern versions of Memcached provide
+slab-level metrics and an LRU crawler that track the time elapsed
+between an item's creation or last access and its eviction.</p>
+<ul>
+<li><strong>Normal Eviction:</strong> The evicted items exhibit high age
+values. They have lived in the cache for extended periods without read
+requests, indicating the cache successfully held the data throughout its
+active lifecycle.</li>
+<li><strong>Rapid Key Churn:</strong> The eviction age drops
+significantly, sometimes down to seconds or milliseconds. When newly
+allocated items immediately force out recently written or read items, it
+signals that the cache capacity is insufficient for the current
+ingestion rate or that an influx of low-value, unique keys is displacing
+the active working set.</li>
+</ul>
+<h3 id="evaluating-hit-ratio-degradation">Evaluating Hit Ratio
+Degradation</h3>
+<p>Tracking eviction rates in isolation is misleading because a high
+eviction rate can occur during normal heavy traffic. Monitoring tools
+correlate evictions with the cache hit ratio (<code>get_hits</code>
+divided by total <code>cmd_get</code>).</p>
+<ul>
+<li><strong>Normal Eviction:</strong> The hit ratio remains high and
+stable. Evictions occur, but the active working set resides safely in
+memory, so application read requests continue to resolve
+successfully.</li>
+<li><strong>Rapid Key Churn:</strong> The hit ratio drops steeply in
+tandem with rising evictions. Because the churn evicts items before
+downstream services can read them, subsequent queries result in cache
+misses, generating increased query pressure on primary databases.</li>
+</ul>
+<h3 id="tracking-the-set-to-get-ratio">Tracking the Set-to-Get
+Ratio</h3>
+<p>Key churn is primarily driven by write-heavy anomalies, such as
+improper key generation, runaway background jobs, or missing TTL
+(Time-To-Live) configurations. Monitoring tools monitor the relationship
+between writes (<code>cmd_set</code>) and reads
+(<code>cmd_get</code>).</p>
+<ul>
+<li><strong>Normal Eviction:</strong> Read commands substantially
+outnumber write commands, maintaining the standard read-heavy profile
+typical of caching layers.</li>
+<li><strong>Rapid Key Churn:</strong> The rate of <code>cmd_set</code>
+surges relative to <code>cmd_get</code>. A set-to-get ratio approaching
+or exceeding 1:1 during high eviction periods indicates data is being
+written faster than it can be consumed, a classic hallmark of
+churn.</li>
+</ul>
+<h3 id="slab-class-isolation">Slab Class Isolation</h3>
+<p>Memcached divides memory into slab classes based on item size. A
+global view can obscure churn if it is isolated to an individual key
+payload size.</p>
+<p>Monitoring tools inspect <code>stats slabs</code> to evaluate
+eviction metrics per slab class:</p>
+<ul>
+<li>If evictions and low eviction ages are localized to a single slab
+class, an application component is likely writing oversized or uniquely
+patterned keys in that specific byte range.</li>
+<li>If evictions are uniform across all slab classes while eviction ages
+remain high, the instance is experiencing balanced memory utilization
+under normal operational growth.</li>
+</ul>
+<h3 id="monitoring-reclaimed-and-expired-unfetched-counters">Monitoring
+Reclaimed and Expired Unfetched Counters</h3>
+<p>Memcached tracks whether an item was ever retrieved before it expired
+or was evicted (<code>expired_unfetched</code>).</p>
+<p>A sudden increase in <code>expired_unfetched</code> or items evicted
+without ever receiving a hit demonstrates that the application is
+populating the cache with disposable, zero-utility keys. When paired
+with high eviction counts, this confirms that the churn is actively
+displacing valuable data with unused payloads.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-normal-lru-eviction-vs-key-churn';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

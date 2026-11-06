@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached TCP Window Size Kernel Parameters - memcached</title>
+    <meta name="description" content="Optimizing the operating system kernel&#39;s TCP window parameters is critical for maximizing Memcached throughput and minimizing latency. This guide covers the essential Linux kernel settings required to tune TCP read and write buffers, avoid socket buffer e">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-tcp-window-size-kernel-parameters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached TCP Window Size Kernel Parameters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-tcp-window-size-kernel-parameters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Optimizing the operating system kernel&#39;s TCP window parameters is critical for maximizing Memcached throughput and minimizing latency. This guide covers the essential Linux kernel settings required to tune TCP read and write buffers, avoid socket buffer e" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-tcp-window-size-kernel-parameters">Memcached TCP
+Window Size Kernel Parameters</h1>
+<p>Optimizing the operating system kernel's TCP window parameters is
+critical for maximizing Memcached throughput and minimizing latency.
+This guide covers the essential Linux kernel settings required to tune
+TCP read and write buffers, avoid socket buffer exhaustion during high
+concurrency, and ensure efficient data transfer over modern
+high-bandwidth networks.</p>
+<h3 id="why-tcp-window-sizing-matters-for-memcached">Why TCP Window
+Sizing Matters for Memcached</h3>
+<p>Memcached handles massive volumes of small-to-medium network packets,
+often interspersed with large multi-key fetches. If the TCP window
+size—dictated by the OS receive and send buffers—is too small, network
+interfaces stall waiting for ACKs (acknowledgments), throttling
+throughput. Conversely, if the windows are too large across tens of
+thousands of idle connections, system memory is wasted.</p>
+<p>Tuning these parameters aligns the socket buffers with the
+Bandwidth-Delay Product (BDP) of your network while keeping memory usage
+under control.</p>
+<hr />
+<h3 id="recommended-kernel-parameters">Recommended Kernel
+Parameters</h3>
+<p>Add or update the following parameters in
+<code>/etc/sysctl.conf</code> or a dedicated
+<code>/etc/sysctl.d/99-memcached.conf</code> file:</p>
+<h4 id="1-enable-tcp-window-scaling">1. Enable TCP Window Scaling</h4>
+<p>TCP window scaling is required to support window sizes greater than
+64 KB, which is essential for high-throughput connections.</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="dt">net.ipv4.tcp_window_scaling </span><span class="ot">=</span><span class="st"> </span><span class="dv">1</span></span></code></pre></div>
+<h4 id="2-maximum-core-socket-buffers">2. Maximum Core Socket
+Buffers</h4>
+<p>These parameters set the hard ceiling for OS-level socket buffer
+allocations across all protocols.</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">net.core.rmem_max </span><span class="ot">=</span><span class="st"> </span><span class="dv">16777216</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">net.core.wmem_max </span><span class="ot">=</span><span class="st"> </span><span class="dv">16777216</span></span></code></pre></div>
+<ul>
+<li><strong>Recommended value:</strong> <code>16777216</code> (16 MB) is
+suitable for 10 GbE networks. For 25 GbE or 40 GbE networks, increase
+this to <code>33554432</code> (32 MB).</li>
+</ul>
+<h4 id="3-default-core-socket-buffers">3. Default Core Socket
+Buffers</h4>
+<p>These settings define the initial buffer allocation for sockets
+before TCP autotuning overrides them.</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dt">net.core.rmem_default </span><span class="ot">=</span><span class="st"> </span><span class="dv">262144</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">net.core.wmem_default </span><span class="ot">=</span><span class="st"> </span><span class="dv">262144</span></span></code></pre></div>
+<ul>
+<li><strong>Recommended value:</strong> <code>262144</code> (256 KB)
+ensures connections begin with sufficient buffer space for rapid burst
+handling.</li>
+</ul>
+<h4 id="4-tcp-read-and-write-buffer-autotuning">4. TCP Read and Write
+Buffer Autotuning</h4>
+<p>The Linux kernel uses dynamic buffer autotuning defined by three
+values: <code>min</code>, <code>default</code>, and <code>max</code> (in
+bytes).</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">net.ipv4.tcp_rmem </span><span class="ot">=</span><span class="st"> 4096 87380 16777216</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">net.ipv4.tcp_wmem </span><span class="ot">=</span><span class="st"> 4096 65536 16777216</span></span></code></pre></div>
+<ul>
+<li><strong>Min (<code>4096</code>):</strong> The minimum buffer size
+allocated per socket under low memory conditions.</li>
+<li><strong>Default (<code>87380</code> / <code>65536</code>):</strong>
+The initial receive/send buffer allocated to new connections.</li>
+<li><strong>Max (<code>16777216</code>):</strong> The upper ceiling to
+which the TCP window can dynamically expand. This must match or be lower
+than <code>net.core.rmem_max</code> and
+<code>net.core.wmem_max</code>.</li>
+</ul>
+<hr />
+<h3 id="supporting-connection-parameters">Supporting Connection
+Parameters</h3>
+<p>To prevent buffer queue drops when clients aggressively connect to
+Memcached, align the network backlog parameters with your window
+settings:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">net.core.somaxconn </span><span class="ot">=</span><span class="st"> </span><span class="dv">65535</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">net.core.netdev_max_backlog </span><span class="ot">=</span><span class="st"> </span><span class="dv">10000</span></span></code></pre></div>
+<ul>
+<li><strong><code>net.core.somaxconn</code>:</strong> Increases the
+socket listen backlog ceiling from the standard default (often 128 or
+1024) to handle bursts of concurrent connection requests.</li>
+<li><strong><code>net.core.netdev_max_backlog</code>:</strong> Increases
+the maximum number of packets queued on the input interface before
+processing.</li>
+</ul>
+<hr />
+<h3 id="applying-the-changes">Applying the Changes</h3>
+<p>To load the updated kernel parameters immediately without rebooting,
+run:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> sysctl <span class="at">-p</span> /etc/sysctl.d/99-memcached.conf</span></code></pre></div>
+<p>Verify that the changes are active using:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">sysctl</span> net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.rmem_max net.core.wmem_max</span></code></pre></div>
+<h3 id="memory-considerations">Memory Considerations</h3>
+<p>When configuring these maximums, calculate the worst-case memory
+consumption:
+<code>Max Connections × (tcp_rmem[max] + tcp_wmem[max])</code>. If
+Memcached maintains 10,000 persistent connections, dynamically scaling
+all sockets to maximum capacity can consume significant system RAM.
+Ensure your server has sufficient RAM to avoid triggering the kernel's
+Out-Of-Memory (OOM) killer.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-tcp-window-size-kernel-parameters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Eviction When All Keys Are Unexpired - memcached</title>
+    <meta name="description" content="When Memcached reaches its memory limit and receives a new item, it frees space by running its Least Recently Used (LRU) eviction process within the specific slab class required by the new item. Even if every entry stored across all slab classes has an ac">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-eviction-when-all-keys-are-unexpired">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Eviction When All Keys Are Unexpired - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-eviction-when-all-keys-are-unexpired" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When Memcached reaches its memory limit and receives a new item, it frees space by running its Least Recently Used (LRU) eviction process within the specific slab class required by the new item. Even if every entry stored across all slab classes has an ac" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-eviction-when-all-keys-are-unexpired">Memcached
+Eviction When All Keys Are Unexpired</h1>
+<p>When Memcached reaches its memory limit and receives a new item, it
+frees space by running its Least Recently Used (LRU) eviction process
+within the specific slab class required by the new item. Even if every
+entry stored across all slab classes has an active, unexpired
+Time-To-Live (TTL), Memcached will forcibly evict the least recently
+accessed valid items rather than reject the incoming write, unless
+specifically configured to return an error.</p>
+<h2 id="slab-allocation-and-eviction-scope">Slab Allocation and Eviction
+Scope</h2>
+<p>Memcached allocates memory using a slab allocator, dividing total
+memory into 1MB pages assigned to different slab classes based on item
+size. Memory is not dynamically pooled as a single global block during
+runtime.</p>
+<p>When a write operation arrives:</p>
+<ol type="1">
+<li>Memcached identifies the appropriate slab class matching the item's
+byte size.</li>
+<li>If the slab class has free chunks or if total server memory has room
+to allocate a new 1MB page to this slab class, it stores the item
+without eviction.</li>
+<li>If the slab class is entirely full and the global memory ceiling is
+reached, Memcached restricts its search for space strictly to that
+specific slab class. It will not evict unexpired keys from other slab
+classes to make room, even if those other classes contain older
+data.</li>
+</ol>
+<h2 id="the-segmented-lru-workflow">The Segmented LRU Workflow</h2>
+<p>Modern versions of Memcached use a Segmented LRU architecture to
+manage keys, splitting items into different queues: <code>HOT</code>,
+<code>WARM</code>, and <code>COLD</code>.</p>
+<p>When an eviction must occur among unexpired entries:</p>
+<ul>
+<li><strong>Targeting the COLD Queue:</strong> Items naturally migrate
+from <code>HOT</code> or <code>WARM</code> down to the <code>COLD</code>
+queue as they remain unread. Evictions exclusively target the tail of
+the <code>COLD</code> LRU.</li>
+<li><strong>Overriding TTL:</strong> Expiration timestamps are ignored
+during eviction. The oldest item at the tail of the <code>COLD</code>
+queue is freed, its memory is reclaimed for the incoming key, and the
+internal <code>evictions</code> counter is incremented.</li>
+<li><strong>Slab Automove:</strong> If slab automove
+(<code>-o slab_automove</code>) is enabled, background threads monitor
+eviction rates. If a slab class constantly evicts active items while
+another slab class holds idle pages, Memcached attempts to reassign
+entire pages between classes. However, this is a background
+optimization; immediate writes still evict from the local slab class
+tail if no free chunk exists.</li>
+</ul>
+<h2 id="the--m-flag-exception">The <code>-M</code> Flag Exception</h2>
+<p>The standard behavior of evicting unexpired keys can be disabled
+using the <code>-M</code> runtime flag (or
+<code>-o modern,no_lru_crawler</code>).</p>
+<p>When Memcached runs with the <code>-M</code> flag:</p>
+<ul>
+<li>Automatic eviction of unexpired keys is disabled.</li>
+<li>If a slab class is full, memory is exhausted, and no expired items
+exist to clean up, Memcached refuses the write operation.</li>
+<li>The server returns an out-of-memory error
+(<code>SERVER_ERROR out of memory storing object</code>) to the
+client.</li>
+</ul>
+<h2 id="monitoring-evictions-of-valid-keys">Monitoring Evictions of
+Valid Keys</h2>
+<p>To detect whether active, unexpired keys are being dropped, examine
+Memcached runtime statistics using the <code>stats</code> command:</p>
+<ul>
+<li><code>evictions</code>: Tracks the cumulative number of valid,
+unexpired items removed to make space for new writes.</li>
+<li><code>reclaimed</code>: Shows how often an expired item was found
+and reused before needing to trigger a forced eviction.</li>
+<li><code>crawler_reclaimed</code>: Shows background cleanup of expired
+items by the LRU crawler.</li>
+</ul>
+<p>A steadily rising <code>evictions</code> count alongside zero or low
+numbers of expired keys confirms that the memory allocated to your slab
+classes is insufficient for your working set size.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-eviction-when-all-keys-are-unexpired';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

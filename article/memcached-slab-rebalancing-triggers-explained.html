@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Slab Rebalancing Triggers Explained - memcached</title>
+    <meta name="description" content="Memcached manages memory through a slab allocation system, dividing memory into 1MB pages dedicated to specific item size classes. In modern Memcached, moving a slab page from one class to another—a process known as slab rebalancing or reassignment—preven">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-slab-rebalancing-triggers-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Slab Rebalancing Triggers Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-slab-rebalancing-triggers-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached manages memory through a slab allocation system, dividing memory into 1MB pages dedicated to specific item size classes. In modern Memcached, moving a slab page from one class to another—a process known as slab rebalancing or reassignment—preven" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-slab-rebalancing-triggers-explained">Memcached Slab
+Rebalancing Triggers Explained</h1>
+<p>Memcached manages memory through a slab allocation system, dividing
+memory into 1MB pages dedicated to specific item size classes. In modern
+Memcached, moving a slab page from one class to another—a process known
+as slab rebalancing or reassignment—prevents memory calcification where
+memory is permanently locked into underutilized sizes. This page
+movement is triggered either manually via administrative commands or
+automatically by the background automove thread when it detects
+persistent memory pressure imbalances between different slab
+classes.</p>
+<h3 id="manual-rebalancing">Manual Rebalancing</h3>
+<p>The most direct trigger is administrative intervention. An operator
+can initiate a page move via the administrative interface using the
+<code>slabs reassign &lt;source class&gt; &lt;destination class&gt;</code>
+command. When issued, the slab rebalancer thread unlinks a 1MB page from
+the donor slab class, evicts or migrates any existing items on that
+page, and attaches the blank memory page to the receiving class to
+accommodate its workload.</p>
+<h3 id="automatic-rebalancing-slab-automove">Automatic Rebalancing (Slab
+Automove)</h3>
+<p>Modern Memcached handles slab migration autonomously when started
+with the <code>-o slab_automove</code> option. The internal slab
+automove thread periodically samples operational statistics (typically
+once per second) and triggers a migration when specific behavioral
+thresholds are met.</p>
+<p>The primary triggers for automated movement include:</p>
+<ul>
+<li><strong>Persistent Eviction Pressure in the Target Slab:</strong>
+The receiving slab class must be actively evicting items due to memory
+exhaustion. If a class continuously evicts items over multiple
+consecutive sampling windows (historically three windows), it becomes
+flagged as a target requiring additional pages.</li>
+<li><strong>Idle or Free Pages in the Donor Slab:</strong> For a donor
+to release a page, it must have surplus memory. The standard algorithm
+identifies classes with fully empty pages or classes that have
+experienced zero allocations over the observation period, ensuring that
+active traffic is not destabilized.</li>
+<li><strong>LRU Tail Age Disparities (Modern LRU Automove):</strong> In
+advanced configurations (<code>slab_automove=2</code> or using the
+modern segmented LRU system), the trigger relies on the relative "age"
+of items at the tails of the respective Least Recently Used (LRU)
+queues. If class A is evicting items that were created or accessed
+recently (a "hot" tail with a very low age), while class B holds items
+that have remained untouched for an excessively long time (a "cold" tail
+with a high age), the automover triggers a transfer. This shifts memory
+from slabs holding stale data to slabs experiencing high eviction rates
+for newer data.</li>
+<li><strong>Windowed Stability Validation:</strong> To prevent "page
+thrashing"—where a page rapidly bounces between classes during transient
+traffic spikes—the automove algorithm enforces a stabilization window.
+The observed conditions (such as low tail age in one class and surplus
+memory in another) must remain consistent over multiple evaluation
+cycles before the engine marks the trigger criteria as met and initiates
+the physical page transfer.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-slab-rebalancing-triggers-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

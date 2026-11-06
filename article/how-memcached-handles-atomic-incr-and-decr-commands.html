@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Atomic Incr and Decr Commands - memcached</title>
+    <meta name="description" content="Memcached executes atomic increment (incr) and decrement (decr) commands by parsing existing string values into 64-bit unsigned integers, modifying them directly in memory, and securing the operation with item-level locks. This article breaks down how the">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-atomic-incr-and-decr-commands">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Atomic Incr and Decr Commands - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-atomic-incr-and-decr-commands" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached executes atomic increment (incr) and decrement (decr) commands by parsing existing string values into 64-bit unsigned integers, modifying them directly in memory, and securing the operation with item-level locks. This article breaks down how the" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-atomic-incr-and-decr-commands">How
+Memcached Handles Atomic Incr and Decr Commands</h1>
+<p>Memcached executes atomic increment (<code>incr</code>) and decrement
+(<code>decr</code>) commands by parsing existing string values into
+64-bit unsigned integers, modifying them directly in memory, and
+securing the operation with item-level locks. This article breaks down
+how the server processes these requests, manages thread synchronization
+to prevent race conditions, handles boundary limits like underflow, and
+writes the updated values back to its internal storage engine.</p>
+<h3 id="data-representation-and-validation">Data Representation and
+Validation</h3>
+<p>Memcached stores all key-value payloads as raw byte arrays without
+native numerical data types. When an <code>incr</code> or
+<code>decr</code> command is received, Memcached locates the target item
+and inspects its payload.</p>
+<ol type="1">
+<li><strong>Existence Check</strong>: The key must already exist. In the
+standard text protocol, applying an increment or decrement to a
+non-existent key fails and returns a <code>NOT_FOUND</code> error.</li>
+<li><strong>Format Validation</strong>: The existing payload must
+represent a valid decimal number. Memcached reads the ASCII string and
+converts it into a native C <code>uint64_t</code> (an unsigned 64-bit
+integer). If the value contains non-numeric characters, the operation
+aborts with a client error.</li>
+</ol>
+<h3 id="concurrency-and-item-level-locking">Concurrency and Item-Level
+Locking</h3>
+<p>Atomicity is maintained through Memcached’s multi-threaded
+concurrency model:</p>
+<ul>
+<li><strong>Hash Bucket and Item Locks</strong>: Memcached divides its
+internal hash table into buckets protected by fine-grained locks. When a
+worker thread processes an <code>incr</code> or <code>decr</code>
+command, it computes the hash of the key and acquires the specific lock
+associated with that key's item or hash bucket.</li>
+<li><strong>Mutual Exclusion</strong>: While this lock is held, no other
+worker thread can read, write, or modify that key. This completely
+prevents read-modify-write race conditions, ensuring that concurrent
+operations execute sequentially without the client needing external
+distributed locks.</li>
+</ul>
+<h3 id="arithmetic-execution-and-edge-cases">Arithmetic Execution and
+Edge Cases</h3>
+<p>Once the current value is converted to a 64-bit unsigned integer,
+Memcached applies the specified delta:</p>
+<ul>
+<li><strong>Increment Behavior</strong>: Memcached adds the delta to the
+integer. If the addition exceeds the maximum 64-bit unsigned integer
+value (<span class="math inline">\(2^{64} - 1\)</span>, or
+<code>18,446,744,073,709,551,615</code>), the value wraps around
+starting from <code>0</code>.</li>
+<li><strong>Decrement Behavior</strong>: Memcached subtracts the delta
+from the integer. Unlike standard unsigned integer overflow, Memcached
+enforces a lower bound: if the decrement delta is greater than the
+current value, the result halts at <code>0</code> rather than wrapping
+around to the maximum unsigned integer.</li>
+</ul>
+<h3 id="in-memory-modification-and-response">In-Memory Modification and
+Response</h3>
+<p>After computing the result, Memcached converts the 64-bit integer
+back into a decimal ASCII string:</p>
+<ul>
+<li><strong>In-Place Updates</strong>: If the length of the new string
+is less than or equal to the character length of the original string,
+Memcached rewrites the bytes directly into the existing memory
+allocation and updates the item's internal size metadata.</li>
+<li><strong>Reallocation</strong>: If the resulting string requires more
+bytes than the original payload and exceeds the item's current slab
+allocation, Memcached allocates a new item chunk from its slab
+allocator, writes the new value, links it into the hash table, and
+unlinks the old item.</li>
+<li><strong>Lock Release</strong>: The item lock is released, and the
+server returns the updated numeric value to the client as an ASCII
+string or a 64-bit binary integer, depending on whether the text or
+binary protocol is used.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-atomic-incr-and-decr-commands';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

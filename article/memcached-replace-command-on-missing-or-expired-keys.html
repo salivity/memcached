@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Replace Command on Missing or Expired Keys - memcached</title>
+    <meta name="description" content="The Memcached replace command is a conditional storage operation designed to update the value of an existing key without risking accidental creation of new data. When executed against a key that is either completely missing from the cache or has surpassed">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-replace-command-on-missing-or-expired-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Replace Command on Missing or Expired Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-replace-command-on-missing-or-expired-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The Memcached replace command is a conditional storage operation designed to update the value of an existing key without risking accidental creation of new data. When executed against a key that is either completely missing from the cache or has surpassed" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-replace-command-on-missing-or-expired-keys">Memcached
+Replace Command on Missing or Expired Keys</h1>
+<p>The Memcached <code>replace</code> command is a conditional storage
+operation designed to update the value of an existing key without
+risking accidental creation of new data. When executed against a key
+that is either completely missing from the cache or has surpassed its
+expiration time (TTL), Memcached rejects the operation and returns a
+<code>NOT_STORED</code> response. This article examines the internal
+mechanics of how Memcached evaluates missing and expired keys during a
+<code>replace</code> operation, the role of lazy expiration, and how
+developers should handle these outcomes.</p>
+<h2 id="understanding-the-replace-command">Understanding the Replace
+Command</h2>
+<p>In Memcached, storage commands behave according to strict state
+conditions. The standard syntax for the command is:</p>
+<pre class="text"><code>replace &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n
+&lt;data&gt;\r\n</code></pre>
+<p>Unlike the general <code>set</code> command (which creates or
+overwrites a key unconditionally) or the <code>add</code> command (which
+only writes if the key does not exist), <code>replace</code> requires
+the key to already exist in active memory.</p>
+<h2 id="behavior-on-a-missing-key">Behavior on a Missing Key</h2>
+<p>When a client issues a <code>replace</code> command for a key that
+does not exist in the hash table:</p>
+<ol type="1">
+<li><strong>Hash Lookup:</strong> Memcached hashes the key and searches
+its internal hash table for the item.</li>
+<li><strong>Item Check:</strong> The lookup returns a null pointer
+because the key has never been stored, was explicitly deleted, or was
+previously evicted due to memory pressure.</li>
+<li><strong>Rejection:</strong> Because the precondition of existence
+fails, Memcached terminates the write operation immediately. It does not
+allocate slab memory or store the payload.</li>
+<li><strong>Response:</strong> The server returns
+<code>NOT_STORED</code> to indicate that the update was aborted (unless
+the <code>noreply</code> flag was passed, in which case nothing is
+returned).</li>
+</ol>
+<h2 id="behavior-on-an-expired-key">Behavior on an Expired Key</h2>
+<p>Memcached primarily utilizes a mechanism known as <strong>lazy
+expiration</strong> (or lazy eviction). Expired items are not constantly
+scanned and removed in the background; instead, their expiration is
+evaluated when the key is accessed.</p>
+<p>When the <code>replace</code> command targets an expired key:</p>
+<ol type="1">
+<li><strong>Hash Lookup:</strong> Memcached finds the item in the hash
+table.</li>
+<li><strong>Expiration Evaluation:</strong> Before performing the write,
+Memcached compares the item's stored expiration timestamp against the
+current server time.</li>
+<li><strong>Item Invalidation:</strong> Because the current time exceeds
+the expiration timestamp, Memcached marks the item as dead. It frees the
+associated memory chunk, removes the item from the LRU (Least Recently
+Used) list, and updates internal statistics.</li>
+<li><strong>Treatment as Missing:</strong> Once invalidated, the key is
+treated as completely non-existent.</li>
+<li><strong>Rejection:</strong> Because the key is now recognized as
+missing, the precondition for <code>replace</code> fails.</li>
+<li><strong>Response:</strong> Memcached does not write the new value
+and returns <code>NOT_STORED</code>.</li>
+</ol>
+<h2 id="practical-implications-for-developers">Practical Implications
+for Developers</h2>
+<ul>
+<li><strong>Error Handling:</strong> Applications should not treat
+<code>NOT_STORED</code> from a <code>replace</code> call as a system
+failure. It usually indicates a normal cache miss or expiration
+event.</li>
+<li><strong>Fallbacks:</strong> If data persistence is required
+regardless of cache state, the application logic should catch the
+<code>NOT_STORED</code> response and fall back to either fetching the
+source data from the primary database or using a standard
+<code>set</code> command.</li>
+<li><strong>Concurrency and Race Conditions:</strong> The
+<code>replace</code> command is not an atomic compare-and-swap mechanism
+for data integrity. If two clients attempt to update the same key, both
+operations may succeed sequentially. If concurrent update protection is
+required, use the <code>cas</code> (Check-And-Set) command instead.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-replace-command-on-missing-or-expired-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

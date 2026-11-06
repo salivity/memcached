@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Binary Keys vs String Keys - memcached</title>
+    <meta name="description" content="Memcached supports both standard string keys and arbitrary binary keys, handling their validation at the protocol level while unifying their storage in the internal caching engine. While standard string keys processed through the text protocol face strict">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-binary-keys-vs-string-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Binary Keys vs String Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-binary-keys-vs-string-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached supports both standard string keys and arbitrary binary keys, handling their validation at the protocol level while unifying their storage in the internal caching engine. While standard string keys processed through the text protocol face strict" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-binary-keys-vs-string-keys">How Memcached
+Handles Binary Keys vs String Keys</h1>
+<p>Memcached supports both standard string keys and arbitrary binary
+keys, handling their validation at the protocol level while unifying
+their storage in the internal caching engine. While standard string keys
+processed through the text protocol face strict character-set and
+whitespace restrictions, binary keys transmitted via the binary protocol
+allow arbitrary byte sequences. This article breaks down how Memcached
+parses, validates, and stores both key formats, detailing the
+operational differences between the text and binary protocols and
+explaining their shared underlying memory architecture.</p>
+<h2 id="protocol-level-validation">Protocol-Level Validation</h2>
+<p>Validation occurs primarily during protocol parsing before any memory
+allocation or cache lookup takes place. Memcached implements two
+distinct interfaces: the ASCII (text) protocol and the binary
+protocol.</p>
+<h3 id="standard-string-keys-ascii-protocol">Standard String Keys (ASCII
+Protocol)</h3>
+<p>When a client uses the standard text protocol, keys are treated
+strictly as printable strings:</p>
+<ul>
+<li><strong>Character Restrictions:</strong> Keys cannot contain control
+characters, whitespace, carriage returns (<code>\r</code>), or newlines
+(<code>\n</code>). A space is treated as a delimiter separating the key
+from flags, expiration times, and byte counts.</li>
+<li><strong>Length Limits:</strong> By default, string keys are limited
+to 250 characters (<code>KEY_MAX_LENGTH</code>).</li>
+<li><strong>Validation Mechanism:</strong> The server parses incoming
+command lines sequentially. If it encounters a byte value less than or
+equal to <code>0x20</code> (space or control character) within the key
+segment, the command fails with a client error.</li>
+</ul>
+<h3 id="binary-data-keys-binary-protocol">Binary Data Keys (Binary
+Protocol)</h3>
+<p>The binary protocol removes text-parsing ambiguities by using
+structured packet headers:</p>
+<ul>
+<li><strong>Character Neutrality:</strong> Keys can consist of any
+arbitrary sequence of bytes, including null bytes (<code>\x00</code>),
+spaces, control characters, or serialized object data.</li>
+<li><strong>Length Specification:</strong> Instead of using delimiters
+to find the end of a key, the packet header includes a dedicated 16-bit
+field defining the explicit key length in bytes.</li>
+<li><strong>Length Limits:</strong> While the 16-bit header field
+theoretically supports keys up to 65,535 bytes, Memcached enforces the
+server-side <code>KEY_MAX_LENGTH</code> limit (250 bytes by default)
+unless altered at compile time.</li>
+<li><strong>Validation Mechanism:</strong> The server verifies that the
+key length field matches the payload size indicated in the frame.
+Validation checks only that the key length falls within the permitted
+bound; it does not inspect or restrict the underlying byte values.</li>
+</ul>
+<h2 id="internal-storage-architecture">Internal Storage
+Architecture</h2>
+<p>Once validated, Memcached makes no architectural distinction between
+a standard string key and a binary key. Both are handled as raw byte
+sequences in the core engine.</p>
+<h3 id="the-item-structure">The Item Structure</h3>
+<p>Memcached stores data inside slab-allocated structures called
+<code>item</code>. Each <code>item</code> contains metadata followed by
+the contiguous payload:</p>
+<ol type="1">
+<li><strong>Metadata Header:</strong> Stores pointers for hash bucket
+chaining, LRU lists, reference counters, flags, expiration time, and the
+explicit key length (<code>nkey</code>).</li>
+<li><strong>Key Storage:</strong> The key's raw bytes are copied
+directly into the memory block immediately following the metadata.</li>
+<li><strong>Value Storage:</strong> The associated data payload follows
+immediately after the key.</li>
+</ol>
+<p>Because the <code>nkey</code> field explicitly tracks the exact byte
+count, the internal engine never relies on null-termination
+(<code>\0</code>) to determine where a key ends. Consequently, null
+bytes embedded inside a binary key do not truncate the key or corrupt
+memory.</p>
+<h3 id="hashing-and-lookups">Hashing and Lookups</h3>
+<p>Cache lookups operate identically for both string and binary
+keys:</p>
+<ul>
+<li><strong>Hash Computation:</strong> Memcached passes the pointer to
+the key's memory and its <code>nkey</code> length to the internal
+hashing function (typically Murmur3 or Jenkins hash). The hashing
+algorithm processes raw bytes regardless of encoding.</li>
+<li><strong>Collision Resolution:</strong> When matching keys during a
+hash table lookup, Memcached performs a length comparison first,
+followed by a raw memory comparison (<code>memcmp</code>). It does not
+use string comparison functions like <code>strcmp</code>.</li>
+</ul>
+<h2 id="summary-of-differences">Summary of Differences</h2>
+<ul>
+<li><strong>Encoding:</strong> String keys require standard text
+representations without whitespace; binary keys accept arbitrary byte
+streams.</li>
+<li><strong>Parsing:</strong> String keys rely on text delimiters and
+fail upon encountering control bytes; binary keys rely on fixed-width
+header fields.</li>
+<li><strong>Storage Engine:</strong> Both formats are stored identically
+as length-prefixed raw byte arrays within slab-allocated items.</li>
+<li><strong>Lookups:</strong> Hash generation and equality checks treat
+both key types as raw binary blobs using length-bounded memory
+comparisons.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-binary-keys-vs-string-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

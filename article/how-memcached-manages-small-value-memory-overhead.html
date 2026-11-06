@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Manages Small Value Memory Overhead - memcached</title>
+    <meta name="description" content="Storing values under 100 bytes in Memcached presents a unique challenge where internal metadata and memory fragmentation can significantly exceed the size of the cached data itself. This article explains how Memcached’s slab allocation architecture handle">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-manages-small-value-memory-overhead">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Manages Small Value Memory Overhead - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-manages-small-value-memory-overhead" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Storing values under 100 bytes in Memcached presents a unique challenge where internal metadata and memory fragmentation can significantly exceed the size of the cached data itself. This article explains how Memcached’s slab allocation architecture handle" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-manages-small-value-memory-overhead">How Memcached
+Manages Small Value Memory Overhead</h1>
+<p>Storing values under 100 bytes in Memcached presents a unique
+challenge where internal metadata and memory fragmentation can
+significantly exceed the size of the cached data itself. This article
+explains how Memcached’s slab allocation architecture handles small
+items, the exact sources of memory overhead involved, and the
+configuration strategies used to minimize wasted memory.</p>
+<h2 id="the-slab-allocation-engine">The Slab Allocation Engine</h2>
+<p>Memcached avoids operating system-level memory fragmentation by using
+a slab allocator. When Memcached starts, it reserves memory in large
+contiguous blocks (typically 1 MB pages) and slices them into smaller,
+fixed-size chunks grouped into "slab classes."</p>
+<p>When an item is stored, Memcached determines the total byte size
+required—including internal metadata, the key, and the value—and assigns
+it to the smallest available slab class that can accommodate that total
+size. Once an item is placed in a chunk, that chunk cannot be
+resized.</p>
+<h2 id="sources-of-overhead-for-sub-100-byte-values">Sources of Overhead
+for Sub-100-Byte Values</h2>
+<p>When storing a payload under 100 bytes, the actual data often
+represents less than half of the total memory consumed. The overhead
+stems from two primary areas:</p>
+<h3 id="1-internal-item-metadata">1. Internal Item Metadata</h3>
+<p>Every cached entry requires an internal structure (an
+<code>item</code> header) to manage its lifecycle. On a 64-bit
+architecture, this structure consumes roughly 48 to 56 bytes. It stores
+critical runtime data, including:</p>
+<ul>
+<li>Pointers for the Least Recently Used (LRU) doubly linked list</li>
+<li>Pointers for the hash table bucket chains</li>
+<li>Expiration timestamps and access flags</li>
+<li>Key length and value length</li>
+<li>Optional CAS (Check-And-Set) identifiers (typically an additional 8
+bytes)</li>
+</ul>
+<p>If a user stores a 20-byte value with a 15-byte key, the item header
+adds approximately 48 bytes, resulting in a total footprint of at least
+83 bytes before slab assignment.</p>
+<h3 id="2-internal-fragmentation-slack-space">2. Internal Fragmentation
+(Slack Space)</h3>
+<p>Slab classes increase in size geometrically. If the smallest
+available chunk in a slab class is 120 bytes, and an item requires 85
+bytes total (metadata + key + value), the remaining 35 bytes inside that
+chunk remain unused. This unused space is referred to as internal
+fragmentation or slack space. For small values, this percentage of
+wasted space can be substantial.</p>
+<h2
+id="configuration-strategies-to-reduce-small-item-overhead">Configuration
+Strategies to Reduce Small Item Overhead</h2>
+<p>Memcached provides startup parameters specifically designed to
+fine-tune chunk allocation and reduce memory overhead for small
+payloads.</p>
+<h3 id="adjusting-the-minimum-chunk-size--n">Adjusting the Minimum Chunk
+Size (<code>-n</code>)</h3>
+<p>The <code>-n</code> (or <code>--min-item-size</code>) flag sets the
+minimum allocated space for the smallest slab class key, value, and
+flags. The default value is typically 48 bytes. If your keys and values
+are consistently tiny, ensure this value is set low enough so the
+initial slab class does not allocate unnecessary baseline padding.</p>
+<h3 id="lowering-the-growth-factor--f">Lowering the Growth Factor
+(<code>-f</code>)</h3>
+<p>By default, Memcached scales slab class chunk sizes by a factor of
+1.25 (<code>-f 1.25</code>), meaning each successive slab class is 25%
+larger than the previous one.</p>
+<p>For small values, a 25% jump creates wide gaps between classes.
+Reducing the factor to <code>1.05</code> or <code>1.1</code> forces
+Memcached to create more granular slab classes with smaller size
+increments. This drastically reduces internal fragmentation by ensuring
+that small items fit into chunks that closely match their exact byte
+footprint.</p>
+<h3 id="disabling-cas--c">Disabling CAS (<code>-C</code>)</h3>
+<p>If your application does not rely on atomic compare-and-swap
+operations, you can run Memcached with the <code>-C</code> flag.
+Disabling CAS removes the 8-byte CAS identifier from every item header,
+immediately recovering 8 bytes of overhead per item across millions of
+cached keys.</p>
+<h2 id="application-level-optimization">Application-Level
+Optimization</h2>
+<p>Because the per-item metadata is relatively fixed, storing millions
+of individual values under 100 bytes individually is rarely the most
+memory-efficient approach. Applications handling high volumes of tiny
+records often mitigate overhead by packing multiple related key-value
+pairs into a single structured payload (such as a compressed binary
+format, MessagePack, or Protocol Buffers) before writing to Memcached.
+Packing allows multiple values to share a single item header and hash
+table entry, significantly lowering the overhead-to-data ratio.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-manages-small-value-memory-overhead';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

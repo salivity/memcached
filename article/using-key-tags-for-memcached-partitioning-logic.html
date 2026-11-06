@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Using Key Tags for Memcached Partitioning Logic - memcached</title>
+    <meta name="description" content="Key tags, or hash tags, are specific substrings embedded within cache keys that dictate how a custom partitioning algorithm distributes data across a Memcached cluster. Instead of hashing the entire key to determine node placement, the hashing algorithm e">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/using-key-tags-for-memcached-partitioning-logic">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Using Key Tags for Memcached Partitioning Logic - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/using-key-tags-for-memcached-partitioning-logic" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Key tags, or hash tags, are specific substrings embedded within cache keys that dictate how a custom partitioning algorithm distributes data across a Memcached cluster. Instead of hashing the entire key to determine node placement, the hashing algorithm e" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="using-key-tags-for-memcached-partitioning-logic">Using Key Tags
+for Memcached Partitioning Logic</h1>
+<p>Key tags, or hash tags, are specific substrings embedded within cache
+keys that dictate how a custom partitioning algorithm distributes data
+across a Memcached cluster. Instead of hashing the entire key to
+determine node placement, the hashing algorithm evaluates only the
+tagged portion, ensuring that all keys sharing the same tag are routed
+to the exact same server instance. This mechanism solves data scattering
+issues, accelerates batch retrieval performance, and optimizes network
+overhead in distributed caching architectures.</p>
+<h3 id="the-problem-with-standard-partitioning">The Problem with
+Standard Partitioning</h3>
+<p>In standard distributed Memcached deployments, client libraries use
+consistent hashing algorithms (such as Ketama) applied to the entire key
+string to distribute data evenly across a pool of servers. While this
+maximizes memory distribution and balances server load, it isolates
+logically related data.</p>
+<p>For instance, retrieving a user profile, account settings, and
+activity logs requires querying three different keys. Under default
+hashing, these three keys inevitably scatter across three separate
+Memcached nodes. Fetching them via a multi-get operation
+(<code>getMulti</code>) results in concurrent network requests to
+multiple servers, introducing network latency, socket contention, and
+scatter-gather processing overhead.</p>
+<h3 id="how-key-tags-function">How Key Tags Function</h3>
+<p>Key tags introduce a deterministic syntax—frequently curly braces
+<code>{}</code> or specific delimiters like colons or pipes—within the
+key name.</p>
+<p>When a Memcached client hashes a key:</p>
+<ol type="1">
+<li>It scans the key for the designated tag pattern (e.g.,
+<code>{user:1042}:profile</code> and
+<code>{user:1042}:preferences</code>).</li>
+<li>It extracts only the substring inside the tag
+(<code>user:1042</code>).</li>
+<li>It passes that extracted substring through the hashing function to
+determine the target node.</li>
+<li>The key-value pair is written to that target node using the full key
+name to maintain uniqueness.</li>
+</ol>
+<p>Because the hashing input is identical for any key containing
+<code>{user:1042}</code>, every related key is routed to the exact same
+physical node.</p>
+<h3 id="core-objectives-of-using-key-tags">Core Objectives of Using Key
+Tags</h3>
+<ul>
+<li><strong>Optimizing Multi-Key Operations:</strong> When performing
+multi-get requests for an entity's composite data, the client sends a
+single network packet to one Memcached instance rather than dispatching
+parallel requests across the entire fleet. This significantly reduces
+round-trip times (RTT) and overall tail latency.</li>
+<li><strong>Minimizing Network Fan-Out:</strong> High-concurrency
+applications running large batch requests can quickly exhaust network
+bandwidth and connection pools if each request fans out to dozens of
+nodes. Key tags confine queries for related data to a single socket
+connection.</li>
+<li><strong>Atomic Pipeline Execution:</strong> While Memcached does not
+support multi-key ACID transactions, keeping related keys on the same
+server allows for more efficient batching, binary protocol pipelining,
+and synchronized cache warming.</li>
+</ul>
+<h3 id="important-architectural-considerations">Important Architectural
+Considerations</h3>
+<p>While key tags provide direct control over data locality, they bypass
+pure uniform distribution. If a single key tag is assigned to a
+disproportionately large set of keys or receives an extreme volume of
+read/write traffic, the target node can experience skewed memory
+consumption or CPU bottlenecks (a "hot-key" or "hot-shard" problem).
+Custom partitioning implementations must ensure that tag granularities
+are sufficiently fine—such as individual tenant or user IDs rather than
+broad categorical names—to maintain balanced cluster utilization.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/using-key-tags-for-memcached-partitioning-logic';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

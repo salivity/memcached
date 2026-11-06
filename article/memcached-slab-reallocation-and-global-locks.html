@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Slab Reallocation and Global Locks - memcached</title>
+    <meta name="description" content="This article explores how Memcached manages locking mechanisms during dynamic memory reallocation between slab classes. It details how the engine decouples memory reassignment from active client traffic using a dedicated background thread, fine-grained lo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-slab-reallocation-and-global-locks">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Slab Reallocation and Global Locks - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-slab-reallocation-and-global-locks" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how Memcached manages locking mechanisms during dynamic memory reallocation between slab classes. It details how the engine decouples memory reassignment from active client traffic using a dedicated background thread, fine-grained lo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-slab-reallocation-and-global-locks">Memcached Slab
+Reallocation and Global Locks</h1>
+<p>This article explores how Memcached manages locking mechanisms during
+dynamic memory reallocation between slab classes. It details how the
+engine decouples memory reassignment from active client traffic using a
+dedicated background thread, fine-grained locking, and an asynchronous
+state machine to eliminate broad global lock contention and prevent
+system-wide latency spikes.</p>
+<h3 id="the-role-of-the-dedicated-rebalancer-thread">The Role of the
+Dedicated Rebalancer Thread</h3>
+<p>Memcached avoids running memory page reallocation directly inside
+worker threads handling incoming client requests. Instead, memory
+reallocation across slab classes is delegated to a separate,
+asynchronous background thread known as the slab rebalancer thread.</p>
+<p>When a slab class requires more memory and dynamic reassignment is
+triggered—either manually or through the automated slab automover—the
+worker threads flag the request and alert the rebalancer thread via
+condition signaling. Because the reallocation logic runs on this
+isolated thread, the engine avoids stalling client operations with
+inline garbage collection or synchronous memory reorganization.</p>
+<h3 id="eliminating-monolithic-global-locks">Eliminating Monolithic
+Global Locks</h3>
+<p>Older versions of caching engines relied on a coarse, global cache
+lock that serialized all operations during structural memory changes.
+Modern Memcached architecture replaces broad global locks with
+fine-grained, segmented locks:</p>
+<ul>
+<li><strong>Item Locks:</strong> The item hash table is split into
+multiple lock partitions (item locks), hashed by the key. A worker
+thread only locks the specific hash bucket associated with a given
+key.</li>
+<li><strong>Slabs Lock:</strong> A dedicated internal mutex
+(<code>slabs_lock</code>) protects slab class metadata, page
+allocations, and free lists.</li>
+</ul>
+<p>During memory reallocation, Memcached does not elevate locking to an
+exclusive, system-wide state. Instead, it coordinates memory movement by
+acquiring these existing fine-grained locks strictly when necessary and
+releasing them immediately after modifying a specific reference.</p>
+<h3 id="the-asynchronous-rebalancing-state-machine">The Asynchronous
+Rebalancing State Machine</h3>
+<p>To migrate a 1MB memory page from a source slab class to a
+destination slab class without freezing memory access, the rebalancer
+thread operates as an incremental state machine. This process is divided
+into distinct phases:</p>
+<ol type="1">
+<li><strong>Page Selection:</strong> The rebalancer identifies a 1MB
+page in the source slab class. It briefly acquires the
+<code>slabs_lock</code> to mark the page as actively undergoing
+reassignment, preventing worker threads from allocating new chunks
+inside that specific page.</li>
+<li><strong>Item-by-Item Eviction:</strong> The page consists of
+multiple smaller memory chunks (items). The rebalancer thread iterates
+through each item sequentially. For each chunk:
+<ul>
+<li>It determines the item's key and acquires the corresponding
+fine-grained item lock.</li>
+<li>If the item is currently referenced or held by a worker thread, the
+rebalancer temporarily backs off and retries to avoid lock
+inversion.</li>
+<li>Once the item lock is secured, the item is unlinked from the hash
+table and the LRU list, effectively invalidating it.</li>
+<li>The item lock is immediately released.</li>
+</ul></li>
+<li><strong>Yielding Execution:</strong> Between processing individual
+items or small batches of items on the page, the rebalancer deliberately
+yields or sleeps briefly. This design guarantees that worker threads
+handling concurrent <code>GET</code> or <code>SET</code> requests are
+not starved of lock access.</li>
+<li><strong>Page Transfer:</strong> Once every item on the designated
+page has been unlinked and memory references drop to zero, the
+rebalancer thread acquires the <code>slabs_lock</code>. It detaches the
+physical 1MB page from the source slab class, resets the page's memory
+layout, slices it into chunks matching the destination slab class's
+chunk size, and registers those chunks into the target slab class's free
+list.</li>
+<li><strong>Completion:</strong> The <code>slabs_lock</code> is
+released, and the rebalance cycle terminates until another memory shift
+is requested.</li>
+</ol>
+<h3 id="concurrency-and-readwrite-impact">Concurrency and Read/Write
+Impact</h3>
+<p>Because the <code>slabs_lock</code> is held only for brief pointer
+updates at the start and end of the transfer, and item locks are held
+only for the duration of single-item unlinking operations, client
+requests experience negligible overhead. If a client attempts to read an
+item on a page currently undergoing eviction, it either successfully
+reads the item before the rebalancer acquires that specific item lock,
+or receives a cache miss immediately after the item is unlinked. In
+neither case does a global lock block unrelated traffic across other
+slab classes or hash buckets.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-slab-reallocation-and-global-locks';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

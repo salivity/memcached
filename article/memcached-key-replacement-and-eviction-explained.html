@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Key Replacement and Eviction Explained - memcached</title>
+    <meta name="description" content="This article explores how Memcached evaluates incoming keys and determines whether an existing item in memory should be updated, overwritten, or evicted. It covers the evaluation of direct key matching via storage commands, the constraints imposed by Memc">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-key-replacement-and-eviction-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Key Replacement and Eviction Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-key-replacement-and-eviction-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how Memcached evaluates incoming keys and determines whether an existing item in memory should be updated, overwritten, or evicted. It covers the evaluation of direct key matching via storage commands, the constraints imposed by Memc" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-key-replacement-and-eviction-explained">Memcached Key
+Replacement and Eviction Explained</h1>
+<p>This article explores how Memcached evaluates incoming keys and
+determines whether an existing item in memory should be updated,
+overwritten, or evicted. It covers the evaluation of direct key matching
+via storage commands, the constraints imposed by Memcached's slab
+allocation architecture, and the mechanics of the Least Recently Used
+(LRU) algorithm that governs data replacement when memory limits are
+reached.</p>
+<h3 id="1-direct-key-matching-and-storage-commands">1. Direct Key
+Matching and Storage Commands</h3>
+<p>The first evaluation Memcached performs is checking whether the
+incoming key already exists in its internal hash table. The action taken
+depends on the specific protocol command accompanying the key:</p>
+<ul>
+<li><strong>SET:</strong> Unconditionally stores the data. If the key
+already exists, Memcached invalidates or overwrites the existing item's
+metadata and data pointer with the new value.</li>
+<li><strong>ADD:</strong> Stores the data only if the key does not
+already exist. If the key is present, the server rejects the incoming
+item and returns <code>NOT_STORED</code>.</li>
+<li><strong>REPLACE:</strong> Stores the data only if the key already
+exists. If the key is not found, the operation fails and returns
+<code>NOT_STORED</code>.</li>
+<li><strong>CAS (Check-And-Set):</strong> Evaluates a unique 64-bit
+token associated with the key. The incoming item only replaces the
+existing item if the supplied token matches the token currently stored
+in Memcached, preventing concurrent write collisions.</li>
+</ul>
+<h3 id="2-slab-allocation-and-size-class-targeting">2. Slab Allocation
+and Size Class Targeting</h3>
+<p>When an incoming key must be stored (either as a new item or an
+updated value of a different size), Memcached evaluates memory
+availability using its slab allocator rather than a global memory
+pool.</p>
+<p>Memory is partitioned into slab classes, where each class handles
+items within specific size ranges (chunks). Memcached calculates the
+total footprint of the incoming item—including key length, flags,
+expiration time, internal metadata, and the payload—and assigns it to
+the smallest slab class capable of accommodating that size.
+Consequently, an incoming key never competes globally against all stored
+items; it only competes for memory within its assigned slab class.</p>
+<h3 id="3-expiration-and-memory-exhaustion">3. Expiration and Memory
+Exhaustion</h3>
+<p>If the targeted slab class has free chunks or if Memcached can
+allocate a new 1MB memory page to that slab class from the global pool,
+the item is inserted without replacing unexpired keys.</p>
+<p>If the slab class is entirely full and cannot allocate more pages,
+Memcached evaluates existing items for replacement in the following
+order:</p>
+<ol type="1">
+<li><strong>Expired Items (TTL Evaluation):</strong> Memcached inspects
+items at the tail of the slab's internal queue. If an item has surpassed
+its Time-To-Live (TTL), it is considered dead. The memory is reclaimed
+immediately and assigned to the incoming item.</li>
+<li><strong>Least Recently Used (LRU) Eviction:</strong> If no expired
+items are found at the tail, Memcached checks its eviction policy.
+Unless configured with the <code>-M</code> flag (which returns an
+out-of-memory error instead of evicting), Memcached evicts the least
+recently accessed, unexpired item from that specific slab class to make
+room for the new data.</li>
+</ol>
+<h3 id="4-segmented-lru-evaluation">4. Segmented LRU Evaluation</h3>
+<p>Modern versions of Memcached use a segmented LRU model to prevent
+active working sets from being prematurely evicted by bursts of
+sequential writes. Within each slab class, items are evaluated across
+distinct queues:</p>
+<ul>
+<li><strong>TEMP:</strong> Holds items with very short lifespans
+(typically under a few seconds), preventing them from polluting
+long-term memory.</li>
+<li><strong>HOT:</strong> New items arrive here. If an item reaches the
+tail of HOT without being accessed again, it moves to WARM. If accessed,
+it stays at the head.</li>
+<li><strong>WARM:</strong> Holds items that have received multiple
+hits.</li>
+<li><strong>COLD:</strong> Inactive items trickle down to the COLD
+queue.</li>
+</ul>
+<p>When memory must be reclaimed for an incoming key, Memcached targets
+only the tail of the <strong>COLD</strong> queue for eviction. Items
+that are actively read or updated remain protected in the HOT or WARM
+queues, ensuring that replacement decisions favor retaining frequently
+accessed data over newly written, single-access keys.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-key-replacement-and-eviction-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OS Network Optimization for Memcached Sockets - memcached</title>
+    <meta name="description" content="Modern operating systems employ a combination of kernel-level optimizations, networking stack enhancements, and hardware offloading to maximize throughput and minimize latency for Memcached sockets. Because Memcached relies on rapid, small-packet transfer">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/os-network-optimization-for-memcached-sockets">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="OS Network Optimization for Memcached Sockets - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/os-network-optimization-for-memcached-sockets" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Modern operating systems employ a combination of kernel-level optimizations, networking stack enhancements, and hardware offloading to maximize throughput and minimize latency for Memcached sockets. Because Memcached relies on rapid, small-packet transfer" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="os-network-optimization-for-memcached-sockets">OS Network
+Optimization for Memcached Sockets</h1>
+<p>Modern operating systems employ a combination of kernel-level
+optimizations, networking stack enhancements, and hardware offloading to
+maximize throughput and minimize latency for Memcached sockets. Because
+Memcached relies on rapid, small-packet transfers across thousands of
+concurrent connections, operating systems streamline transmission
+through efficient I/O multiplexing, syscall batching, transport-layer
+tuning, zero-copy mechanisms, and multi-core packet distribution.</p>
+<h3 id="non-blocking-io-and-event-multiplexing">Non-Blocking I/O and
+Event Multiplexing</h3>
+<p>Operating systems minimize connection overhead using scalable I/O
+event notification facilities—primarily <code>epoll</code> in Linux and
+<code>kqueue</code> in BSD/macOS. Instead of dedicating a thread per
+connection or polling large file descriptor sets via
+<code>select()</code> or <code>poll()</code>, these mechanisms register
+Memcached sockets once and notify worker threads in <span
+class="math inline">\(O(1)\)</span> time when descriptors are ready for
+transmission. Operating systems also implement
+<code>SO_REUSEPORT</code>, allowing multiple Memcached threads to bind
+to the same port. The kernel natively distributes incoming connections
+across these sockets, reducing lock contention on accept queues.</p>
+<h3 id="tcp-stack-tuning-and-latency-elimination">TCP Stack Tuning and
+Latency Elimination</h3>
+<p>By default, the standard TCP stack buffers small transmissions using
+Nagle's algorithm to conserve bandwidth. For Memcached's
+request-response pattern, this introduces artificial transmission
+delays. Operating systems allow applications to set the
+<code>TCP_NODELAY</code> socket option, disabling Nagle's algorithm to
+ensure that cache responses are transmitted across the wire
+immediately.</p>
+<p>For batch operations, operating systems support <code>TCP_CORK</code>
+(or <code>TCP_NOPUSH</code>), which instructs the kernel to accumulate
+sequential writes into a single full-sized maximum segment size (MSS)
+packet before transmission, reducing packet header overhead.</p>
+<h3 id="system-call-batching">System Call Batching</h3>
+<p>Transitioning between user space and kernel space introduces CPU
+overhead. Modern Linux kernels offer <code>sendmmsg()</code> and
+<code>recvmmsg()</code>, which extend standard <code>sendmsg()</code>
+and <code>recvmsg()</code> calls. These interfaces allow Memcached to
+transmit or receive multiple discrete network packets within a single
+system call. This dramatically lowers interrupt rates, saves CPU cycles,
+and increases the aggregate packets-per-second (PPS) threshold.</p>
+<h3 id="zero-copy-transmissions">Zero-Copy Transmissions</h3>
+<p>Traditional socket writes require copying data from user space memory
+buffers into kernel socket buffers before placing it on the network
+interface card (NIC). Operating systems mitigate this via zero-copy
+subsystems, such as Linux’s <code>MSG_ZEROCOPY</code> flag on socket
+send operations. Under this optimization, the network interface card
+pulls data directly from user-space memory via Direct Memory Access
+(DMA), entirely bypassing the CPU memory copy step and freeing memory
+bandwidth for cache operations.</p>
+<h3 id="multi-queue-nic-steering-and-cpu-pinning">Multi-Queue NIC
+Steering and CPU Pinning</h3>
+<p>Modern OS networking stacks align packet handling with multi-threaded
+applications via hardware and software steering:</p>
+<ul>
+<li><strong>Receive Side Scaling (RSS):</strong> The hardware NIC hashes
+packet headers and directs traffic to specific hardware queues.</li>
+<li><strong>Receive Flow Steering (RFS):</strong> The OS kernel routes
+packet processing to the specific CPU core where the target Memcached
+worker thread resides, maximizing CPU L1/L2 cache locality.</li>
+<li><strong><code>SO_INCOMING_CPU</code>:</strong> This socket option
+allows Memcached to determine which CPU handled the packet processing,
+enabling worker threads to pin processing to the native core and avoid
+inter-core data migration.</li>
+</ul>
+<h3 id="dynamic-buffer-and-ring-sizing">Dynamic Buffer and Ring
+Sizing</h3>
+<p>Operating systems actively manage TCP transmission windows and socket
+memory through automatic buffer tuning (such as <code>tcp_wmem</code>
+and <code>tcp_rmem</code> in Linux). By dynamically adjusting window
+sizes based on round-trip times (RTT) and bandwidth-delay products, the
+OS prevents bufferbloat while ensuring that Memcached sockets possess
+sufficient buffer headroom during sudden traffic bursts.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/os-network-optimization-for-memcached-sockets';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

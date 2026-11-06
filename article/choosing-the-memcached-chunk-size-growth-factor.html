@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Choosing the Memcached Chunk Size Growth Factor - memcached</title>
+    <meta name="description" content="Memcached allocates memory using a slab allocator that groups memory into classes of increasing chunk sizes, controlled by the growth factor parameter (-f). Selecting the right growth factor is critical for maximizing memory efficiency, reducing internal">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/choosing-the-memcached-chunk-size-growth-factor">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Choosing the Memcached Chunk Size Growth Factor - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/choosing-the-memcached-chunk-size-growth-factor" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached allocates memory using a slab allocator that groups memory into classes of increasing chunk sizes, controlled by the growth factor parameter (-f). Selecting the right growth factor is critical for maximizing memory efficiency, reducing internal" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="choosing-the-memcached-chunk-size-growth-factor">Choosing the
+Memcached Chunk Size Growth Factor</h1>
+<p>Memcached allocates memory using a slab allocator that groups memory
+into classes of increasing chunk sizes, controlled by the growth factor
+parameter (<code>-f</code>). Selecting the right growth factor is
+critical for maximizing memory efficiency, reducing internal
+fragmentation, and preventing premature evictions. This article outlines
+the core mechanics of the Memcached chunk size growth factor and details
+the specific considerations needed to tune it effectively for your
+application's workload.</p>
+<h3 id="how-the-growth-factor-works">How the Growth Factor Works</h3>
+<p>When Memcached initializes, it creates a series of slab classes. The
+smallest slab class begins at the minimum chunk size (set by
+<code>-s</code>, default 48 bytes), and each subsequent slab class
+increases in chunk size by multiplying the previous size by the growth
+factor (<code>-f</code>, default 1.25). A 1 MB memory page is divided
+into as many chunks of that class size as will fit. When an item is
+stored, Memcached places it into the smallest slab class that can
+accommodate the item's data and key overhead.</p>
+<h3 id="item-size-distribution-and-variance">Item Size Distribution and
+Variance</h3>
+<p>The primary consideration when choosing a growth factor is the size
+profile of the cached objects:</p>
+<ul>
+<li><strong>Homogeneous Object Sizes:</strong> If your application
+stores objects that are consistently similar in size (for example,
+standard session tokens or localized cache fragments), a smaller growth
+factor (e.g., 1.05 to 1.15) provides finer-grained chunk sizes near that
+specific range, significantly reducing wasted space.</li>
+<li><strong>Heterogeneous Object Sizes:</strong> If your application
+caches widely varying data, ranging from tiny integers to multi-kilobyte
+JSON payloads, a higher factor (such as the default 1.25) provides a
+broad distribution of slab sizes to handle diverse payloads without
+exhausting available slab classes.</li>
+</ul>
+<h3 id="internal-fragmentation-and-memory-overhead">Internal
+Fragmentation and Memory Overhead</h3>
+<p>Internal fragmentation occurs when an object is significantly smaller
+than the chunk assigned to hold it. For example, storing a 130-byte
+object in a 200-byte chunk leaves 70 bytes unused within that
+allocation.</p>
+<ul>
+<li><strong>Lowering the Factor (1.05 – 1.15):</strong> Reduces internal
+fragmentation by keeping the gaps between successive slab sizes small.
+This ensures that items fit more snugly into their assigned chunks.</li>
+<li><strong>Trade-off:</strong> Having more slab classes requires more
+overhead to manage. Because Memcached allocates memory in 1 MB page
+increments per slab class, spreading traffic over too many classes can
+leave partially filled 1 MB pages in memory, leading to external slab
+inefficiency if write patterns are sparse.</li>
+</ul>
+<h3 id="slab-class-limits">Slab Class Limits</h3>
+<p>Memcached enforces a maximum limit on the total number of slab
+classes (traditionally 63 classes). If you set the growth factor too
+low, the step between classes will be very small, and Memcached may
+exhaust its maximum allowable slab classes before reaching the maximum
+item size (typically 1 MB). In such cases, Memcached will fail to start
+or cannot cache items that exceed the size of the highest generated slab
+class.</p>
+<h3 id="memory-churn-and-eviction-rates">Memory Churn and Eviction
+Rates</h3>
+<p>Each slab class manages its own Least Recently Used (LRU) eviction
+queue. If your growth factor generates slab classes that do not align
+with your write frequency:</p>
+<ul>
+<li>High-traffic slab classes will run out of assigned 1 MB pages
+quickly, causing frequent evictions of still-valid items.</li>
+<li>Low-traffic slab classes may hold allocated pages that sit largely
+idle.</li>
+</ul>
+<p>While modern Memcached versions include slab automove routines,
+setting a growth factor that closely tracks your data distribution
+minimizes the need for active memory rebalancing and prevents
+unnecessary cache churn.</p>
+<h3 id="how-to-determine-the-optimal-value">How to Determine the Optimal
+Value</h3>
+<ol type="1">
+<li><strong>Analyze Existing Cache Usage:</strong> Run
+<code>memcached-tool &lt;host&gt;:&lt;port&gt; display</code> or execute
+the <code>stats slabs</code> command on an active instance. Review the
+<code>Wasted</code> column and the eviction counters across each slab
+class.</li>
+<li><strong>Benchmark with Real Data:</strong> In a staging environment,
+run representative production payloads against Memcached instances
+started with varying <code>-f</code> values (e.g., 1.1, 1.2, 1.25).</li>
+<li><strong>Adjust the Minimum Size:</strong> Pair the growth factor
+with the minimum chunk size flag (<code>-s</code>). If your smallest
+cached item is 200 bytes, starting the initial chunk size closer to 200
+bytes prevents wasting lower-tier slab classes entirely.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/choosing-the-memcached-chunk-size-growth-factor';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

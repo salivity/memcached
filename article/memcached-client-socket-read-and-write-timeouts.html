@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Client Socket Read and Write Timeouts - memcached</title>
+    <meta name="description" content="When communicating with Memcached, network anomalies or overloaded servers can cause client connections to hang indefinitely if socket limits are not enforced. This article outlines the specific parameters and configuration options used to govern socket r">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-client-socket-read-and-write-timeouts">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Client Socket Read and Write Timeouts - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-client-socket-read-and-write-timeouts" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When communicating with Memcached, network anomalies or overloaded servers can cause client connections to hang indefinitely if socket limits are not enforced. This article outlines the specific parameters and configuration options used to govern socket r" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-client-socket-read-and-write-timeouts">Memcached
+Client Socket Read and Write Timeouts</h1>
+<p>When communicating with Memcached, network anomalies or overloaded
+servers can cause client connections to hang indefinitely if socket
+limits are not enforced. This article outlines the specific parameters
+and configuration options used to govern socket read and write timeouts
+across the most common Memcached client libraries in Python, PHP, Java,
+Go, and Node.js.</p>
+<h2 id="php-ext-memcached">PHP (ext-memcached)</h2>
+<p>The official PECL Memcached extension exposes underlying
+<code>libmemcached</code> behaviors through integer constants set via
+<code>Memcached::setOption()</code>.</p>
+<ul>
+<li><strong><code>Memcached::OPT_SEND_TIMEOUT</code></strong>: Controls
+the socket write timeout in microseconds.</li>
+<li><strong><code>Memcached::OPT_RECV_TIMEOUT</code></strong>: Controls
+the socket read timeout in microseconds.</li>
+<li><strong><code>Memcached::OPT_CONNECT_TIMEOUT</code></strong>:
+Controls the initial socket connection timeout in milliseconds.</li>
+</ul>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode php"><code class="sourceCode php"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="va">$mc</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Memcached</span>()<span class="ot">;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="va">$mc</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_CONNECT_TIMEOUT</span><span class="ot">,</span> <span class="dv">1000</span>)<span class="ot">;</span> <span class="co">// 1 second</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="va">$mc</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_SEND_TIMEOUT</span><span class="ot">,</span> <span class="dv">1000000</span>)<span class="ot">;</span> <span class="co">// 1 second</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="va">$mc</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_RECV_TIMEOUT</span><span class="ot">,</span> <span class="dv">1000000</span>)<span class="ot">;</span> <span class="co">// 1 second</span></span></code></pre></div>
+<h2 id="python">Python</h2>
+<h3 id="pymemcache">pymemcache</h3>
+<p>The <code>pymemcache.client.base.Client</code> accepts socket
+parameters as floating-point numbers representing seconds.</p>
+<ul>
+<li><strong><code>timeout</code></strong>: Sets the default socket read
+and write timeout.</li>
+<li><strong><code>connect_timeout</code></strong>: Sets the timeout for
+opening the socket connection.</li>
+</ul>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pymemcache.client.base <span class="im">import</span> Client</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> Client((<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">11211</span>), connect_timeout<span class="op">=</span><span class="fl">1.0</span>, timeout<span class="op">=</span><span class="fl">1.0</span>)</span></code></pre></div>
+<h3 id="pylibmc">pylibmc</h3>
+<p>The <code>pylibmc</code> library binds to <code>libmemcached</code>
+and exposes socket timeout configurations via behaviors:</p>
+<ul>
+<li><strong><code>receive_timeout</code></strong>: Read timeout in
+microseconds.</li>
+<li><strong><code>send_timeout</code></strong>: Write timeout in
+microseconds.</li>
+<li><strong><code>connect_timeout</code></strong>: Connection timeout in
+milliseconds.</li>
+</ul>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pylibmc</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> pylibmc.Client(</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    [<span class="st">&quot;127.0.0.1&quot;</span>],</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    behaviors<span class="op">=</span>{</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;connect_timeout&quot;</span>: <span class="dv">1000</span>,</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;receive_timeout&quot;</span>: <span class="dv">1000000</span>,</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;send_timeout&quot;</span>: <span class="dv">1000000</span>,</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="java">Java</h2>
+<h3 id="spymemcached">Spymemcached</h3>
+<p>In Spymemcached, timeouts are applied on an operation level rather
+than an isolated raw socket layer, using the
+<code>ConnectionFactoryBuilder</code>.</p>
+<ul>
+<li><strong><code>setOpTimeout(long timeout)</code></strong>: Governs
+the default operation timeout in milliseconds, which enforces the
+deadline for sending and reading responses.</li>
+<li><strong><code>setTimeoutExceptionThreshold(int)</code></strong>:
+Controls the threshold of consecutive timeouts before a node is
+considered dead.</li>
+</ul>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode java"><code class="sourceCode java"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ConnectionFactory cf <span class="op">=</span> <span class="kw">new</span> <span class="fu">ConnectionFactoryBuilder</span><span class="op">()</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">setOpTimeout</span><span class="op">(</span><span class="dv">1000</span><span class="op">)</span> <span class="co">// 1 second read/write deadline</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="fu">build</span><span class="op">();</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>MemcachedClient client <span class="op">=</span> <span class="kw">new</span> <span class="fu">MemcachedClient</span><span class="op">(</span>cf<span class="op">,</span> AddrUtil<span class="op">.</span><span class="fu">getAddresses</span><span class="op">(</span><span class="st">&quot;127.0.0.1:11211&quot;</span><span class="op">));</span></span></code></pre></div>
+<h3 id="xmemcached">XMemcached</h3>
+<p>XMemcached handles read and write operations asynchronously via NIO,
+using configuration builders.</p>
+<ul>
+<li><strong><code>setOpTimeout(long timeout)</code></strong>: Sets the
+operation response/read timeout in milliseconds.</li>
+<li><strong><code>setConnectTimeout(long timeout)</code></strong>:
+Governs the TCP socket connection timeout.</li>
+</ul>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode java"><code class="sourceCode java"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>MemcachedClientBuilder builder <span class="op">=</span> <span class="kw">new</span> <span class="fu">XMemcachedClientBuilder</span><span class="op">(</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    AddrUtil<span class="op">.</span><span class="fu">getAddresses</span><span class="op">(</span><span class="st">&quot;127.0.0.1:11211&quot;</span><span class="op">)</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="op">);</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>builder<span class="op">.</span><span class="fu">setOpTimeout</span><span class="op">(</span><span class="dv">1000</span><span class="op">);</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>builder<span class="op">.</span><span class="fu">setConnectTimeout</span><span class="op">(</span><span class="dv">1000</span><span class="op">);</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>MemcachedClient client <span class="op">=</span> builder<span class="op">.</span><span class="fu">build</span><span class="op">();</span></span></code></pre></div>
+<h2 id="go-gomemcache">Go (gomemcache)</h2>
+<p>The standard Go client
+(<code>github.com/bradfitz/gomemcache/memcache</code>) simplifies
+timeout management into a single field on the <code>Client</code>
+struct.</p>
+<ul>
+<li><strong><code>Timeout</code></strong>: A <code>time.Duration</code>
+value that sets the socket read and write deadlines
+(<code>SetDeadline</code>) for all network operations.</li>
+</ul>
+<div class="sourceCode" id="cb6"><pre class="sourceCode go"><code class="sourceCode go"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">package</span> main</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="op">(</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;time&quot;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;github.com/bradfitz/gomemcache/memcache&quot;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="op">)</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    mc <span class="op">:=</span> memcache<span class="op">.</span>New<span class="op">(</span><span class="st">&quot;127.0.0.1:11211&quot;</span><span class="op">)</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    mc<span class="op">.</span>Timeout <span class="op">=</span> <span class="dv">1</span> <span class="op">*</span> time<span class="op">.</span>Second <span class="co">// Applied to socket reads and writes</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h2 id="nodejs-memcached">Node.js (memcached)</h2>
+<p>The popular <code>memcached</code> package handles connection
+timeouts during client instantiation using milliseconds.</p>
+<ul>
+<li><strong><code>timeout</code></strong>: Determines the amount of time
+in milliseconds to wait before a socket read/write operation is declared
+timed out.</li>
+<li><strong><code>idle</code></strong>: The time after which an inactive
+socket will be closed.</li>
+</ul>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode javascript"><code class="sourceCode javascript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> Memcached <span class="op">=</span> <span class="pp">require</span>(<span class="st">&#39;memcached&#39;</span>)<span class="op">;</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> memcached <span class="op">=</span> <span class="kw">new</span> <span class="fu">Memcached</span>(<span class="st">&#39;127.0.0.1:11211&#39;</span><span class="op">,</span> {</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">timeout</span><span class="op">:</span> <span class="dv">1000</span><span class="op">,</span> <span class="co">// Socket response timeout in ms</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">idle</span><span class="op">:</span> <span class="dv">5000</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-client-socket-read-and-write-timeouts';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

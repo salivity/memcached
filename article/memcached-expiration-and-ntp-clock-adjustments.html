@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Expiration and NTP Clock Adjustments - memcached</title>
+    <meta name="description" content="This article provides an overview of how Memcached evaluates item expiration and manages timekeeping when system clocks are modified by Network Time Protocol (NTP) adjustments. It details the difference between relative and absolute expiration values, exp">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-expiration-and-ntp-clock-adjustments">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Expiration and NTP Clock Adjustments - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-expiration-and-ntp-clock-adjustments" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article provides an overview of how Memcached evaluates item expiration and manages timekeeping when system clocks are modified by Network Time Protocol (NTP) adjustments. It details the difference between relative and absolute expiration values, exp" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-expiration-and-ntp-clock-adjustments">Memcached
+Expiration and NTP Clock Adjustments</h1>
+<p>This article provides an overview of how Memcached evaluates item
+expiration and manages timekeeping when system clocks are modified by
+Network Time Protocol (NTP) adjustments. It details the difference
+between relative and absolute expiration values, explains how Memcached
+relies on an internal monotonic clock to prevent premature evictions,
+and explores the operational effects of gradual clock slewing versus
+abrupt clock stepping.</p>
+<h3 id="memcached-time-representation-relative-vs-absolute">Memcached
+Time Representation: Relative vs. Absolute</h3>
+<p>When a client sets a key with a Time to Live (TTL), Memcached
+interprets the expiration parameter based on the threshold of 30 days
+(2,592,000 seconds):</p>
+<ul>
+<li><strong>Relative TTL:</strong> If the value is equal to or less than
+2,592,000, Memcached treats it as a relative offset in seconds from the
+current moment.</li>
+<li><strong>Absolute TTL:</strong> If the value exceeds 2,592,000,
+Memcached treats it as a specific Unix epoch timestamp (seconds since
+January 1, 1970).</li>
+</ul>
+<p>Regardless of how the expiration time is provided by the client,
+Memcached standardizes these values internally against its own internal
+process timer.</p>
+<h3 id="internal-timekeeping-mechanism">Internal Timekeeping
+Mechanism</h3>
+<p>Memcached maintains an internal clock to avoid the overhead of
+issuing a <code>gettimeofday</code> or <code>clock_gettime</code> system
+call on every cache transaction. A dedicated event thread updates an
+internal variable, <code>current_time</code>, once per second.</p>
+<p>Crucially, Memcached measures item lifetimes using internal process
+uptime rather than directly referencing the system's wall-clock time for
+active checks:</p>
+<ol type="1">
+<li><strong>Relative Expirations:</strong> If an item is given a
+300-second TTL, Memcached sets the item's expiration to
+<code>current_time + 300</code>. This calculation is strictly relative
+to the process's own running time.</li>
+<li><strong>Absolute Expirations:</strong> If an absolute Unix timestamp
+is supplied, Memcached calculates the difference between the provided
+timestamp and the system's current wall clock at that exact moment. It
+then converts that difference into an offset and adds it to
+<code>current_time</code>.</li>
+</ol>
+<h3 id="how-ntp-adjustments-affect-expiration">How NTP Adjustments
+Affect Expiration</h3>
+<p>NTP adjusts the local system clock using two methods: slewing
+(gradual drift correction) and stepping (instantaneous jumps).</p>
+<h4 id="1-ntp-slewing-gradual-adjustments">1. NTP Slewing (Gradual
+Adjustments)</h4>
+<p>During standard operation, NTP daemons (such as Chrony or
+<code>ntpd</code>) slew the clock by speeding up or slowing down the
+system tick frequency by small fractions of a second until
+synchronization is achieved. Because slewing does not produce sudden
+jumps in the timeline, it has virtually no noticeable effect on
+Memcached. Relative TTLs tick down at their normal rates, and the
+internal time counter remains stable.</p>
+<h4 id="2-ntp-stepping-forward-clock-jumps-ahead">2. NTP Stepping
+Forward (Clock Jumps Ahead)</h4>
+<p>When a system clock jumps forward abruptly:</p>
+<ul>
+<li><strong>Existing Relative Items:</strong> Keys already stored using
+relative TTLs are completely unaffected. Because their expiration is
+anchored to process uptime (monotonic ticks), a sudden jump in the OS
+wall clock does not cause these items to expire early.</li>
+<li><strong>New Absolute Items:</strong> If a client calculates an
+absolute timestamp using an out-of-sync local clock or an external
+reference, a discrepancy occurs at ingestion. However, if the client
+derives the timestamp from the host’s updated system clock, Memcached
+properly calculates the remaining delta at the time the command is
+issued.</li>
+</ul>
+<h4 id="3-ntp-stepping-backward-clock-jumps-behind">3. NTP Stepping
+Backward (Clock Jumps Behind)</h4>
+<p>When the system clock steps backward:</p>
+<ul>
+<li><strong>Existing Relative Items:</strong> As with forward jumps,
+previously cached relative items continue their standard countdown tied
+to internal process ticks. They will not have their lives extended
+artificially.</li>
+<li><strong>Absolute Expirations During Ingestion:</strong> If the
+system clock steps backward and a client submits an absolute Unix
+timestamp that represents a time prior to the newly adjusted local time,
+Memcached interprets the item as already expired and evicts or ignores
+it immediately.</li>
+</ul>
+<h3 id="operational-recommendations">Operational Recommendations</h3>
+<p>To ensure predictable cache eviction lifecycles:</p>
+<ul>
+<li><strong>Prefer Relative TTLs:</strong> Standardize application logic
+to send relative TTL offsets (e.g., 3600 seconds) instead of calculating
+absolute Unix timestamps in application code. This isolates cache
+invalidation logic entirely from wall-clock shifts.</li>
+<li><strong>Configure Slewing Over Stepping:</strong> Configure NTP
+services to use slewing mode (such as the <code>-x</code> flag in legacy
+<code>ntpd</code> or setting maximum slew rates in Chrony) to avoid
+sudden multi-second or multi-minute time jumps on Memcached host
+instances.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-expiration-and-ntp-clock-adjustments';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

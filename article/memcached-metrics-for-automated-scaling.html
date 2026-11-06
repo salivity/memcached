@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Metrics for Automated Scaling - memcached</title>
+    <meta name="description" content="This guide outlines the essential system metrics required to trigger automated scaling events for a Memcached deployment. Because Memcached is an in-memory key-value store designed for rapid caching, automated scaling relies on detecting memory saturation">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-metrics-for-automated-scaling">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Metrics for Automated Scaling - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-metrics-for-automated-scaling" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This guide outlines the essential system metrics required to trigger automated scaling events for a Memcached deployment. Because Memcached is an in-memory key-value store designed for rapid caching, automated scaling relies on detecting memory saturation" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-metrics-for-automated-scaling">Memcached Metrics for
+Automated Scaling</h1>
+<p>This guide outlines the essential system metrics required to trigger
+automated scaling events for a Memcached deployment. Because Memcached
+is an in-memory key-value store designed for rapid caching, automated
+scaling relies on detecting memory saturation, thread starvation, and
+network bottlenecks before they degrade application response times.
+Implementing thresholds around evictions, memory utilization, CPU load,
+and network limits allows your cluster to dynamically scale up or scale
+out with minimal latency impact.</p>
+<h3 id="1-eviction-rate-evictions">1. Eviction Rate
+(<code>evictions</code>)</h3>
+<p>The eviction counter is the single most critical metric for Memcached
+scaling. Memcached uses a Least Recently Used (LRU) algorithm to discard
+items when it runs out of allocated space.</p>
+<ul>
+<li><strong>Why it matters:</strong> An increasing eviction rate
+indicates that the working set size exceeds available RAM, forcing the
+cache to dump valid items prematurely. This triggers cache misses and
+shifts read pressure onto your primary database.</li>
+<li><strong>Scaling trigger:</strong> Trigger a horizontal scale-out
+(adding nodes) or vertical scale-up (increasing memory allocation)
+whenever the eviction rate exceeds zero for a sustained window (e.g.,
+greater than 5 evictions per second over a 5-minute period).</li>
+</ul>
+<h3 id="2-memory-utilization-bytes-vs-limit_maxbytes">2. Memory
+Utilization (<code>bytes</code> vs. <code>limit_maxbytes</code>)</h3>
+<p>Memcached allocates fixed memory blocks called slab classes. Tracking
+total memory consumption relative to the configured ceiling provides
+early warning before evictions occur.</p>
+<ul>
+<li><strong>Why it matters:</strong> Once memory approaches 100%,
+evictions begin immediately if new keys are written.</li>
+<li><strong>Scaling trigger:</strong> Set a scale-out trigger when
+memory utilization consistently surpasses 75% to 80%. This buffer leaves
+enough time for new instances to launch, warm up, and register with the
+application's hashing ring.</li>
+</ul>
+<h3 id="3-cpu-utilization">3. CPU Utilization</h3>
+<p>While Memcached is lightweight and multi-threaded, high traffic
+volumes, serialized object sizes, and heavy connection cycling can
+saturate available CPU cores.</p>
+<ul>
+<li><strong>Why it matters:</strong> High CPU load increases queue times
+for incoming <code>get</code> and <code>set</code> commands, leading to
+connection timeouts and latency spikes.</li>
+<li><strong>Scaling trigger:</strong> Trigger a horizontal scaling event
+when CPU utilization crosses 65% to 75% on average across multiple
+polling intervals.</li>
+</ul>
+<h3 id="4-network-bandwidth-and-packet-saturation">4. Network Bandwidth
+and Packet Saturation</h3>
+<p>In high-throughput environments, Memcached typically exhausts network
+I/O capacity long before it exhausts compute capacity.</p>
+<ul>
+<li><strong>Why it matters:</strong> When the network interface reaches
+bandwidth capacity or packet-per-second (PPS) limits, TCP packets drop,
+leading to retransmissions and client-side latency.</li>
+<li><strong>Scaling trigger:</strong> Trigger auto-scaling when network
+egress or ingress exceeds 70% to 80% of the host or instance tier's
+provisioned network bandwidth limit.</li>
+</ul>
+<h3 id="5-connection-counts-curr_connections-vs-maxconns">5. Connection
+Counts (<code>curr_connections</code> vs. <code>maxconns</code>)</h3>
+<p>Memcached enforces a hard limit on simultaneous client connections
+(configured via the <code>-c</code> parameter).</p>
+<ul>
+<li><strong>Why it matters:</strong> Once <code>curr_connections</code>
+reaches <code>maxconns</code>, Memcached drops or rejects new
+connections, causing widespread connection errors across application
+services.</li>
+<li><strong>Scaling trigger:</strong> Trigger scaling actions if
+<code>curr_connections</code> exceeds 80% of <code>maxconns</code>. In
+addition to scaling, evaluate whether application-level connection
+pooling needs optimization.</li>
+</ul>
+<h3 id="recommended-scaling-strategy">Recommended Scaling Strategy</h3>
+<p>For best results, configure automated scaling using a combination
+metric rule rather than relying on a single indicator:</p>
+<ol type="1">
+<li><strong>Scale Out (Add Nodes):</strong> Trigger when <strong>Network
+Throughput &gt; 75%</strong>, <strong>CPU Utilization &gt; 70%</strong>,
+or <strong>Evictions &gt; 0</strong> occur simultaneously with
+<strong>Memory Utilization &gt; 80%</strong>. Ensure client libraries
+use consistent hashing (such as Ketama) to redistribute keys with
+minimal cache invalidation.</li>
+<li><strong>Scale In (Remove Nodes):</strong> Trigger only when
+<strong>Memory Utilization &lt; 40%</strong> and <strong>CPU &lt;
+25%</strong> across a prolonged cooldown period (e.g., 30 to 60 minutes)
+to prevent thrashing and sudden database stampedes.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-metrics-for-automated-scaling';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

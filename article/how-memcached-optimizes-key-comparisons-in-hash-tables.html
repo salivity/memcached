@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Optimizes Key Comparisons in Hash Tables - memcached</title>
+    <meta name="description" content="This article examines the mechanisms Memcached uses to minimize CPU overhead during hash table key lookups. In high-throughput caching environments, string comparison is often a primary bottleneck when resolving hash collisions within buckets. Memcached m">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-optimizes-key-comparisons-in-hash-tables">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Optimizes Key Comparisons in Hash Tables - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-optimizes-key-comparisons-in-hash-tables" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines the mechanisms Memcached uses to minimize CPU overhead during hash table key lookups. In high-throughput caching environments, string comparison is often a primary bottleneck when resolving hash collisions within buckets. Memcached m" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-optimizes-key-comparisons-in-hash-tables">How
+Memcached Optimizes Key Comparisons in Hash Tables</h1>
+<p>This article examines the mechanisms Memcached uses to minimize CPU
+overhead during hash table key lookups. In high-throughput caching
+environments, string comparison is often a primary bottleneck when
+resolving hash collisions within buckets. Memcached mitigates this by
+bypassing redundant string evaluations through length pre-checks,
+utilizing word-aligned memory comparisons (<code>memcmp</code>), and
+storing key bytes contiguous to item metadata for optimal CPU cache
+utilization.</p>
+<h3 id="key-length-pre-validation">Key Length Pre-Validation</h3>
+<p>The primary filter Memcached applies during bucket traversal is an
+integer comparison of key lengths. Every cache item is represented
+internally by an <code>item</code> structure that stores the explicit
+length of the key in an unsigned integer field (<code>nkey</code>).</p>
+<p>Before executing an expensive byte-by-byte memory comparison,
+Memcached checks whether the requested search key length matches the
+candidate item's <code>nkey</code>:</p>
+<ul>
+<li>If the lengths differ, the item is instantly bypassed without
+inspecting the key string.</li>
+<li>Because length comparisons execute in a single CPU instruction, the
+engine discards the vast majority of non-matching collision candidates
+at virtually zero computational cost.</li>
+</ul>
+<h3 id="fixed-length-memcmp-over-strcmp">Fixed-Length
+<code>memcmp</code> Over <code>strcmp</code></h3>
+<p>Memcached treats keys as arbitrary binary data rather than
+null-terminated C strings. This design choice enables the engine to use
+<code>memcmp()</code> instead of <code>strcmp()</code>.</p>
+<ul>
+<li><strong>No Null-Byte Scanning:</strong> Unlike
+<code>strcmp()</code>, which must continually test each byte for the
+null terminator (<code>\0</code>), <code>memcmp()</code> relies strictly
+on the pre-validated length.</li>
+<li><strong>SIMD and Word-Sized Instructions:</strong> Modern compilers
+and standard C libraries optimize <code>memcmp()</code> using
+architecture-specific vector instructions (such as AVX or SSE) or
+word-at-a-time (64-bit) registers. This allows multiple bytes to be
+evaluated per clock cycle.</li>
+</ul>
+<h3 id="memory-layout-and-cpu-cache-locality">Memory Layout and CPU
+Cache Locality</h3>
+<p>String comparisons incur substantial penalties if the string data
+causes CPU cache misses. Memcached structures its memory allocation to
+keep item metadata and key data closely bound.</p>
+<ul>
+<li><strong>Contiguous Allocation:</strong> The key bytes are stored
+immediately following the <code>item</code> header in memory via the
+<code>ITEM_key()</code> macro.</li>
+<li><strong>Cache Line Sharing:</strong> When the hash table traversal
+reads the <code>item</code> structure to verify flags, pointers, and
+<code>nkey</code>, the beginning of the key string typically resides in
+the exact same L1/L2 cache line or an adjacent one fetched by the CPU
+hardware prefetcher. This eliminates secondary memory latency when the
+comparison takes place.</li>
+</ul>
+<h3 id="hash-bucket-traversal-pipeline">Hash Bucket Traversal
+Pipeline</h3>
+<p>When a hash collision occurs, Memcached processes candidates using an
+ordered decision tree designed to fail fast:</p>
+<ol type="1">
+<li><strong>Bucket Hash Indexing:</strong> The primary hash function
+(Murmur3 or Jenkins) maps the key to a specific bucket list.</li>
+<li><strong>Length Evaluation:</strong> The candidate's
+<code>nkey</code> is compared against the target length.</li>
+<li><strong>Byte Comparison:</strong> Only if the lengths match does
+Memcached invoke <code>memcmp</code> on the key buffers.</li>
+<li><strong>Pointer Resolution:</strong> If a match is verified, the
+item pointer is returned immediately, terminating further traversal of
+the bucket chain.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-optimizes-key-comparisons-in-hash-tables';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Hash Table Resizing and Thread Locking - memcached</title>
+    <meta name="description" content="Memcached maintains high-throughput concurrency by avoiding global stop-the-world locks during its internal hash table expansion. When item density triggers a resize, Memcached delegates the migration of items to a dedicated background maintenance thread.">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-hash-table-resizing-and-thread-locking">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Hash Table Resizing and Thread Locking - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-hash-table-resizing-and-thread-locking" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains high-throughput concurrency by avoiding global stop-the-world locks during its internal hash table expansion. When item density triggers a resize, Memcached delegates the migration of items to a dedicated background maintenance thread." />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-hash-table-resizing-and-thread-locking">Memcached Hash
+Table Resizing and Thread Locking</h1>
+<p>Memcached maintains high-throughput concurrency by avoiding global
+stop-the-world locks during its internal hash table expansion. When item
+density triggers a resize, Memcached delegates the migration of items to
+a dedicated background maintenance thread. By utilizing dual-table
+indexing, an incremental migration cursor, and partitioned item locks,
+the engine allows worker threads to continue serving read and write
+traffic concurrently with minimal latency spikes.</p>
+<h3 id="the-expansion-trigger-and-the-maintenance-thread">The Expansion
+Trigger and the Maintenance Thread</h3>
+<p>Memcached stores key-value pointers in an associative array (hash
+table) implemented as a power-of-two array of buckets. When the number
+of stored items exceeds 1.5 times the current hash table size, Memcached
+triggers an expansion to prevent hash collisions from degrading lookup
+performance to <span class="math inline">\(O(n)\)</span>.</p>
+<p>Instead of forcing a worker thread to perform the resize, the engine
+signals a dedicated background thread known as the
+<code>assoc_maintenance_thread</code>. This thread is awakened via a
+condition variable and allocates a new, larger hash table that is double
+the size of the current primary table. The current table is marked as
+<code>old_hashtable</code>, and the newly allocated memory becomes the
+new target.</p>
+<h3 id="dual-table-lookups-and-the-migration-cursor">Dual-Table Lookups
+and the Migration Cursor</h3>
+<p>Once the resize begins, Memcached enters an expanding state tracked
+by the global flag <code>expanding</code>. During this phase, items
+exist in either the old table or the new table.</p>
+<p>To manage this without blocking worker threads, Memcached uses an
+atomic cursor variable named <code>expand_bucket</code>. This integer
+indicates the current bucket index being migrated. When a worker thread
+needs to read, insert, or delete an item:</p>
+<ol type="1">
+<li>It hashes the key to determine the bucket index.</li>
+<li>If <code>expanding</code> is true, the worker checks if the item's
+old bucket index is lower than <code>expand_bucket</code>.</li>
+<li>If the bucket index is less than <code>expand_bucket</code>, the
+item has already moved to the new table, so the worker routes the
+operation to the new hash table.</li>
+<li>If the bucket index is greater than or equal to
+<code>expand_bucket</code>, the worker routes the request to the old
+hash table.</li>
+</ol>
+<p>For inserts, if the target bucket has already been visited by the
+cursor, the new item is placed directly into the new hash table. If not,
+it is placed into the old hash table to be migrated later by the
+maintenance thread.</p>
+<h3 id="granular-locking-with-partitioned-item-locks">Granular Locking
+with Partitioned Item Locks</h3>
+<p>Early versions of Memcached relied on a single global lock (the
+"cache lock") that serialized nearly all cache operations. Modern
+Memcached replaces this with a partitioned locking scheme using an array
+of discrete locks known as <code>item_locks</code>.</p>
+<p>The number of item locks is typically a fixed power of two (such as
+8,192 or 65,536). When accessing a bucket, a thread acquires only the
+lock associated with that bucket’s hash value:</p>
+<p><span class="math display">\[\text{lock\_index} = \text{hash}
+\pmod{\text{lock\_count}}\]</span></p>
+<p>During a resizing event, locking behavior is managed as follows:</p>
+<ul>
+<li><strong>Bucket-Level Isolation:</strong> The maintenance thread does
+not lock the entire table. It locks only the specific bucket (or small
+batch of buckets) it is actively migrating. It obtains the corresponding
+lock from <code>item_locks</code>, re-links the linked list nodes from
+the old bucket into the appropriate buckets in the new table, updates
+the <code>expand_bucket</code> cursor, and immediately releases the
+lock.</li>
+<li><strong>Worker Contention:</strong> Worker threads only block if
+they attempt to read or modify a key that maps to the exact lock
+currently held by the maintenance thread. Requests for keys in all other
+buckets proceed without contention.</li>
+<li><strong>Lock Switching:</strong> Memcached supports dynamic resizing
+of the item lock table itself if configured to scale item locks. In such
+cases, worker threads acquire locks using a two-phase check to verify
+whether the lock array itself is undergoing a resize, though standard
+hash resizing typically operates within the fixed item lock
+partitions.</li>
+</ul>
+<h3 id="throttled-batch-migration">Throttled Batch Migration</h3>
+<p>If the maintenance thread migrated the entire table in an unthrottled
+loop, it could exhaust system memory bus bandwidth and starve worker
+threads trying to acquire bucket locks. To prevent this, the maintenance
+thread processes items in configurable chunks (controlled internally,
+migrating a few buckets at a time).</p>
+<p>Between chunks, the maintenance thread briefly releases locks and
+optionally yields the CPU (<code>usleep</code> or pause mechanisms
+depending on compile-time configurations). This throttling guarantees
+that worker threads receive priority access to the CPU and lock
+resources, ensuring that latency stays predictable even while shifting
+millions of hash table entries.</p>
+<h3 id="completion-of-resizing">Completion of Resizing</h3>
+<p>Once <code>expand_bucket</code> reaches the total capacity of the old
+table:</p>
+<ol type="1">
+<li>The maintenance thread acquires a brief lock to clear the
+<code>expanding</code> flag.</li>
+<li>The pointer to <code>old_hashtable</code> is set to
+<code>NULL</code>.</li>
+<li>The memory occupied by the old bucket pointer array is freed.</li>
+<li>The maintenance thread goes back to sleep until the load factor
+reaches the 1.5 threshold on the newly enlarged table.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-hash-table-resizing-and-thread-locking';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

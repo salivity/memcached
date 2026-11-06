@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyze Memcached Memory Trends Using Stats Command - memcached</title>
+    <meta name="description" content="Memcached provides built-in diagnostic telemetry through its text-based statistics interface, enabling systems operators to diagnose capacity constraints and track memory utilization spikes over time. Because Memcached stores data in-memory without persis">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/analyze-memcached-memory-trends-using-stats-command">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Analyze Memcached Memory Trends Using Stats Command - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/analyze-memcached-memory-trends-using-stats-command" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached provides built-in diagnostic telemetry through its text-based statistics interface, enabling systems operators to diagnose capacity constraints and track memory utilization spikes over time. Because Memcached stores data in-memory without persis" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="analyze-memcached-memory-trends-using-stats-command">Analyze
+Memcached Memory Trends Using Stats Command</h1>
+<p>Memcached provides built-in diagnostic telemetry through its
+text-based statistics interface, enabling systems operators to diagnose
+capacity constraints and track memory utilization spikes over time.
+Because Memcached stores data in-memory without persistent logging,
+analyzing peak memory utilization trends requires polling commands like
+<code>stats</code>, <code>stats slabs</code>, and
+<code>stats items</code>, interpreting the relationship between
+allocated bytes, slab page distributions, and eviction rates, and piping
+these metrics into time-series collectors.</p>
+<h3 id="essential-metrics-in-the-base-stats-output">Essential Metrics in
+the Base <code>stats</code> Output</h3>
+<p>Running the fundamental <code>stats</code> command via Telnet or
+<code>nc</code> outputs key memory-related counters:</p>
+<ul>
+<li><strong><code>bytes</code></strong>: The current number of bytes
+used by the cache to store active items.</li>
+<li><strong><code>limit_maxbytes</code></strong>: The maximum allowed
+storage space configured for the instance.</li>
+<li><strong><code>evictions</code></strong>: The lifetime count of valid
+items removed early to free up memory for new writes.</li>
+<li><strong><code>reclaimed</code></strong>: The number of times an
+expired entry was purged to make room for a new entry.</li>
+</ul>
+<p>To determine peak memory saturation, operators track the ratio of
+<code>bytes</code> to <code>limit_maxbytes</code>. However, reaching
+near 100% does not inherently indicate performance degradation, as
+Memcached is designed to operate near capacity. Operators identify
+unhealthy peak trends when an elevated <code>bytes</code> ratio
+correlates with a non-zero, rising <code>evictions</code> metric,
+demonstrating that the allocated memory can no longer sustain the active
+working set.</p>
+<h3
+id="identifying-allocation-and-fragmentation-with-stats-slabs">Identifying
+Allocation and Fragmentation with <code>stats slabs</code></h3>
+<p>Memcached manages memory by dividing memory into 1MB pages assigned
+to specific "slab classes" geared toward different object size ranges.
+The general <code>bytes</code> metric reflects only the raw size of
+stored items, not the total memory allocated to pages. The
+<code>stats slabs</code> command reveals the operational footprint:</p>
+<ul>
+<li><strong><code>total_pages</code></strong>: The number of 1MB pages
+assigned to each slab class. Summing <code>total_pages</code> across all
+slabs multiplied by 1MB indicates the total memory committed by the
+operating system.</li>
+<li><strong><code>used_chunks</code> vs.
+<code>total_chunks</code></strong>: Indicates the fill rate within a
+specific slab class. A class where <code>used_chunks</code> consistently
+approaches <code>total_chunks</code> indicates that items of that
+specific size are driving peak memory demand.</li>
+<li><strong><code>mem_requested</code></strong>: The actual byte count
+requested by stored items within a slab. Comparing
+<code>mem_requested</code> against the slab's total capacity
+(<code>total_chunks</code> multiplied by <code>chunk_size</code>)
+highlights internal fragmentation—memory allocated to chunks but unused
+due to object size discrepancies.</li>
+</ul>
+<p>When analyzing historical peaks, operators look for "slab
+calcification," where pages allocated to a specific slab during an
+earlier spike remain locked to that class even if write patterns shift
+toward different object sizes.</p>
+<h3 id="tracking-working-set-pressure-with-stats-items">Tracking Working
+Set Pressure with <code>stats items</code></h3>
+<p>The <code>stats items</code> command exposes item-level behaviors
+across slab classes that indicate peak pressure:</p>
+<ul>
+<li><strong><code>evicted</code> and <code>evicted_time</code></strong>:
+Tracks the number of seconds since the most recently evicted item was
+fetched. A low <code>evicted_time</code> during high traffic windows
+indicates severe memory pressure, proving that actively used cache lines
+are being dropped prematurely.</li>
+<li><strong><code>outofmemory</code></strong>: Tracks instances where
+the engine failed to allocate memory even after trying to evict items.
+Any growth in this counter indicates critical memory exhaustion.</li>
+</ul>
+<h3 id="establishing-trend-analysis-pipelines">Establishing Trend
+Analysis Pipelines</h3>
+<p>Because Memcached does not retain historical high-water marks
+internally, operators establish persistent trend analysis by querying
+these commands at regular intervals (such as every 10 to 60 seconds)
+through metric exporters like the Prometheus
+<code>memcached_exporter</code> or Datadog agents. By graphing
+<code>bytes</code>, slab page consumption, and <code>evictions</code>
+across peak traffic windows, operators can distinguish between normal
+cache warming, genuine capacity exhaustion, and internal
+fragmentation.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/analyze-memcached-memory-trends-using-stats-command';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

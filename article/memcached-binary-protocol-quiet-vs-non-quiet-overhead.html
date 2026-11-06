@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Binary Protocol: Quiet vs Non-Quiet Overhead - memcached</title>
+    <meta name="description" content="The Memcached binary protocol supports both standard (non-quiet) and quiet variants of core operations such as retrieval, storage, and deletion. Choosing between these modes directly impacts network throughput, system call frequency, and CPU utilization.">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-binary-protocol-quiet-vs-non-quiet-overhead">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Binary Protocol: Quiet vs Non-Quiet Overhead - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-binary-protocol-quiet-vs-non-quiet-overhead" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The Memcached binary protocol supports both standard (non-quiet) and quiet variants of core operations such as retrieval, storage, and deletion. Choosing between these modes directly impacts network throughput, system call frequency, and CPU utilization." />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-binary-protocol-quiet-vs-non-quiet-overhead">Memcached
+Binary Protocol: Quiet vs Non-Quiet Overhead</h1>
+<p>The Memcached binary protocol supports both standard (non-quiet) and
+quiet variants of core operations such as retrieval, storage, and
+deletion. Choosing between these modes directly impacts network
+throughput, system call frequency, and CPU utilization. This article
+examines the concrete differences in overhead between Memcached binary
+protocol quiet and non-quiet requests, detailing how quiet commands
+minimize payload size and round-trips by omitting unnecessary server
+responses.</p>
+<h3 id="server-response-volume-and-network-bandwidth">Server Response
+Volume and Network Bandwidth</h3>
+<p>The primary overhead difference lies in the volume of responses
+transmitted across the wire.</p>
+<p>In the non-quiet mode, every command sent by a client generates an
+explicit response from the server. For instance, executing a standard
+<code>GET</code> (opcode <code>0x00</code>) for a non-existent key
+forces the server to construct and return a full 24-byte binary header
+with a <code>KEY_ENOENT</code> (Key Not Found) status.</p>
+<p>Quiet commands—such as <code>GetQ</code> (opcode <code>0x09</code>),
+<code>SetQ</code> (opcode <code>0x11</code>), and <code>DeleteQ</code>
+(opcode <code>0x14</code>)—suppress responses based on the outcome:</p>
+<ul>
+<li><strong>Retrievals (<code>GetQ</code>):</strong> The server only
+returns a packet if the key is found (a cache hit). If the key does not
+exist (a cache miss), the server silently drops the request without
+transmitting any data.</li>
+<li><strong>Mutations (<code>SetQ</code>,
+<code>DeleteQ</code>):</strong> The server only returns a packet if an
+error occurs (such as an out-of-memory error or key collision). If the
+mutation succeeds, no acknowledgment packet is sent.</li>
+</ul>
+<p>In read-heavy workloads with moderate to high cache-miss rates, or in
+write-heavy workloads, quiet commands eliminate megabytes of unnecessary
+network traffic by eliminating miss responses and success
+acknowledgments.</p>
+<h3 id="tcp-packet-count-and-system-call-overhead">TCP Packet Count and
+System Call Overhead</h3>
+<p>Non-quiet operations produce a strict 1:1 request-to-response ratio.
+When sending bulk operations (such as multi-gets) using non-quiet
+commands, both the client and server must process network buffers for
+every individual command. This increases the total number of TCP
+segments, exacerbating network packet overhead, TCP ACK traffic, and
+network interface card (NIC) interrupt handling.</p>
+<p>Quiet operations significantly reduce the packet count. When a client
+pipelines hundreds of <code>GetQ</code> commands, the server only queues
+data for the keys that exist. Because fewer packets are generated, the
+server can pack multiple hits into fewer TCP segments. Furthermore, this
+reduces the number of <code>read()</code> and <code>write()</code>
+system calls required on both the application server and the Memcached
+instance, lowering kernel context-switching overhead.</p>
+<h3 id="pipelining-synchronization-and-delimiting">Pipelining
+Synchronization and Delimiting</h3>
+<p>Because quiet commands suppress responses, the client cannot rely on
+a 1:1 sequence to correlate requests with responses. To establish a
+boundary, client libraries append a non-quiet command—typically a
+standard <code>GET</code> or a <code>NOOP</code> (opcode
+<code>0x0a</code>)—at the end of a pipelined batch of quiet
+commands.</p>
+<p>The overhead trade-off shifts slightly to the client:</p>
+<ul>
+<li><strong>Non-Quiet:</strong> Client logic is simple. It reads
+responses sequentially off the socket, knowing each corresponds directly
+to a previous request.</li>
+<li><strong>Quiet:</strong> The client must track the opaque identifier
+field in the 24-byte binary header to match incoming responses to the
+original requests. Any key not received before the terminal
+<code>NOOP</code> response is treated as a miss. While this requires
+minimal extra memory and CPU on the client, it is vastly outweighed by
+the reduction in I/O and network serialization costs.</li>
+</ul>
+<h3 id="cpu-and-serialization-costs">CPU and Serialization Costs</h3>
+<p>Non-quiet requests force the Memcached server to allocate memory
+buffers, serialize the 24-byte response header, and queue socket writes
+for every single operation, regardless of utility. Similarly, the client
+CPU must parse each incoming header.</p>
+<p>With quiet requests, Memcached avoids allocating buffer space and
+running serialization logic for misses and successful writes. Both the
+server and client save CPU cycles that would otherwise be spent
+constructing, transmitting, parsing, and discarding empty or routine
+status responses.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-binary-protocol-quiet-vs-non-quiet-overhead';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

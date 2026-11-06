@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Text Protocol Debugging with Telnet - memcached</title>
+    <meta name="description" content="The Memcached text protocol offers a human-readable, command-driven interface that enables direct troubleshooting and manual cache inspection using standard network utilities like Telnet and Netcat. This article outlines the primary features of the protoc">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-text-protocol-debugging-with-telnet">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Text Protocol Debugging with Telnet - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-text-protocol-debugging-with-telnet" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The Memcached text protocol offers a human-readable, command-driven interface that enables direct troubleshooting and manual cache inspection using standard network utilities like Telnet and Netcat. This article outlines the primary features of the protoc" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-text-protocol-debugging-with-telnet">Memcached Text
+Protocol Debugging with Telnet</h1>
+<p>The Memcached text protocol offers a human-readable, command-driven
+interface that enables direct troubleshooting and manual cache
+inspection using standard network utilities like Telnet and Netcat. This
+article outlines the primary features of the protocol that facilitate
+manual debugging, including human-readable command execution, live key
+inspection, slab allocation analysis, and server state diagnostics.</p>
+<h3 id="plain-text-line-based-communication">Plain-Text, Line-Based
+Communication</h3>
+<p>The protocol operates entirely over readable ASCII strings terminated
+by standard carriage returns and line feeds (<code>\r\n</code>). Because
+it does not require binary framing or client-side serialization to
+communicate basic commands, an engineer can open a raw TCP socket
+(<code>telnet localhost 11211</code> or <code>nc localhost 11211</code>)
+and immediately type commands to observe direct responses.</p>
+<h3 id="explicit-storage-and-retrieval-verification">Explicit Storage
+and Retrieval Verification</h3>
+<p>The protocol separates command parameters into clean, space-delimited
+arguments, allowing you to manually verify how data behaves inside the
+cache:</p>
+<ul>
+<li><strong>Direct Data Writes:</strong> Using <code>set</code>,
+<code>add</code>, <code>replace</code>, <code>append</code>, and
+<code>prepend</code>, you can specify explicit metadata including 32-bit
+flags, expiration times (TTL in seconds or UNIX timestamps), and exact
+byte lengths. This makes it trivial to test edge cases such as
+zero-second expirations or data truncation.</li>
+<li><strong>Direct Data Reads:</strong> Running
+<code>get &lt;key&gt;</code> or <code>gets &lt;key&gt;</code> displays
+the stored value along with its metadata flags and Check-And-Set (CAS)
+tokens, allowing you to verify that objects are not silently dropped or
+corrupted.</li>
+<li><strong>Deterministic Status Messages:</strong> Instead of numeric
+error codes, the server replies with unambiguous text strings such as
+<code>STORED</code>, <code>NOT_STORED</code>, <code>EXISTS</code>, and
+<code>NOT_FOUND</code>, making validation immediate.</li>
+</ul>
+<h3 id="granular-server-metrics-via-the-stats-command-family">Granular
+Server Metrics via the <code>stats</code> Command Family</h3>
+<p>Debugging performance degradation, cache misses, or memory pressure
+is heavily supported by specialized <code>stats</code> subcommands:</p>
+<ul>
+<li><strong>General System Diagnostics (<code>stats</code>):</strong>
+Displays overall server health, including uptime, memory usage, current
+active connections, cumulative hits, misses, and eviction counts.</li>
+<li><strong>Memory and Slab Inspection
+(<code>stats slabs</code>):</strong> Reports chunk sizes, allocated
+pages, and memory waste across individual slab classes to identify
+memory fragmentation or poor item distribution.</li>
+<li><strong>Item Distribution (<code>stats items</code>):</strong> Lists
+item counts, age of the oldest item, and eviction rates per slab class
+to diagnose why specific data types are being purged prematurely.</li>
+<li><strong>Key Sampling
+(<code>stats cachedump &lt;slab_id&gt; &lt;limit&gt;</code>):</strong>
+Allows manual extraction of key names, item sizes, and expiration
+timestamps from specific slab classes, enabling inspection of resident
+keys without a dedicated monitoring client.</li>
+</ul>
+<h3 id="environment-and-state-control">Environment and State
+Control</h3>
+<p>The text protocol provides basic administrative utilities directly
+through the terminal:</p>
+<ul>
+<li><strong><code>flush_all</code>:</strong> Invalidate all active keys
+globally, either immediately or with a timed delay, which is useful for
+setting up reproducible test conditions.</li>
+<li><strong><code>version</code>:</strong> Confirms the active Memcached
+release to rule out version-specific bugs or incompatibilities.</li>
+<li><strong><code>verbosity &lt;level&gt;</code>:</strong> Adjusts the
+verbosity level of server-side logging dynamically without requiring a
+process restart.</li>
+</ul>
+<h3 id="verbose-error-handling">Verbose Error Handling</h3>
+<p>When a syntax error occurs or malformed data is sent, the text
+protocol responds with informative errors categorizing the fault:</p>
+<ul>
+<li><strong><code>ERROR</code>:</strong> The submitted command does not
+exist.</li>
+<li><strong><code>CLIENT_ERROR &lt;message&gt;</code>:</strong> The
+input failed validation (e.g., mismatched byte length or non-numeric
+arguments).</li>
+<li><strong><code>SERVER_ERROR &lt;message&gt;</code>:</strong> The
+server encountered an internal failure or out-of-memory condition.</li>
+</ul>
+<p>These distinct error classes provide immediate clarity during manual
+sessions on whether an issue stems from improper client requests or
+internal server limits.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-text-protocol-debugging-with-telnet';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Key Uniqueness During Concurrent Writes - memcached</title>
+    <meta name="description" content="This article explores how Memcached maintains key uniqueness and resolves conflicts when multiple clients attempt concurrent write operations. At its core, Memcached utilizes a multithreaded architecture backed by fine-grained thread locking, a shared pri">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-key-uniqueness-during-concurrent-writes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Key Uniqueness During Concurrent Writes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-key-uniqueness-during-concurrent-writes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how Memcached maintains key uniqueness and resolves conflicts when multiple clients attempt concurrent write operations. At its core, Memcached utilizes a multithreaded architecture backed by fine-grained thread locking, a shared pri" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-key-uniqueness-during-concurrent-writes">Memcached Key
+Uniqueness During Concurrent Writes</h1>
+<p>This article explores how Memcached maintains key uniqueness and
+resolves conflicts when multiple clients attempt concurrent write
+operations. At its core, Memcached utilizes a multithreaded architecture
+backed by fine-grained thread locking, a shared primary hash table, and
+atomic memory operations. Understanding these internal
+mechanisms—specifically hash table bucket locking, command semantics,
+and CAS (Check-And-Set) tokens—clarifies how the cache reliably
+evaluates uniqueness without race conditions.</p>
+<h3 id="the-primary-hash-table-and-bucket-locking">The Primary Hash
+Table and Bucket Locking</h3>
+<p>Memcached organizes all stored keys in a single, globally shared hash
+table. To achieve high throughput across multiple CPU cores, the engine
+divides this hash table into discrete partitions, each protected by an
+internal lock (often referred to as an item lock or bucket lock).</p>
+<p>When multiple clients issue write requests simultaneously, Memcached
+distributes the network connections across worker threads. When a thread
+processes a write command:</p>
+<ol type="1">
+<li>It computes the hash of the target key using a hashing algorithm
+(such as Murmur3 or Jenkins).</li>
+<li>It identifies the target hash bucket where the key resides or should
+reside.</li>
+<li>It acquires the lock specific to that bucket or item slot.</li>
+</ol>
+<p>Because only one worker thread can hold the lock for a given key's
+hash bucket at any single microsecond, the actual evaluation of key
+uniqueness is strictly serialized. Even if dozens of clients attempt to
+write to the same key simultaneously, their requests are queued at the
+lock level and evaluated sequentially.</p>
+<h3 id="key-evaluation-and-matching-logic">Key Evaluation and Matching
+Logic</h3>
+<p>Once a worker thread acquires the bucket lock, it traverses the
+bucket's linked list to see if an item with the exact same key
+(evaluated byte-for-byte in length and content) already exists.</p>
+<p>During this lookup, the thread also checks the item's expiration
+metadata. If an item matching the key is found but its Time-To-Live
+(TTL) has elapsed, Memcached invalidates the expired entry immediately
+via lazy expiration. In this scenario, the engine treats the key as if
+it does not exist, freeing the slot for the incoming write.</p>
+<h3 id="command-semantics-and-uniqueness-enforcement">Command Semantics
+and Uniqueness Enforcement</h3>
+<p>How uniqueness dictates the outcome depends directly on the command
+executed by the client:</p>
+<ul>
+<li><strong><code>ADD</code></strong>: Explicitly enforces uniqueness.
+If the locked lookup finds an active, identical key, the operation
+immediately fails, returns <code>NOT_STORED</code>, and releases the
+lock. If the key is not found, the item is inserted, and
+<code>STORED</code> is returned.</li>
+<li><strong><code>SET</code></strong>: Bypasses uniqueness enforcement
+by acting as an "insert or overwrite." If the key exists, the old item's
+memory is dereferenced and replaced with the new data. If it does not
+exist, the item is newly allocated.</li>
+<li><strong><code>REPLACE</code></strong>: The inverse of
+<code>ADD</code>. It succeeds only if the key is actively found. If the
+key is unique and does not exist in the hash table, it returns
+<code>NOT_STORED</code>.</li>
+<li><strong><code>CAS</code> (Check-And-Set)</strong>: Evaluates both
+key existence and data versioning. Each item in Memcached carries an
+internal, monotonically increasing 64-bit CAS token. A <code>CAS</code>
+operation evaluates whether the key exists and verifies that its current
+token matches the token provided by the client. If another client
+updated the key in the interim, the CAS token will mismatch, and
+Memcached rejects the write with <code>EXISTS</code>.</li>
+</ul>
+<h3 id="thread-safety-in-item-allocation">Thread Safety in Item
+Allocation</h3>
+<p>Evaluating uniqueness also interacts with Memcached’s slab allocator.
+When an operation requires adding a new key-value pair, memory must be
+allocated from a specific slab class. Memcached manages item reference
+counters and slab locks independently or in conjunction with item locks
+to ensure that allocating new memory or freeing old versions of an
+overwritten key does not corrupt memory pointers while concurrent
+threads read or write adjacent keys.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-key-uniqueness-during-concurrent-writes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

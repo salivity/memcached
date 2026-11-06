@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyze Memcached Memory Efficiency with Stats Slabs - memcached</title>
+    <meta name="description" content="Memcached relies on a slab allocation mechanism to prevent memory fragmentation, dividing memory into predefined slab classes with fixed-size chunks. Analyzing the metrics provided by the stats slabs command allows developers to evaluate how efficiently m">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/analyze-memcached-memory-efficiency-with-stats-slabs">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Analyze Memcached Memory Efficiency with Stats Slabs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/analyze-memcached-memory-efficiency-with-stats-slabs" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached relies on a slab allocation mechanism to prevent memory fragmentation, dividing memory into predefined slab classes with fixed-size chunks. Analyzing the metrics provided by the stats slabs command allows developers to evaluate how efficiently m" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="analyze-memcached-memory-efficiency-with-stats-slabs">Analyze
+Memcached Memory Efficiency with Stats Slabs</h1>
+<p>Memcached relies on a slab allocation mechanism to prevent memory
+fragmentation, dividing memory into predefined slab classes with
+fixed-size chunks. Analyzing the metrics provided by the
+<code>stats slabs</code> command allows developers to evaluate how
+efficiently memory is being allocated, identify internal fragmentation
+(slack space), and determine whether slab classes are appropriately
+matched to application payload sizes. This guide explains how to
+extract, compare, and interpret key slab metrics to optimize Memcached
+memory utilization.</p>
+<h2 id="understanding-the-memcached-slab-allocator">Understanding the
+Memcached Slab Allocator</h2>
+<p>Memcached avoids operating system memory fragmentation by allocating
+memory in fixed 1 MB pages. Each page is divided into equal-sized chunks
+defined by slab classes. As item sizes grow, each subsequent slab class
+increases chunk capacity based on a growth factor (default is 1.25).</p>
+<p>When a key-value pair is stored, Memcached places it into the
+smallest slab class that can fit the data. If the item does not
+completely fill the chunk, the remaining unused space inside that chunk
+cannot be used by other keys. This difference represents internal
+fragmentation, or "slack space."</p>
+<h2 id="key-stats-slabs-metrics-to-monitor">Key <code>stats slabs</code>
+Metrics to Monitor</h2>
+<p>Issuing the <code>stats slabs</code> command via telnet or
+<code>memcached-tool</code> outputs metrics for each active slab class
+(indexed as <code>[slab_id]:[metric]</code>), as well as global
+summaries. The most critical per-slab metrics include:</p>
+<ul>
+<li><strong><code>chunk_size</code></strong>: The maximum byte size of
+an item that fits in this slab class.</li>
+<li><strong><code>chunks_per_page</code></strong>: The number of chunks
+allocated per 1 MB page.</li>
+<li><strong><code>total_pages</code></strong>: Total number of pages
+allocated to this slab class.</li>
+<li><strong><code>total_chunks</code></strong>: Total chunk capacity
+(<code>total_pages * chunks_per_page</code>).</li>
+<li><strong><code>used_chunks</code></strong>: The number of chunks
+currently storing data.</li>
+<li><strong><code>free_chunks</code></strong>: Available chunks inside
+already allocated pages (<code>total_chunks - used_chunks</code>).</li>
+<li><strong><code>mem_requested</code></strong>: Total bytes of actual
+data stored within this slab class.</li>
+</ul>
+<h2 id="comparing-metrics-to-evaluate-efficiency">Comparing Metrics to
+Evaluate Efficiency</h2>
+<p>Developers can evaluate efficiency across three primary dimensions:
+internal fragmentation, chunk saturation, and page distribution.</p>
+<h3 id="1-calculating-internal-fragmentation-slack-space">1. Calculating
+Internal Fragmentation (Slack Space)</h3>
+<p>Internal fragmentation occurs when stored payloads are significantly
+smaller than the slab's <code>chunk_size</code>.</p>
+<p>To calculate the exact amount of wasted memory within currently
+stored items for a specific slab:</p>
+<p><span class="math display">\[\text{Allocated Storage} =
+\text{used\_chunks} \times \text{chunk\_size}\]</span> <span
+class="math display">\[\text{Wasted Bytes} = \text{Allocated Storage} -
+\text{mem\_requested}\]</span> <span
+class="math display">\[\text{Efficiency Ratio} =
+\frac{\text{mem\_requested}}{\text{used\_chunks} \times
+\text{chunk\_size}}\]</span></p>
+<p>An efficiency ratio close to 1.0 indicates optimal sizing. An
+efficiency ratio below 0.70 indicates that more than 30% of the memory
+assigned to stored items is being wasted as slack space.</p>
+<h3 id="2-measuring-slab-capacity-and-waste-in-idle-chunks">2. Measuring
+Slab Capacity and Waste in Idle Chunks</h3>
+<p>Memcached permanently assigns 1 MB memory pages to a slab class once
+allocated. If items expire or are deleted, those chunks become idle.</p>
+<p>To evaluate overall slab occupancy:</p>
+<p><span class="math display">\[\text{Chunk Utilization Rate} =
+\frac{\text{used\_chunks}}{\text{total\_chunks}}\]</span></p>
+<p>If a slab class has a high <code>total_pages</code> count but a
+consistently low <code>Chunk Utilization Rate</code> (and high
+<code>free_chunks</code>), memory has been captured by this slab class
+and cannot be reclaimed by other classes that might need it.</p>
+<h3 id="3-identifying-slab-imbalance-and-evictions">3. Identifying Slab
+Imbalance and Evictions</h3>
+<p>Correlate <code>stats slabs</code> with <code>stats items</code> to
+check for evictions. If one slab class shows high evictions while other
+slab classes exhibit high counts of <code>free_chunks</code> and low
+utilization, the cache is suffering from slab calcification or memory
+starvation in specific item size bands.</p>
+<h2 id="optimization-strategies">Optimization Strategies</h2>
+<p>If analysis reveals poor memory efficiency:</p>
+<ul>
+<li><strong>Tune the Growth Factor (<code>-f</code>)</strong>: If the
+efficiency ratio is low across multiple slabs, decrease the growth
+factor (e.g., <code>-f 1.1</code>). This generates more slab classes
+with smaller size gaps, significantly reducing internal slack space at
+the cost of slight overhead.</li>
+<li><strong>Adjust Minimum Chunk Size (<code>-n</code>)</strong>: If
+small keys are dominating lower slabs with high slack space, decrease
+the initial item space setting to better fit small payloads.</li>
+<li><strong>Enable Slab Reassignment (<code>slab_reassign</code> /
+<code>slab_automove</code>)</strong>: Enable runtime slab reassignment
+to allow Memcached to transfer unused 1 MB pages from idle slab classes
+to classes experiencing evictions.</li>
+<li><strong>Normalize Payload Sizes</strong>: Group application cache
+values into consistent, predictable sizes that match specific slab
+boundaries.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/analyze-memcached-memory-efficiency-with-stats-slabs';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

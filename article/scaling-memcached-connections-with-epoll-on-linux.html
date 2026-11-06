@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scaling Memcached Connections with epoll on Linux - memcached</title>
+    <meta name="description" content="This article explores the critical role that the Linux epoll system call plays in enabling Memcached to scale from thousands to hundreds of thousands of concurrent network connections. It details the performance bottlenecks of legacy I/O mechanisms like s">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/scaling-memcached-connections-with-epoll-on-linux">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Scaling Memcached Connections with epoll on Linux - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/scaling-memcached-connections-with-epoll-on-linux" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores the critical role that the Linux epoll system call plays in enabling Memcached to scale from thousands to hundreds of thousands of concurrent network connections. It details the performance bottlenecks of legacy I/O mechanisms like s" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="scaling-memcached-connections-with-epoll-on-linux">Scaling
+Memcached Connections with epoll on Linux</h1>
+<p>This article explores the critical role that the Linux
+<code>epoll</code> system call plays in enabling Memcached to scale from
+thousands to hundreds of thousands of concurrent network connections. It
+details the performance bottlenecks of legacy I/O mechanisms like
+<code>select</code> and <code>poll</code>, explains how
+<code>epoll</code> achieves <span class="math inline">\(O(1)\)</span>
+event-notification complexity, and examines how Memcached integrates
+with modern Linux kernels via event loops and multi-threading to handle
+massive connection capacities with minimal CPU overhead.</p>
+<h3 id="the-problem-with-legacy-io-select-and-poll">The Problem with
+Legacy I/O: select and poll</h3>
+<p>In early network architectures, servers relied on
+<code>select()</code> and <code>poll()</code> system calls to monitor
+multiple file descriptors (sockets) for readability or writability. Both
+mechanisms suffer from fundamental scaling limitations:</p>
+<ul>
+<li><strong>Linear Complexity (<span
+class="math inline">\(O(N)\)</span>):</strong> Every time an application
+calls <code>select()</code> or <code>poll()</code>, the kernel must scan
+through the entire list of passed file descriptors to check their
+readiness states.</li>
+<li><strong>Repeated State Copying:</strong> The entire set of file
+descriptors must be copied from user space to kernel space on every
+call, and the results copied back, creating severe memory bandwidth and
+CPU bottlenecks as connection counts grow.</li>
+<li><strong>Scalability Drop-off:</strong> While Memcached servers
+frequently manage tens of thousands of idle or intermittently active
+client connections, <code>select()</code> and <code>poll()</code> force
+the CPU to waste cycles evaluating all connections rather than only
+those with pending data.</li>
+</ul>
+<h3 id="how-epoll-achieves-scalability">How epoll Achieves
+Scalability</h3>
+<p>Introduced in the 2.6 Linux kernel, <code>epoll</code> replaces
+linear scanning with an event-driven mechanism optimized for
+high-density connection handling. It provides three primary design
+advantages:</p>
+<ol type="1">
+<li><strong>State Persistence in the Kernel (<code>epoll_create</code>
+and <code>epoll_ctl</code>):</strong> Sockets are registered once with
+the kernel using an internal red-black tree. Connections can be added,
+modified, or removed dynamically without having to re-pass the entire
+connection set on every poll cycle.</li>
+<li><strong><span class="math inline">\(O(1)\)</span> Event Notification
+(<code>epoll_wait</code>):</strong> When a network interface receives
+packets for a specific socket, kernel interrupt handlers fire a callback
+that places the ready file descriptor into an internal doubly-linked
+ready list. When the application invokes <code>epoll_wait()</code>, the
+kernel only returns the descriptors that are actively ready for I/O. The
+lookup time depends strictly on the number of active events, not the
+total number of connected clients.</li>
+<li><strong>Reduced Context Switching:</strong> <code>epoll</code>
+minimizes user-kernel boundary transitions and memory copies, conserving
+memory bandwidth and CPU cycles under heavy workloads.</li>
+</ol>
+<h3 id="memcacheds-integration-via-libevent">Memcached's Integration via
+Libevent</h3>
+<p>Memcached delegates low-level networking and event handling to
+<code>libevent</code>, a cross-platform abstraction layer that
+automatically chooses the most performant backend available. On modern
+Linux, <code>libevent</code> binds directly to <code>epoll</code>.</p>
+<p>Memcached couples this backend with non-blocking I/O
+(<code>O_NONBLOCK</code>). When a client initiates a request or
+completes a command:</p>
+<ul>
+<li>Sockets are monitored by <code>epoll</code> in a level-triggered
+mode.</li>
+<li>When data arrives, <code>epoll_wait()</code> notifies the
+application layer immediately.</li>
+<li>Memcached reads the buffered bytes until the socket would block
+(<code>EAGAIN</code> or <code>EWOULDBLOCK</code>), returns to the event
+loop, and waits for the next kernel notification.</li>
+</ul>
+<h3 id="multi-threaded-event-architecture">Multi-Threaded Event
+Architecture</h3>
+<p>To prevent a single CPU core from becoming a bottleneck, Memcached
+implements a multi-threaded connection-handling model:</p>
+<ul>
+<li><strong>The Dispatcher Thread:</strong> A dedicated master thread
+listens for new incoming TCP connections on the listening socket.</li>
+<li><strong>Worker Threads:</strong> Memcached launches multiple worker
+threads, typically matching the host's CPU core count. Each worker
+thread runs its own isolated <code>libevent</code> instance backed by an
+independent <code>epoll</code> instance.</li>
+<li><strong>Load Distribution:</strong> When the dispatcher accepts a
+new connection, it assigns the connection to a worker thread via an
+internal pipe or queue. The receiving worker registers the new client
+socket into its local <code>epoll</code> instance.</li>
+</ul>
+<p>This architecture decouples connection distribution from request
+execution, ensuring that locking is minimized and I/O wait times remain
+uniform across all available CPU cores.</p>
+<h3 id="impact-on-modern-linux-kernels">Impact on Modern Linux
+Kernels</h3>
+<p>On modern Linux deployments, <code>epoll</code> enables Memcached
+instances to support hundreds of thousands of concurrent connections per
+node without memory thrashing or CPU saturation. By removing the
+dependency between connection count and CPU utilization,
+<code>epoll</code> ensures that Memcached’s throughput is bound solely
+by available memory and network bandwidth rather than socket-management
+overhead.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/scaling-memcached-connections-with-epoll-on-linux';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

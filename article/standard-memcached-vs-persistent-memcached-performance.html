@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standard Memcached vs Persistent Memcached Performance - memcached</title>
+    <meta name="description" content="This article examines the core performance differences between standard, purely in-memory Memcached and Memcached coupled with persistent storage backends. Standard Memcached is designed strictly for volatile caching, prioritizing raw throughput and micro">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/standard-memcached-vs-persistent-memcached-performance">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Standard Memcached vs Persistent Memcached Performance - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/standard-memcached-vs-persistent-memcached-performance" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines the core performance differences between standard, purely in-memory Memcached and Memcached coupled with persistent storage backends. Standard Memcached is designed strictly for volatile caching, prioritizing raw throughput and micro" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="standard-memcached-vs-persistent-memcached-performance">Standard
+Memcached vs Persistent Memcached Performance</h1>
+<p>This article examines the core performance differences between
+standard, purely in-memory Memcached and Memcached coupled with
+persistent storage backends. Standard Memcached is designed strictly for
+volatile caching, prioritizing raw throughput and microsecond latency by
+operating entirely in RAM. In contrast, persistent Memcached variants
+(utilizing engines like RocksDB, LevelDB, or custom write-ahead logs)
+balance fast data access with durability, introducing distinct
+operational trade-offs in read/write speeds, resource utilization, and
+disaster recovery.</p>
+<h3 id="latency-profiles-memory-vs-io-operations">Latency Profiles:
+Memory vs. I/O Operations</h3>
+<p>Standard Memcached stores all key-value pairs in dynamic RAM via a
+slab allocator. Because it never interacts with a storage device, both
+read and write operations consistently execute in sub-millisecond ranges
+(often 100 to 300 microseconds over a local network).</p>
+<p>Persistent Memcached implementations introduce secondary storage into
+the request lifecycle.</p>
+<ul>
+<li><strong>Write Latency:</strong> If writes are synchronous (requiring
+an explicit disk flush or <code>fsync</code>), write latency increases
+by orders of magnitude—ranging from 1 to 10 milliseconds on fast NVMe
+drives. Even with asynchronous persistence (writing to a memory buffer
+before flushing to disk), operating system context switching, buffer
+management, and thread synchronization increase baseline write latency
+compared to pure RAM.</li>
+<li><strong>Read Latency:</strong> If the entire active dataset fits in
+RAM, read latency remains comparable to standard Memcached. However,
+once the dataset exceeds available memory, "cache misses" must retrieve
+data from disk, creating significant latency spikes that standard
+Memcached avoids simply by evicting older items.</li>
+</ul>
+<h3 id="throughput-and-scalability">Throughput and Scalability</h3>
+<p>Standard Memcached scales almost linearly across multi-core systems
+by utilizing non-blocking network I/O (<code>libevent</code>) and
+fine-grained locking on memory slabs. It regularly achieves millions of
+operations per second per server node.</p>
+<p>Persistent backends face input/output operations per second (IOPS)
+and write amplification limits imposed by physical storage:</p>
+<ul>
+<li><strong>Log-Structured Merge (LSM) Trees:</strong> Frequently used
+for persistence, LSM trees require background compaction processes.
+Compaction consumes significant CPU cycles and disk I/O bandwidth,
+leading to throughput drops during peak write loads.</li>
+<li><strong>Lock Contention:</strong> Managing persistent logs or
+B-Trees requires additional locking mechanisms, which reduce concurrent
+multi-threaded execution efficiency under heavy workloads.</li>
+</ul>
+<h3 id="cache-stampede-mitigation-vs-raw-speed">Cache Stampede
+Mitigation vs. Raw Speed</h3>
+<p>The key performance advantage of persistent Memcached does not appear
+during standard operations, but during service restarts and
+failovers:</p>
+<ul>
+<li><strong>Standard Memcached:</strong> A restarted instance starts
+with an empty cache (cold cache). This frequently triggers a "cache
+stampede" or "thundering herd" problem, where thousands of client
+requests bypass the cache simultaneously, potentially overwhelming and
+crashing backend relational databases.</li>
+<li><strong>Persistent Memcached:</strong> Because data survives crashes
+or reboots, the cache remains immediately warm upon startup. Read
+requests continue to be served without redirection to backend databases,
+protecting core architecture at the expense of everyday write
+overhead.</li>
+</ul>
+<h3 id="resource-utilization-and-overhead">Resource Utilization and
+Overhead</h3>
+<p>Standard Memcached runs with predictable, minimal memory overhead.
+The slab allocator prevents memory fragmentation, and CPU usage is tied
+strictly to network traffic and memory lookups.</p>
+<p>Persistent Memcached requires a significantly higher resource
+budget:</p>
+<ul>
+<li><strong>Memory Division:</strong> RAM must be shared between the
+active cache, the persistent engine’s block/index caches, and operating
+system page cache buffers.</li>
+<li><strong>Disk I/O and Wear:</strong> High-frequency write-heavy
+workloads will exhaust SSD write endurance rapidly due to write
+amplification inherent in append-only files and WAL updates.</li>
+<li><strong>CPU Consumption:</strong> Serialization, checksum
+calculations, compression algorithms (e.g., Snappy, ZSTD), and
+background sync routines substantially raise baseline CPU usage.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/standard-memcached-vs-persistent-memcached-performance';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

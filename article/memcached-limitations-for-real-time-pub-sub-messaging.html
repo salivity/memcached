@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Limitations for Real-Time Pub/Sub Messaging - memcached</title>
+    <meta name="description" content="Memcached is a high-performance, distributed memory caching system engineered primarily to accelerate dynamic web applications by alleviating database load. While it excels at simple key-value storage, developers occasionally consider using it for real-ti">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-limitations-for-real-time-pub-sub-messaging">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Limitations for Real-Time Pub/Sub Messaging - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-limitations-for-real-time-pub-sub-messaging" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is a high-performance, distributed memory caching system engineered primarily to accelerate dynamic web applications by alleviating database load. While it excels at simple key-value storage, developers occasionally consider using it for real-ti" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-limitations-for-real-time-pubsub-messaging">Memcached
+Limitations for Real-Time Pub/Sub Messaging</h1>
+<p>Memcached is a high-performance, distributed memory caching system
+engineered primarily to accelerate dynamic web applications by
+alleviating database load. While it excels at simple key-value storage,
+developers occasionally consider using it for real-time
+publish/subscribe (pub/sub) messaging architectures due to its high
+throughput and low latency. However, Memcached was never designed as a
+message broker. Attempting to implement pub/sub patterns on top of
+Memcached introduces fundamental architectural limitations, including
+the lack of native push mechanics, absence of message ordering,
+vulnerability to silent data eviction, and high polling overhead.</p>
+<h3 id="lack-of-native-push-notification-mechanisms">Lack of Native Push
+Notification Mechanisms</h3>
+<p>The most significant barrier to using Memcached for pub/sub is its
+strictly pull-based, request-response architecture. Native pub/sub
+systems automatically push new messages to connected subscribers the
+moment a publisher emits an event. Memcached lacks any continuous
+subscription or event-driven mechanism. To detect new messages,
+subscribers must constantly poll the server with <code>GET</code>
+requests. This introduces a trade-off between latency and resource
+consumption: polling frequently consumes significant CPU and network
+bandwidth, while polling less frequently destroys the real-time nature
+of the application.</p>
+<h3 id="high-network-and-cpu-overhead-from-polling">High Network and CPU
+Overhead from Polling</h3>
+<p>Because consumers must continually poll for new keys or updates, the
+system wastes massive amounts of computational power on empty reads. In
+high-concurrency environments with thousands of consumers, polling
+generates severe network chatter and connection saturation. Unlike
+native pub/sub brokers that maintain lightweight, idle listening
+connections, Memcached servers must process thousands of redundant read
+queries per second even when no new messages are published.</p>
+<h3 id="absence-of-complex-data-structures-and-ordering">Absence of
+Complex Data Structures and Ordering</h3>
+<p>Memcached treats data as opaque blobs indexed by arbitrary strings.
+It does not provide built-in lists, streams, or FIFO (First-In,
+First-Out) queue data types. In a pub/sub pattern, maintaining
+chronological message ordering is critical. Emulating queues or streams
+in Memcached requires custom client-side logic—often involving index
+tracking or appending data to existing keys. Without atomic multi-key
+operations or native list primitives, coordinating message order across
+distributed clients creates race conditions and high implementation
+complexity.</p>
+<h3 id="unpredictable-data-eviction-lru-mechanism">Unpredictable Data
+Eviction (LRU Mechanism)</h3>
+<p>Memcached operates strictly as a volatile cache. When allocated
+memory reaches capacity, the daemon aggressively purges items using a
+Least Recently Used (LRU) eviction algorithm to make room for new
+writes. In a messaging pattern, if a consumer falls behind or traffic
+surges, unread messages can be evicted from memory before they are ever
+consumed. Memcached drops these keys silently without error
+notifications, causing untraceable data loss.</p>
+<h3 id="no-fan-out-or-multi-consumer-tracking">No Fan-Out or
+Multi-Consumer Tracking</h3>
+<p>True pub/sub systems support the fan-out pattern, where a single
+published message is delivered independently to multiple distinct
+consumer groups. Memcached has no concept of client state, consumer
+offsets, or acknowledgment tracking. If a single key represents a
+message, reading that key does not manage state for multiple independent
+subscribers. If you delete the key upon read, other subscribers will
+miss it; if you leave it, you must implement complex external garbage
+collection and state tracking to know which subscribers have read the
+payload.</p>
+<h3 id="concurrency-and-race-conditions">Concurrency and Race
+Conditions</h3>
+<p>While Memcached supports atomic operations like <code>INCR</code>,
+<code>DECR</code>, and <code>CAS</code> (Check-And-Set), building
+reliable pub/sub semantics using these tools is fragile.
+High-concurrency environments face constant <code>CAS</code> collisions
+when multiple publishers or subscribers attempt to modify queue pointers
+or message lists simultaneously. These retries degrade throughput and
+can lead to deadlocks or dropped updates.</p>
+<h3 id="lack-of-delivery-guarantees">Lack of Delivery Guarantees</h3>
+<p>Modern pub/sub patterns rely on explicit delivery semantics, such as
+"at-least-once," "at-most-once," or "exactly-once" delivery. Memcached
+provides no message persistence, no acknowledgment handshake (ACK/NACK),
+and no replication for fault tolerance. If a Memcached node restarts or
+crashes, all active and unread messages are permanently lost.</p>
+<p>For applications requiring real-time pub/sub messaging, purpose-built
+solutions such as Redis (via Redis Pub/Sub or Streams), RabbitMQ, Apache
+Kafka, or NATS provide native push capabilities, delivery guarantees,
+and appropriate data structures without the overhead and failure risks
+inherent in hacking Memcached for the task.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-limitations-for-real-time-pub-sub-messaging';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Manages Memory Under Heavy Concurrency - memcached</title>
+    <meta name="description" content="Memcached maintains memory stability and prevents degradation during rapid concurrent key creation and deletion through a pre-allocated slab allocation system, fine-grained thread locking, reference counting, and an adaptive segmented Least Recently Used">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-manages-memory-under-heavy-concurrency">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Manages Memory Under Heavy Concurrency - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-manages-memory-under-heavy-concurrency" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains memory stability and prevents degradation during rapid concurrent key creation and deletion through a pre-allocated slab allocation system, fine-grained thread locking, reference counting, and an adaptive segmented Least Recently Used" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-manages-memory-under-heavy-concurrency">How
+Memcached Manages Memory Under Heavy Concurrency</h1>
+<p>Memcached maintains memory stability and prevents degradation during
+rapid concurrent key creation and deletion through a pre-allocated slab
+allocation system, fine-grained thread locking, reference counting, and
+an adaptive segmented Least Recently Used (LRU) engine. Instead of
+relying on the operating system's standard memory manager during
+high-churn workloads, Memcached manages its own fixed memory space
+internally. This design eliminates runtime memory fragmentation,
+prevents out-of-memory crashes, and guarantees predictable, low-latency
+execution under extreme load.</p>
+<h3 id="slab-allocation-prevents-fragmentation">Slab Allocation Prevents
+Fragmentation</h3>
+<p>The primary defense against memory instability is the Slab Allocator.
+When Memcached initializes, it allocates a single, contiguous block of
+memory up to the user-defined limit (e.g., <code>-m 1024</code> for
+1GB). It never requests additional memory from the operating system via
+<code>malloc</code> during normal read, write, or delete operations, nor
+does it return memory via <code>free</code>.</p>
+<p>This pre-allocated space is divided into 1MB pages, and pages are
+assigned to specific "slab classes." Each slab class handles items
+within a distinct size range, broken into fixed-size chunks:</p>
+<ul>
+<li>Class 1 might contain 96-byte chunks.</li>
+<li>Class 2 might contain 120-byte chunks.</li>
+<li>Subsequent classes scale geometrically (by default, by a factor of
+1.25) up to 1MB.</li>
+</ul>
+<p>When an item is created, Memcached finds the smallest slab class that
+can accommodate the key, flags, and payload. Because items are stored in
+pre-sized chunks, the engine avoids the external memory fragmentation
+that typically cripples long-running applications handling millions of
+variable-sized allocations.</p>
+<h3
+id="zero-allocation-deletions-and-freelist-recycling">Zero-Allocation
+Deletions and Freelist Recycling</h3>
+<p>During aggressive key deletion, Memcached does not deallocate memory
+at the operating system level. Instead, deleting a key marks its chunk
+as free and appends that chunk back to the slab class’s local
+<code>freelist</code>.</p>
+<p>When a concurrent <code>SET</code> request arrives for an item
+belonging to that same slab class, Memcached reuses a chunk directly
+from the freelist. This converts what would be expensive operating
+system kernel calls into constant-time, pointer-swapping operations in
+user space. Memory usage from the operating system's perspective remains
+perfectly flat, regardless of how many millions of keys are created or
+deleted per second.</p>
+<h3 id="fine-grained-locking-and-reference-counting">Fine-Grained
+Locking and Reference Counting</h3>
+<p>High-concurrency stability requires that simultaneous creations and
+deletions do not cause race conditions or memory corruption. Memcached
+utilizes a multi-threaded architecture with a shared hash table
+protected by fine-grained bucket locks:</p>
+<ul>
+<li><strong>Hash Table Bucket Locks:</strong> Instead of a global lock
+across the entire dataset, the primary hash table is divided into
+millions of distinct lockable buckets. Concurrent operations only block
+one another if they hash to the exact same bucket.</li>
+<li><strong>Item Reference Counters (<code>refcount</code>):</strong>
+Every stored item has a reference counter. If a worker thread is reading
+or deleting an item while another thread attempts to overwrite or evict
+it, the reference count increments. If an item is deleted while a reader
+is still processing it, Memcached unlinks the item from the hash table
+immediately (hiding it from subsequent lookups), but postpones recycling
+the underlying chunk into the freelist until the <code>refcount</code>
+drops to zero. This eliminates dangling pointers and segmentation faults
+without requiring global synchronization.</li>
+</ul>
+<h3 id="segmented-lru-and-background-maintenance">Segmented LRU and
+Background Maintenance</h3>
+<p>When memory fills entirely and continuous key creation occurs
+alongside deletions, Memcached relies on a modern Segmented LRU
+implementation to prevent allocation failures:</p>
+<ol type="1">
+<li><strong>TEMP:</strong> Short-lived keys (TTL under a few seconds)
+are placed here and quickly reclaimed to avoid polluting longer-lived
+caches.</li>
+<li><strong>HOT:</strong> New keys without immediate expiration start
+here. Once full, items flow to WARM or COLD.</li>
+<li><strong>WARM:</strong> Frequently accessed keys are kept here.</li>
+<li><strong>COLD:</strong> The least active keys land here; when a slab
+class runs out of free chunks, items are evicted directly from the tail
+of the COLD queue.</li>
+</ol>
+<p>Dedicated background threads—the <strong>LRU Maintainer</strong> and
+<strong>LRU Crawler</strong>—asynchronously scan and move items between
+queues and invalidate expired items. By shifting reclamation to
+dedicated background threads, worker threads servicing user traffic do
+not stall, and memory pressure is systematically relieved before it
+threatens instance stability.</p>
+<h3 id="dynamic-memory-rebalancing-with-the-slab-automover">Dynamic
+Memory Rebalancing with the Slab Automover</h3>
+<p>In erratic workloads where key sizes fluctuate, one slab class may
+run out of memory while another sits largely empty due to deletions.
+Memcached addresses this imbalance with the Slab Automover thread.</p>
+<p>The automover monitors evictions and free space across all classes.
+If it detects that a specific slab class is suffering heavy evictions
+while another holds unused pages containing deleted keys, it reassigns
+entire 1MB pages from the idle slab class to the starved one. This
+automated rebalancing guarantees that intense churn across changing key
+sizes does not lead to premature evictions or artificial memory
+exhaustion.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-manages-memory-under-heavy-concurrency';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

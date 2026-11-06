@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Impact of Network Latency on Memcached Performance - memcached</title>
+    <meta name="description" content="High network latency undermines Memcached’s primary advantage—sub-millisecond data retrieval. Because Memcached processes in-memory operations in microseconds, network transport time often dominates the overall transaction duration. Elevated network delay">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/impact-of-network-latency-on-memcached-performance">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Impact of Network Latency on Memcached Performance - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/impact-of-network-latency-on-memcached-performance" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="High network latency undermines Memcached’s primary advantage—sub-millisecond data retrieval. Because Memcached processes in-memory operations in microseconds, network transport time often dominates the overall transaction duration. Elevated network delay" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="impact-of-network-latency-on-memcached-performance">Impact of
+Network Latency on Memcached Performance</h1>
+<p>High network latency undermines Memcached’s primary
+advantage—sub-millisecond data retrieval. Because Memcached processes
+in-memory operations in microseconds, network transport time often
+dominates the overall transaction duration. Elevated network delay
+reduces client throughput, exhausts connection pools, and introduces
+complex bottlenecks into batch operations like <code>get_multi</code>.
+This article examines how network latency impacts standard client
+operations and batch requests, detailing the systemic performance issues
+that arise across distributed caching architectures.</p>
+<h3 id="the-amplification-of-round-trip-time-rtt">The Amplification of
+Round-Trip Time (RTT)</h3>
+<p>Memcached operations execute almost instantaneously at the server
+level. Under normal conditions on a low-latency local network, a client
+request and response cycle completes in under one millisecond. When
+network latency increases—whether due to cross-availability-zone
+communication, geographical distance, or network congestion—the physical
+transfer time dwarfs processing time.</p>
+<p>For example, if Memcached takes 0.1 milliseconds to retrieve an item,
+but network Round-Trip Time (RTT) is 10 milliseconds, the network
+accounts for 99% of total latency. The client perceives the cache as
+slow despite the cache engine operating at peak efficiency.</p>
+<h3 id="client-thread-exhaustion-and-connection-saturation">Client
+Thread Exhaustion and Connection Saturation</h3>
+<p>Most Memcached clients utilize connection pooling or dedicated worker
+threads to manage concurrent requests. As latency climbs, the duration
+of each individual request increases, forcing client sockets and
+application threads to remain busy for longer periods.</p>
+<p>This creates a compounding bottleneck:</p>
+<ul>
+<li><strong>Pool Depletion:</strong> Slower responses mean connections
+are returned to the pool at a much lower rate. Once the pool is
+exhausted, new application requests block while waiting for available
+connections.</li>
+<li><strong>Cascading Timeouts:</strong> Applications with strict
+timeout thresholds will drop connections prematurely. If the network
+delay consistently exceeds the configured client timeout, the
+application experiences widespread cache misses.</li>
+<li><strong>Database Overload (Thundering Herd):</strong> When clients
+fail to read from Memcached due to latency-induced timeouts, requests
+fall through to the primary database. This sudden shift in load can
+overwhelm persistent storage layers, causing system-wide
+degradation.</li>
+</ul>
+<h3 id="the-impact-on-batch-operations-and-pipelining">The Impact on
+Batch Operations and Pipelining</h3>
+<p>Batching operations, such as <code>get_multi</code>, are designed to
+mitigate network overhead by consolidating requests for multiple keys
+into a single TCP stream. However, high network latency introduces
+unique challenges to batch performance.</p>
+<h4 id="the-distributed-scatter-gather-bottleneck">The Distributed
+Scatter-Gather Bottleneck</h4>
+<p>In a clustered environment, keys in a single batch operation are
+distributed across multiple Memcached nodes via consistent hashing. A
+client requesting 50 keys may need to communicate with 10 different
+servers concurrently. The overall latency of the batch operation is
+bounded by the slowest individual server response (tail latency). High
+network jitter or packet loss on any single path forces the client to
+wait, stalling the entire operation.</p>
+<h4 id="tcp-windowing-and-mtu-fragmentation">TCP Windowing and MTU
+Fragmentation</h4>
+<p>While small batch operations fit inside a single TCP packet, larger
+batches can exceed the standard Maximum Transmission Unit (MTU,
+typically 1500 bytes). When a batch response spans multiple packets
+across a high-latency link:</p>
+<ul>
+<li>TCP slow-start and window-sizing algorithms dictate how fast packets
+are acknowledged and sent.</li>
+<li>Any packet loss over a high-latency connection requires
+retransmission, causing Head-of-Line (HoL) blocking where the client
+cannot process the remainder of the batch until the missing segment
+arrives.</li>
+</ul>
+<h3 id="architectural-mitigations">Architectural Mitigations</h3>
+<p>To minimize the impact of high network latency on Memcached
+performance:</p>
+<ul>
+<li><strong>Co-locate Services:</strong> Deploy application clients and
+Memcached instances within the same local network, subnet, or cloud
+availability zone to maintain sub-millisecond RTT.</li>
+<li><strong>Tune Batch Sizes:</strong> Right-size batch requests so
+payloads do not unnecessarily exceed the TCP MTU, minimizing packet
+fragmentation and multi-packet round-trips.</li>
+<li><strong>Implement Asynchronous I/O:</strong> Use non-blocking,
+event-driven client libraries (such as those based on epoll or
+completion ports) to prevent thread starvation during prolonged network
+delays.</li>
+<li><strong>Adopt Two-Tier Caching:</strong> Deploy a smaller,
+in-process L1 cache (such as local memory) alongside the centralized
+Memcached L2 cluster to handle hyper-frequent reads entirely without
+network traversals.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/impact-of-network-latency-on-memcached-performance';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

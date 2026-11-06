@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ketama Algorithm in Memcached Client Distribution - memcached</title>
+    <meta name="description" content="This article explores the Ketama algorithm and its vital role within Memcached client distribution logic. Readers will learn the operational shortcomings of traditional modulo-based hashing, how Ketama implements consistent hashing using virtual nodes on">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/ketama-algorithm-in-memcached-client-distribution">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Ketama Algorithm in Memcached Client Distribution - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/ketama-algorithm-in-memcached-client-distribution" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores the Ketama algorithm and its vital role within Memcached client distribution logic. Readers will learn the operational shortcomings of traditional modulo-based hashing, how Ketama implements consistent hashing using virtual nodes on" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="ketama-algorithm-in-memcached-client-distribution">Ketama
+Algorithm in Memcached Client Distribution</h1>
+<p>This article explores the Ketama algorithm and its vital role within
+Memcached client distribution logic. Readers will learn the operational
+shortcomings of traditional modulo-based hashing, how Ketama implements
+consistent hashing using virtual nodes on a continuum, and why this
+mechanism is critical for maintaining high cache hit ratios and system
+stability when scaling distributed cache clusters.</p>
+<h2 id="the-flaw-of-traditional-modulo-hashing">The Flaw of Traditional
+Modulo Hashing</h2>
+<p>Memcached operates on a shared-nothing, distributed architecture
+where the servers do not communicate with one another. The
+responsibility of determining which server stores or retrieves a given
+key falls entirely on the client library.</p>
+<p>Historically, Memcached clients used standard modulo hashing:</p>
+<p><code>server_index = hash(key) % number_of_servers</code></p>
+<p>While computationally trivial, this formula introduces a severe
+vulnerability when the cluster topology changes. If a single server
+fails or a new server is provisioned, <code>number_of_servers</code>
+changes. Because the divisor changes, almost every key in the keyspace
+remaps to a completely different server index. This results in an
+immediate cache invalidation rate near 100%, triggering massive cache
+stampedes where backend databases are overwhelmed by sudden spikes in
+direct read traffic.</p>
+<h2 id="what-is-the-ketama-algorithm">What is the Ketama Algorithm?</h2>
+<p>The Ketama algorithm was developed by Last.fm to solve the cache
+invalidation problem by implementing <strong>consistent
+hashing</strong>. Instead of mapping keys directly to an array of
+servers using modulo arithmetic, Ketama maps both the servers and the
+cache keys onto a continuous circular numeric space known as a hash ring
+(or continuum).</p>
+<p>The primary function of the Ketama algorithm in Memcached client
+distribution is to ensure that when servers are added or removed, only a
+minimal, predictable fraction of keys (<code>1/N</code>, where
+<code>N</code> is the total number of servers) are remapped to different
+nodes.</p>
+<h2 id="how-ketama-operates">How Ketama Operates</h2>
+<p>Ketama executes consistent hashing through three core mechanics:</p>
+<h3 id="1-the-hash-ring-continuum">1. The Hash Ring Continuum</h3>
+<p>The continuum represents an unsigned 32-bit integer space ranging
+from <code>0</code> to <code>2^32 - 1</code>. Both cache keys and server
+identifiers are hashed into this same numerical range using an algorithm
+like MD5.</p>
+<h3 id="2-virtual-nodes-replicas">2. Virtual Nodes (Replicas)</h3>
+<p>A naive consistent hashing implementation places each physical server
+on the ring once. This leads to uneven key distribution because random
+hash outputs rarely divide a circle into equal segments.</p>
+<p>To solve this, Ketama introduces virtual nodes (often referred to as
+points or replicas). For each physical server, Ketama generates multiple
+entries on the ring (typically 100 to 160 points per server, depending
+on the client implementation and server weight). Each virtual node is
+generated by hashing variations of the server's address (for example,
+<code>192.168.1.10:11211-0</code>, <code>192.168.1.10:11211-1</code>).
+This spreads a single server's ownership evenly across the entire
+continuum, ensuring balanced memory and traffic distribution.</p>
+<h3 id="3-key-assignment-and-clockwise-traversal">3. Key Assignment and
+Clockwise Traversal</h3>
+<p>When a client needs to execute a <code>get</code> or <code>set</code>
+command:</p>
+<ol type="1">
+<li>The client hashes the cache key into a 32-bit integer.</li>
+<li>The client finds that point on the hash ring.</li>
+<li>The client moves clockwise along the ring until it finds the first
+virtual node entry.</li>
+<li>The key is assigned to the physical server associated with that
+virtual node.</li>
+</ol>
+<p>Because the list of points on the ring is kept sorted in memory,
+clients locate the target server in <span class="math inline">\(O(\log
+M)\)</span> time using a binary search, where <span
+class="math inline">\(M\)</span> is the total number of virtual
+points.</p>
+<h2 id="the-impact-on-node-addition-and-removal">The Impact on Node
+Addition and Removal</h2>
+<p>When a server is added to or removed from the cluster:</p>
+<ul>
+<li><strong>Node Removal:</strong> If a server goes offline, only the
+virtual points belonging to that specific server disappear from the
+ring. Keys that mapped to those points simply move clockwise to the next
+available server. All keys pointing to remaining, unaffected servers
+stay intact.</li>
+<li><strong>Node Addition:</strong> A new server inserts its virtual
+nodes at various positions around the ring. It only claims the keys that
+sit counter-clockwise behind its new points, leaving the rest of the
+cluster's mappings undisturbed.</li>
+</ul>
+<p>By limiting key redistribution strictly to the nodes involved in the
+topology change, Ketama prevents cascading failures, protects backend
+data stores, and provides deterministic, high-performance routing across
+Memcached clients.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/ketama-algorithm-in-memcached-client-distribution';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

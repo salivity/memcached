@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Use Memcached CAS for Conditional Updates - memcached</title>
+    <meta name="description" content="In concurrent environments, multiple application processes updating the same cache key simultaneously can lead to race conditions and data corruption. This article explains how developers can prevent these concurrency issues in Memcached by implementing c">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-use-memcached-cas-for-conditional-updates">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Use Memcached CAS for Conditional Updates - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-use-memcached-cas-for-conditional-updates" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In concurrent environments, multiple application processes updating the same cache key simultaneously can lead to race conditions and data corruption. This article explains how developers can prevent these concurrency issues in Memcached by implementing c" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-use-memcached-cas-for-conditional-updates">How to Use
+Memcached CAS for Conditional Updates</h1>
+<p>In concurrent environments, multiple application processes updating
+the same cache key simultaneously can lead to race conditions and data
+corruption. This article explains how developers can prevent these
+concurrency issues in Memcached by implementing conditional storage
+logic using the Check-and-Set (CAS) command. You will learn the
+mechanics behind CAS tokens, how the optimistic locking pattern works in
+Memcached, and how to structure a resilient read-modify-write retry loop
+in your application code.</p>
+<h3 id="the-problem-race-conditions-in-cache-updates">The Problem: Race
+Conditions in Cache Updates</h3>
+<p>A standard read-modify-write cycle consists of three steps:</p>
+<ol type="1">
+<li>Reading data with <code>get key</code></li>
+<li>Modifying the value locally in the application</li>
+<li>Writing the updated value back with <code>set key value</code></li>
+</ol>
+<p>If two independent clients read the same key at the same time, modify
+it, and write it back, the second write silently overwrites the first
+write without accounting for those changes. This is known as a lost
+update.</p>
+<h3 id="how-memcached-cas-works">How Memcached CAS Works</h3>
+<p>Memcached solves this using optimistic concurrency control powered by
+two primary commands:</p>
+<ul>
+<li><strong><code>gets</code> (Get with CAS):</strong> Behaves like a
+standard <code>get</code> command, but returns an additional 64-bit
+integer called a CAS token alongside the key's value. This token acts as
+a version identifier that changes every time the key's value is
+modified.</li>
+<li><strong><code>cas</code> (Check-and-Set):</strong> Stores data
+conditionally. It requires the client to pass the CAS token obtained
+during the initial <code>gets</code> call. If the token in the request
+matches the current token on the server, the data is updated. If another
+client modified the key in the interim, the token will not match, and
+Memcached rejects the write.</li>
+</ul>
+<h3 id="protocol-syntax">Protocol Syntax</h3>
+<p>The syntax for the ASCII <code>cas</code> command is:</p>
+<pre class="text"><code>cas &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; &lt;cas_token&gt; [noreply]\r\n
+&lt;data_block&gt;\r\n</code></pre>
+<p>Memcached will return one of the following responses:</p>
+<ul>
+<li><strong><code>STORED</code></strong>: The update succeeded; the CAS
+token matched.</li>
+<li><strong><code>EXISTS</code></strong>: The update failed; another
+process modified the key since the token was retrieved.</li>
+<li><strong><code>NOT_FOUND</code></strong>: The key expired or was
+deleted between retrieval and update.</li>
+</ul>
+<h3 id="implementing-the-cas-retry-pattern">Implementing the CAS Retry
+Pattern</h3>
+<p>To implement conditional storage, wrap the read-modify-write
+operation in a loop that handles token validation failures.</p>
+<h4 id="implementation-steps">Implementation Steps:</h4>
+<ol type="1">
+<li><strong>Fetch:</strong> Retrieve the current value and CAS token
+using <code>gets</code>.</li>
+<li><strong>Compute:</strong> Apply your application logic to modify the
+data.</li>
+<li><strong>Attempt Update:</strong> Send the new data to Memcached
+using <code>cas</code> along with the fetched token.</li>
+<li><strong>Evaluate Result:</strong>
+<ul>
+<li>If <code>STORED</code>, exit the loop successfully.</li>
+<li>If <code>EXISTS</code>, discard changes, reload the new value and
+token, and retry.</li>
+<li>If <code>NOT_FOUND</code>, decide whether to re-initialize the key
+with <code>add</code> or abort.</li>
+</ul></li>
+</ol>
+<h4 id="example-implementation-python--pymemcache">Example
+Implementation (Python / pymemcache)</h4>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pymemcache.client.base <span class="im">import</span> Client</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> Client((<span class="st">&#39;localhost&#39;</span>, <span class="dv">11211</span>))</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> update_counter(key, increment_by<span class="op">=</span><span class="dv">1</span>, max_retries<span class="op">=</span><span class="dv">5</span>):</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    retries <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> retries <span class="op">&lt;</span> max_retries:</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Step 1: Fetch value and CAS token</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        result <span class="op">=</span> client.gets(key)</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> result <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Handle key creation if it does not exist</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> client.add(key, increment_by):</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> increment_by</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>            retries <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>            <span class="cf">continue</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        value, cas_token <span class="op">=</span> result</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>        new_value <span class="op">=</span> <span class="bu">int</span>(value) <span class="op">+</span> increment_by</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Step 2 &amp; 3: Attempt conditional write</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> client.cas(key, new_value, cas_token):</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> new_value  <span class="co"># Update succeeded</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Step 4: CAS failed due to concurrent modification; retry</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>        retries <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">raise</span> <span class="pp">RuntimeError</span>(<span class="ss">f&quot;Failed to update </span><span class="sc">{</span>key<span class="sc">}</span><span class="ss"> after </span><span class="sc">{</span>max_retries<span class="sc">}</span><span class="ss"> attempts.&quot;</span>)</span></code></pre></div>
+<h3 id="best-practices">Best Practices</h3>
+<ul>
+<li><strong>Enforce Retry Limits:</strong> Always set a cap on retries
+(e.g., 3 to 5 attempts) to prevent infinite loops during high write
+contention.</li>
+<li><strong>Exponential Backoff with Jitter:</strong> If write
+collisions are frequent, introduce brief randomized pauses (jitter)
+between retries to desynchronize competing clients.</li>
+<li><strong>Keep Modifications Fast:</strong> Minimize the computation
+time between <code>gets</code> and <code>cas</code> calls to reduce the
+window of vulnerability where another client can update the key.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-use-memcached-cas-for-conditional-updates';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

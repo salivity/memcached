@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached set vs add: Key Differences Explained - memcached</title>
+    <meta name="description" content="Memcached provides several commands to manage in-memory data, with set and add being two of the most common storage operations. The primary difference between them lies in how they handle pre-existing keys: the set command unconditionally writes data rega">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-set-vs-add-key-differences-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached set vs add: Key Differences Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-set-vs-add-key-differences-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached provides several commands to manage in-memory data, with set and add being two of the most common storage operations. The primary difference between them lies in how they handle pre-existing keys: the set command unconditionally writes data rega" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-set-vs-add-key-differences-explained">Memcached set vs
+add: Key Differences Explained</h1>
+<p>Memcached provides several commands to manage in-memory data, with
+<code>set</code> and <code>add</code> being two of the most common
+storage operations. The primary difference between them lies in how they
+handle pre-existing keys: the <code>set</code> command unconditionally
+writes data regardless of whether the key already exists, while the
+<code>add</code> command only stores data if the key does not exist on
+the server. Understanding this distinction is crucial for maintaining
+data consistency, managing cache updates, and avoiding race conditions
+in distributed applications.</p>
+<h3 id="the-set-command">The <code>set</code> Command</h3>
+<p>The <code>set</code> command is an unconditional write operation.
+When you issue a <code>set</code> command, Memcached evaluates the key
+and performs one of two actions:</p>
+<ul>
+<li>If the key <strong>does not exist</strong>, Memcached creates it and
+stores the value.</li>
+<li>If the key <strong>already exists</strong>, Memcached completely
+overwrites the existing value and resets any associated metadata (such
+as flags and expiration time).</li>
+</ul>
+<p>Because it always replaces existing data, the <code>set</code>
+command typically returns <code>STORED</code> under normal operating
+conditions. It is the default choice for general caching, cache warming,
+and scenarios where the freshest data should immediately replace stale
+data.</p>
+<h3 id="the-add-command">The <code>add</code> Command</h3>
+<p>The <code>add</code> command is a conditional write operation. It
+only stores data if the specified key is entirely absent from the
+cache:</p>
+<ul>
+<li>If the key <strong>does not exist</strong>, Memcached creates the
+key, stores the value, and returns <code>STORED</code>.</li>
+<li>If the key <strong>already exists</strong>, Memcached rejects the
+operation, leaves the existing data untouched, and returns
+<code>NOT_STORED</code>.</li>
+</ul>
+<p>This atomic check-and-set behavior makes <code>add</code> valuable
+for synchronization patterns. For example, it can be used to implement
+primitive distributed locks, simple leader-election mechanisms, or to
+prevent "cache stampedes" where multiple processes attempt to compute
+and write the same expensive data simultaneously.</p>
+<h3 id="summary-of-differences">Summary of Differences</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Feature</th>
+<th style="text-align: left;"><code>set</code> Command</th>
+<th style="text-align: left;"><code>add</code> Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Write Condition</strong></td>
+<td style="text-align: left;">Unconditional</td>
+<td style="text-align: left;">Conditional (only if key does not
+exist)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Key Does Not Exist</strong></td>
+<td style="text-align: left;">Stores the value
+(<code>STORED</code>)</td>
+<td style="text-align: left;">Stores the value
+(<code>STORED</code>)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Key Already Exists</strong></td>
+<td style="text-align: left;">Overwrites the value
+(<code>STORED</code>)</td>
+<td style="text-align: left;">Fails to store
+(<code>NOT_STORED</code>)</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Primary Use Case</strong></td>
+<td style="text-align: left;">Standard caching, updating values</td>
+<td style="text-align: left;">Mutex locks, preventing race
+conditions</td>
+</tr>
+</tbody>
+</table></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-set-vs-add-key-differences-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

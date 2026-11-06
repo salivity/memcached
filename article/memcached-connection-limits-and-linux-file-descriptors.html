@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Connection Limits and Linux File Descriptors - memcached</title>
+    <meta name="description" content="Memcached handles high-concurrency caching by pairing configurable application-level connection thresholds with Linux socket file descriptor management. Because every active network connection in Linux consumes a file descriptor, Memcached must coordinate">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-connection-limits-and-linux-file-descriptors">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Connection Limits and Linux File Descriptors - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-connection-limits-and-linux-file-descriptors" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached handles high-concurrency caching by pairing configurable application-level connection thresholds with Linux socket file descriptor management. Because every active network connection in Linux consumes a file descriptor, Memcached must coordinate" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1
+id="memcached-connection-limits-and-linux-file-descriptors">Memcached
+Connection Limits and Linux File Descriptors</h1>
+<p>Memcached handles high-concurrency caching by pairing configurable
+application-level connection thresholds with Linux socket file
+descriptor management. Because every active network connection in Linux
+consumes a file descriptor, Memcached must coordinate its internal
+worker threads, the event-driven network loop, and operating system
+limits to accept, maintain, and terminate client connections
+efficiently. This guide explains how Memcached manages these
+connections, reacts when thresholds are reached, and interfaces with
+Linux kernel resource controls.</p>
+<h3 id="the-connection-limit-architecture--c">The Connection Limit
+Architecture (<code>-c</code>)</h3>
+<p>Memcached controls maximum simultaneous client connections using the
+<code>-c</code> startup parameter. By default, this limit is set to
+1,024 connections.</p>
+<p>Internally, Memcached uses <code>libevent</code> alongside an event
+loop (<code>epoll</code> on modern Linux systems) to manage non-blocking
+I/O across worker threads. Incoming connections are initially received
+by a main listening thread and subsequently distributed across worker
+threads via a round-robin mechanism. Each active client socket requires
+an independent file descriptor (<code>FD</code>).</p>
+<h3 id="automatic-file-descriptor-allocation-and-setrlimit">Automatic
+File Descriptor Allocation and <code>setrlimit</code></h3>
+<p>When Memcached initializes, it calculates the total number of file
+descriptors required to run reliably. This calculation includes:</p>
+<ol type="1">
+<li>The maximum connection limit set by <code>-c</code>.</li>
+<li>Internal descriptors required for listening sockets (TCP and
+UDP).</li>
+<li>Inter-thread communication pipes.</li>
+<li>Logging, storage, or internal monitoring endpoints.</li>
+</ol>
+<p>Memcached automatically attempts to raise its own file descriptor
+limit by invoking the <code>setrlimit()</code> system call with
+<code>RLIMIT_NOFILE</code>. It attempts to set the soft limit equal to
+the hard limit or high enough to accommodate the calculated descriptor
+requirement. If the process has insufficient privileges (such as running
+as an unprivileged user without elevated <code>CAP_SYS_RESOURCE</code>
+capabilities) and the system-enforced limit is lower than the configured
+<code>-c</code> value, Memcached logs a warning or fails to start.</p>
+<h3 id="behavior-when-connection-limits-are-reached">Behavior When
+Connection Limits Are Reached</h3>
+<p>When active connections hit the configured <code>-c</code> limit,
+Memcached does not crash or abruptly terminate existing sessions.
+Instead, it engages protective backpressure mechanisms:</p>
+<ul>
+<li><strong>Disabling the Listener:</strong> Memcached temporarily stops
+listening for new connections by removing the listening socket from the
+<code>libevent</code> notification pool.</li>
+<li><strong>Tracking Rejections:</strong> The internal metric
+<code>listen_disabled_num</code> increments each time the listener is
+paused due to saturation.</li>
+<li><strong>TCP Backlog Queueing:</strong> While the listener is paused,
+incoming SYN packets accumulate in the Linux kernel's TCP listen backlog
+(<code>somaxconn</code>). If this backlog fills, clients experience
+connection timeouts or <code>ECONNREFUSED</code> errors.</li>
+<li><strong>Automatic Recovery:</strong> As soon as an active client
+disconnects and an FD is released, Memcached re-registers the listening
+socket with <code>libevent</code> and resumes accepting new client
+handshakes.</li>
+</ul>
+<h3 id="linux-kernel-and-system-level-limits">Linux Kernel and
+System-Level Limits</h3>
+<p>Even if Memcached is configured with a high <code>-c</code> value,
+underlying Linux limits can restrict capacity if not aligned:</p>
+<ol type="1">
+<li><strong>Process Limits (<code>nofile</code>):</strong> Set via
+<code>/etc/security/limits.conf</code> or in a systemd unit file using
+<code>LimitNOFILE=65535</code>. If systemd launches Memcached, it
+ignores PAM limits in <code>limits.conf</code>, making the unit file
+configuration mandatory.</li>
+<li><strong>System-Wide Limits (<code>fs.file-max</code>):</strong> The
+maximum number of open file descriptors allowed across the entire
+operating system, configured via <code>sysctl fs.file-max</code>.</li>
+<li><strong>TCP Backlog (<code>net.core.somaxconn</code>):</strong>
+Determines the length of the listen queue for pending requests.
+Memcached exposes the <code>-b</code> flag to set its backlog parameter,
+which must not exceed the kernel's <code>net.core.somaxconn</code>
+setting.</li>
+</ol>
+<h3 id="monitoring-and-verifying-limits">Monitoring and Verifying
+Limits</h3>
+<p>To verify that connection handling and file descriptors are
+functioning properly on a running instance:</p>
+<ul>
+<li><strong>Inspect Running Process Limits:</strong> Check
+<code>/proc/&lt;memcached_pid&gt;/limits</code> to confirm the
+<code>Max open files</code> soft and hard limits correspond to system
+expectations.</li>
+<li><strong>Inspect Open Sockets:</strong> Count current open file
+descriptors with
+<code>ls -1 /proc/&lt;memcached_pid&gt;/fd | wc -l</code>.</li>
+<li><strong>Query Memcached Telemetry:</strong> Connect via
+<code>telnet</code> or <code>nc</code> and issue the <code>stats</code>
+command to review key connection counters:
+<ul>
+<li><code>curr_connections</code>: Currently open connections.</li>
+<li><code>total_connections</code>: Total connections handled since
+startup.</li>
+<li><code>maxconns</code>: Configured limit matching
+<code>-c</code>.</li>
+<li><code>listen_disabled_num</code>: Count of instances connection
+capacity was exhausted.</li>
+</ul></li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-connection-limits-and-linux-file-descriptors';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

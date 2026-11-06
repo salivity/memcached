@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Key Hashing and Bucket Assignment - memcached</title>
+    <meta name="description" content="Memcached handles item keys through a two-stage process that separates distributed routing from local storage indexing. The system does not automatically normalize keys on the server, instead treating them as raw byte sequences within defined protocol lim">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-key-hashing-and-bucket-assignment">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Key Hashing and Bucket Assignment - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-key-hashing-and-bucket-assignment" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached handles item keys through a two-stage process that separates distributed routing from local storage indexing. The system does not automatically normalize keys on the server, instead treating them as raw byte sequences within defined protocol lim" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-key-hashing-and-bucket-assignment">Memcached Key
+Hashing and Bucket Assignment</h1>
+<p>Memcached handles item keys through a two-stage process that
+separates distributed routing from local storage indexing. The system
+does not automatically normalize keys on the server, instead treating
+them as raw byte sequences within defined protocol limits. Key
+distribution relies on client-side consistent hashing to select the
+appropriate server node, followed by server-side non-cryptographic
+hashing (such as Murmur3 or Jenkins) to assign the item to an internal
+hash table bucket for fast retrieval.</p>
+<h3 id="key-normalization-handling">Key Normalization Handling</h3>
+<p>Memcached does not perform key normalization natively. The server
+engine treats every key as an immutable string of bytes with a maximum
+length of 250 characters. It does not perform operations such as case
+folding, whitespace stripping, Unicode normalization, or character
+escaping:</p>
+<ul>
+<li><strong>Text Protocol Constraints:</strong> Keys cannot contain
+control characters or spaces, as whitespace acts as a command delimiter.
+If an invalid character is transmitted, the server returns an error
+rather than sanitizing the key.</li>
+<li><strong>Binary Protocol:</strong> Keys can contain arbitrary binary
+sequences, but they are still evaluated byte-for-byte without
+modification.</li>
+<li><strong>Client Responsibility:</strong> Any standardizing or
+canonicalizing of keys (e.g., converting to lowercase, hashing overly
+long keys with SHA-250/MD5, or stripping prefixes) must be handled
+explicitly by the client application before issuing a command.</li>
+</ul>
+<h3 id="client-side-hashing-node-routing">Client-Side Hashing: Node
+Routing</h3>
+<p>Before an item reaches an individual Memcached instance, the client
+library determines which server in the cluster should hold the key.</p>
+<p>Most modern clients implement consistent hashing algorithms, most
+notably <strong>Ketama</strong>. Ketama maps both the Memcached servers
+(using their IP/port addresses duplicated across virtual nodes or
+"vnodes") and the item keys onto a 32-bit continuum (a circular hash
+ring). When an item key is hashed using an algorithm like MD5 or
+MurmurHash:</p>
+<ol type="1">
+<li>The client computes the 32-bit integer token for the item key.</li>
+<li>The client traverses the hash ring clockwise to find the nearest
+virtual node.</li>
+<li>The request is dispatched directly to that specific server
+instance.</li>
+</ol>
+<p>This architecture ensures that Memcached servers remain stateless
+regarding cluster topology, allowing nodes to be added or removed with
+minimal cache invalidation.</p>
+<h3 id="server-side-hashing-internal-bucket-assignment">Server-Side
+Hashing: Internal Bucket Assignment</h3>
+<p>Once a specific Memcached instance receives the key, it maps the key
+to an internal hash table bucket using an internal hashing routine.</p>
+<h4 id="hashing-algorithms">Hashing Algorithms</h4>
+<p>Memcached historically used Bob Jenkins' lookup3 hash algorithm.
+Modern releases default to <strong>Murmur3</strong> or Jenkins,
+selectable via runtime flags. These algorithms are non-cryptographic,
+optimized for high throughput, low latency, and uniform distribution
+across the hash table space.</p>
+<h4 id="bucket-computation">Bucket Computation</h4>
+<p>Memcached maintains an associative primary hash table sized to a
+power of two (<span
+class="math inline">\(2^{\text{hashpower}}\)</span>). To assign a key to
+a specific bucket:</p>
+<ol type="1">
+<li>The server hashes the raw key string using the selected algorithm to
+generate a 32-bit unsigned integer: <span
+class="math display">\[\text{hash\_value} = \text{hash}(\text{key},
+\text{key\_length})\]</span></li>
+<li>The bucket index is calculated using a bitwise mask rather than an
+expensive modulo operation: <span
+class="math display">\[\text{bucket\_index} = \text{hash\_value} \
+\&amp; \ ((1 \ll \text{hashpower}) - 1)\]</span></li>
+</ol>
+<h4 id="collision-resolution-and-table-resizing">Collision Resolution
+and Table Resizing</h4>
+<p>Each bucket in the hash table points to a singly linked list of item
+structures (<code>item *</code>). When multiple keys resolve to the same
+bucket index (a collision), the new item is chained into the list.</p>
+<p>To maintain <span class="math inline">\(O(1)\)</span> lookup
+performance, Memcached monitors the ratio of items to buckets. When the
+number of stored items reaches 1.5 times the number of available
+buckets, a dedicated background maintenance thread incrementally doubles
+the hash table size (<span class="math inline">\(\text{hashpower} +
+1\)</span>) and migrates items between buckets without locking the
+entire cache.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-key-hashing-and-bucket-assignment';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

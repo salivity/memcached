@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Client Failover and Fallback Strategies - memcached</title>
+    <meta name="description" content="Because the Memcached protocol does not natively support server-side clustering or cross-node replication, client libraries bear the primary responsibility for high availability and fault tolerance. When a primary Memcached node fails, client libraries im">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-client-failover-and-fallback-strategies">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Client Failover and Fallback Strategies - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-client-failover-and-fallback-strategies" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Because the Memcached protocol does not natively support server-side clustering or cross-node replication, client libraries bear the primary responsibility for high availability and fault tolerance. When a primary Memcached node fails, client libraries im" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-client-failover-and-fallback-strategies">Memcached
+Client Failover and Fallback Strategies</h1>
+<p>Because the Memcached protocol does not natively support server-side
+clustering or cross-node replication, client libraries bear the primary
+responsibility for high availability and fault tolerance. When a primary
+Memcached node fails, client libraries implement a combination of
+consistent hashing redistribution, dead-node ejection, active connection
+polling, and application-level fallback to persistent databases. This
+article explains the technical mechanisms Memcached clients use to
+detect server outages, handle rerouting, and ensure continuous
+application performance during node failures.</p>
+<h2 id="consistent-hashing-and-key-redistribution">Consistent Hashing
+and Key Redistribution</h2>
+<p>Most production Memcached clients (such as <code>libmemcached</code>,
+<code>spymemcached</code>, and <code>EnyimMemcached</code>) employ
+consistent hashing algorithms, most notably Ketama, to map cache keys
+across an array of nodes.</p>
+<p>In a standard modulo hashing scheme, losing a node invalidates the
+location of nearly all keys in the cluster. Consistent hashing mitigates
+this by placing servers and keys onto a continuous hash ring. When a
+primary node fails and the client is configured to redistribute keys,
+the client maps the failed node's hash space to the next adjacent node
+clockwise on the ring. This strategy guarantees that only the keys
+assigned to the failed node are invalidated or relocated, while the
+distribution for all surviving nodes remains unchanged.</p>
+<h2 id="node-ejection-and-retry-policies">Node Ejection and Retry
+Policies</h2>
+<p>Client libraries must distinguish between transient network blips and
+permanent node crashes to avoid cascading failures. They implement
+configurable health checks and ejection policies to handle this:</p>
+<ul>
+<li><strong>Failure Counters and Timeouts:</strong> When an operation
+exceeds a connection or read/write timeout, the client increments a
+consecutive failure counter for that specific node. Once this threshold
+is crossed, the client marks the node as "dead."</li>
+<li><strong>Node Ejection:</strong> After a node is marked dead, the
+client temporarily removes it from the active hashing ring. All incoming
+reads and writes originally destined for that node are automatically
+re-routed to the remaining healthy nodes.</li>
+<li><strong>Dead Node Backoff and Probing:</strong> The client does not
+remove the node permanently. Instead, it enters a backoff period (often
+configurable from a few seconds to minutes). During this time, the
+client suppresses regular traffic to the dead node but periodically
+sends low-overhead health checks or single probe requests. Once a probe
+succeeds, the node is re-inserted into the active hash ring.</li>
+</ul>
+<h2 id="passive-fallback-vs-redundant-storage">Passive Fallback vs.
+Redundant Storage</h2>
+<p>Different client libraries provide distinct strategies regarding how
+to treat operations intended for a dead node:</p>
+<ul>
+<li><strong>Cache-Aside Fallback (Fail-Silent):</strong> The most common
+pattern treats node failure as an immediate cache miss. The client
+immediately returns a null or miss response to the application layer.
+The application then falls back directly to the primary database,
+retrieves the fresh data, and optionally attempts to write it back to an
+alternate node or skips caching until the primary node recovers.</li>
+<li><strong>Replication and Shadow Nodes:</strong> Some advanced clients
+allow users to define secondary or backup servers. Under a dual-write
+configuration, the client attempts to write every item to both a primary
+node and a replica node. If the primary node fails during a read, the
+client transparently retries the read operation against the designated
+replica.</li>
+</ul>
+<h2 id="circuit-breakers-and-preventing-thundering-herds">Circuit
+Breakers and Preventing Thundering Herds</h2>
+<p>A primary risk during node failure is the "thundering herd" effect,
+where thousands of concurrent requests miss the cache simultaneously and
+overwhelm the underlying database. To counter this, modern Memcached
+integrations combine client-side failover with circuit breaker
+patterns.</p>
+<p>When the client identifies that a node is unreachable, the circuit
+breaker trips to an "open" state for that server. Instead of forcing
+threads to wait for socket timeouts, requests fail fast instantly. In
+conjunction with local lock mechanisms (such as mutexes on cache
+misses), the client ensures that only a single worker thread queries the
+persistent database to rebuild the missing data, while other threads
+wait or receive stale data, protecting the entire infrastructure from
+collapse.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-client-failover-and-fallback-strategies';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

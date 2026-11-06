@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Frees Memory on Key Deletion - memcached</title>
+    <meta name="description" content="When a key is explicitly removed using the delete command, Memcached does not return the allocated memory back to the operating system. Instead, it unlinks the item from its internal lookup structures and immediately marks the associated memory chunk as a">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-frees-memory-on-key-deletion">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Frees Memory on Key Deletion - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-frees-memory-on-key-deletion" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When a key is explicitly removed using the delete command, Memcached does not return the allocated memory back to the operating system. Instead, it unlinks the item from its internal lookup structures and immediately marks the associated memory chunk as a" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-frees-memory-on-key-deletion">How Memcached Frees
+Memory on Key Deletion</h1>
+<p>When a key is explicitly removed using the <code>delete</code>
+command, Memcached does not return the allocated memory back to the
+operating system. Instead, it unlinks the item from its internal lookup
+structures and immediately marks the associated memory chunk as
+available for reuse within its assigned slab class. This article
+explains the underlying slab allocation system, the step-by-step process
+of explicit item deletion, and how Memcached recycles that memory for
+future writes.</p>
+<h3 id="the-slab-allocation-architecture">The Slab Allocation
+Architecture</h3>
+<p>To understand how memory is freed, it is essential to understand how
+Memcached allocates it. Memcached avoids operating system memory
+fragmentation by using a slab allocation mechanism.</p>
+<p>Upon startup, Memcached pre-allocates a large contiguous block of
+memory. This memory is divided into 1MB pages, which are then assigned
+to specific "slab classes." Each slab class handles items of a specific
+size range, breaking its pages into uniform slots called chunks. Once a
+page is assigned to a slab class, its chunks can only store items that
+fit that class's designated size.</p>
+<h3 id="what-happens-during-the-delete-command">What Happens During the
+<code>delete</code> Command</h3>
+<p>When an application issues an explicit <code>delete</code> command
+for a key, Memcached executes the following internal sequence:</p>
+<ol type="1">
+<li><strong>Hash Table Lookup:</strong> Memcached locates the item's
+reference using its primary internal hash table.</li>
+<li><strong>Unlinking from References:</strong> The item is unlinked
+from the hash table so that subsequent <code>get</code> requests can no
+longer find it. It is also removed from the Least Recently Used (LRU)
+doubly linked list for that slab class.</li>
+<li><strong>Reference Count Evaluation:</strong> Memcached checks the
+item’s reference counter. If another worker thread is actively reading
+the item, the memory release is briefly deferred until the read
+operation completes.</li>
+<li><strong>Chunk Reclamation:</strong> Once the reference count reaches
+zero, the memory chunk containing the key, value, and metadata is placed
+back onto the freelist for that specific slab class.</li>
+</ol>
+<h3 id="memory-recycling-vs-operating-system-reclamation">Memory
+Recycling vs. Operating System Reclamation</h3>
+<p>Because Memcached manages its own memory pool, deleting keys does not
+decrease the overall memory footprint reported by system monitoring
+tools like <code>top</code> or <code>ps</code>. The memory remains
+claimed by the Memcached process.</p>
+<p>The reclaimed chunk becomes immediately available for the next
+<code>set</code> or <code>add</code> operation that requests space
+within that exact slab class.</p>
+<h3 id="slab-class-limitations">Slab Class Limitations</h3>
+<p>A key implication of this design is that freed memory is bound to the
+slab class to which it was originally allocated:</p>
+<ul>
+<li><strong>Class-Specific Reuse:</strong> If a 100-byte item is
+deleted, its chunk can only be reused by a new item that fits into the
+same small-size slab class. It cannot immediately be used to store a
+10KB item.</li>
+<li><strong>Slab Rebalancing:</strong> In modern versions of Memcached,
+an automated background thread known as the slab automover can reassign
+entire 1MB pages from an underutilized slab class to a starved slab
+class if an imbalance persists over time. However, this occurs at the
+page level, not on an individual chunk-by-chunk basis during a single
+deletion.</li>
+</ul>
+<p>By decoupling key deletion from operating system deallocation,
+Memcached ensures constant-time, low-overhead memory operations,
+allowing high-throughput read and write performance.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-frees-memory-on-key-deletion';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

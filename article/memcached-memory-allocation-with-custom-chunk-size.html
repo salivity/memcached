@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Memory Allocation with Custom Chunk Size - memcached</title>
+    <meta name="description" content="This article examines how Memcached constructs its internal slab memory subsystem when started with a custom minimum chunk size. By overriding the default minimum allocation value, operators alter the baseline chunk dimension of the initial slab class, wh">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-memory-allocation-with-custom-chunk-size">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Memory Allocation with Custom Chunk Size - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-memory-allocation-with-custom-chunk-size" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines how Memcached constructs its internal slab memory subsystem when started with a custom minimum chunk size. By overriding the default minimum allocation value, operators alter the baseline chunk dimension of the initial slab class, wh" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-memory-allocation-with-custom-chunk-size">Memcached
+Memory Allocation with Custom Chunk Size</h1>
+<p>This article examines how Memcached constructs its internal slab
+memory subsystem when started with a custom minimum chunk size. By
+overriding the default minimum allocation value, operators alter the
+baseline chunk dimension of the initial slab class, which directly
+shifts the geometric growth scale for all subsequent classes, controls
+the total number of slab classes generated, and dictates how 1MB memory
+pages are partitioned. Understanding this behavior allows for optimized
+memory utilization, minimized internal fragmentation, and better
+alignment with expected payload profiles.</p>
+<h3 id="the-slab-allocation-model">The Slab Allocation Model</h3>
+<p>Memcached manages memory through a slab allocation system designed to
+prevent memory fragmentation caused by frequent allocations and
+deallocations. Rather than allocating arbitrary byte sizes for each
+incoming key-value pair, Memcached pre-allocates memory in fixed blocks
+called <strong>pages</strong> (defaulting to 1 megabyte).</p>
+<p>These pages are divided into uniform <strong>chunks</strong>. Each
+collection of pages with identical chunk sizes belongs to a distinct
+<strong>slab class</strong>. When an item is stored, Memcached
+identifies the slab class with the smallest chunk size capable of
+fitting the item (including its key, value, internal flags, and
+metadata) and places it into an available chunk.</p>
+<h3 id="setting-the-custom-minimum-chunk-size">Setting the Custom
+Minimum Chunk Size</h3>
+<p>The minimum chunk size is configured at startup using the
+<code>-n</code> (or <code>--min-item-size</code>) command-line flag.
+This parameter specifies the minimum space allocated for the item key,
+value, and flags.</p>
+<p>When a custom value is provided, Memcached determines the total chunk
+size of <strong>Slab Class 1</strong> by adding the configured value to
+the internal item header overhead (the <code>item</code> C-struct, which
+typically occupies 48 to 56 bytes on 64-bit architectures, plus suffixes
+and alignment padding).</p>
+<p>If an operator specifies <code>-n 128</code>, Memcached uses that
+value as the base payload size, resulting in a Class 1 chunk size of
+approximately 176 to 184 bytes (aligned to an 8-byte memory
+boundary).</p>
+<h3 id="class-progression-and-the-growth-factor">Class Progression and
+the Growth Factor</h3>
+<p>Once the initial chunk size for Slab Class 1 is established,
+Memcached generates subsequent slab classes geometrically based on the
+growth factor (<code>-f</code>, which defaults to 1.25).</p>
+<p>The allocation sequence proceeds as follows:</p>
+<ol type="1">
+<li><strong>Slab Class 1</strong>: Initialized with
+<code>custom_min_size + metadata_overhead</code>, rounded up to the
+nearest 8-byte boundary.</li>
+<li><strong>Slab Class <em>n</em></strong>: Initialized as
+<code>Chunk_Size(n-1) * growth_factor</code>. The calculated size is
+continuously rounded up to preserve memory alignment.</li>
+<li><strong>Termination</strong>: This progression repeats until the
+chunk size reaches the maximum slab page size (controlled by
+<code>-I</code>, default 1 megabyte).</li>
+</ol>
+<p>Altering the minimum chunk size shifts the entire baseline upward.
+For example, doubling the minimum chunk size does not merely expand Slab
+Class 1; it shifts the boundary of every subsequent class rightward,
+reducing the total count of active slab classes between the minimum
+chunk size and the 1MB ceiling.</p>
+<h3 id="page-partitioning-mechanics">Page Partitioning Mechanics</h3>
+<p>When a slab class requires memory, Memcached allocates a 1MB page
+from the global memory pool to that specific slab class. The page is
+then immediately sliced into uniform chunks corresponding to that
+class's dimensions:</p>
+<p><span class="math display">\[\text{Chunks per Page} = \left\lfloor
+\frac{\text{Page Size}}{\text{Chunk Size}} \right\rfloor\]</span></p>
+<p>Any remaining bytes at the end of the 1MB page that are smaller than
+the class chunk size cannot be used and remain idle as unusable
+page-tail padding. With a custom minimum size:</p>
+<ul>
+<li>Larger minimum chunk sizes result in fewer chunks per page in the
+lower slab classes.</li>
+<li>The amount of unused page-tail padding varies depending on how
+cleanly the calculated chunk size divides into the total page size.</li>
+</ul>
+<h3 id="memory-trade-offs-and-considerations">Memory Trade-offs and
+Considerations</h3>
+<p>Configuring a custom minimum chunk size introduces specific
+architectural trade-offs:</p>
+<ul>
+<li><strong>Internal Fragmentation</strong>: If an application stores
+items smaller than the custom minimum chunk size, the unused space
+inside the allocated chunk is wasted. Setting the minimum too high
+increases internal fragmentation for smaller payloads.</li>
+<li><strong>Slab Class Consolidation</strong>: If an application
+guarantees that all items exceed a certain threshold (e.g., 512 bytes),
+raising <code>-n</code> eliminates redundant small-capacity slab
+classes. This prevents memory pages from being tied up in smaller
+classes that will never receive writes.</li>
+<li><strong>Slab Eviction Distribution</strong>: Because memory pages
+are assigned permanently to specific slab classes (unless slab
+reassignment/automove is triggered), tuning the baseline chunk size
+ensures that memory pages are only distributed across size ranges that
+match the live workload.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-memory-allocation-with-custom-chunk-size';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

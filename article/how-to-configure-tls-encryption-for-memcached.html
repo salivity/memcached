@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Configure TLS Encryption for Memcached - memcached</title>
+    <meta name="description" content="Memcached does not enable encryption by default, exposing cached data in transit across internal networks unless explicitly secured. Modern versions of Memcached (version 1.5.13 and later) natively support Transport Layer Security (TLS) to encrypt traffic">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-configure-tls-encryption-for-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Configure TLS Encryption for Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-configure-tls-encryption-for-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached does not enable encryption by default, exposing cached data in transit across internal networks unless explicitly secured. Modern versions of Memcached (version 1.5.13 and later) natively support Transport Layer Security (TLS) to encrypt traffic" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-configure-tls-encryption-for-memcached">How to Configure
+TLS Encryption for Memcached</h1>
+<p>Memcached does not enable encryption by default, exposing cached data
+in transit across internal networks unless explicitly secured. Modern
+versions of Memcached (version 1.5.13 and later) natively support
+Transport Layer Security (TLS) to encrypt traffic between clients and
+the cache cluster. This guide explains how to secure Memcached using TLS
+encryption by preparing digital certificates, configuring and launching
+the Memcached server with SSL/TLS parameters, and configuring client
+applications to establish encrypted connections.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<p>To configure TLS for Memcached, you need:</p>
+<ul>
+<li>Memcached version 1.5.13 or newer compiled with TLS support.</li>
+<li>OpenSSL libraries and development headers installed
+(<code>openssl</code>, <code>libssl-dev</code> on Debian/Ubuntu or
+<code>openssl-devel</code> on RHEL/CentOS).</li>
+<li>An existing Public Key Infrastructure (PKI) or self-signed
+certificates for testing: a Certificate Authority (CA) certificate, a
+server certificate, and a corresponding private key.</li>
+</ul>
+<p>If compiling Memcached from source, enable the TLS flag during
+configuration:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./configure</span> <span class="at">--enable-tls</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> make install</span></code></pre></div>
+<h2 id="step-1-generate-tls-certificates">Step 1: Generate TLS
+Certificates</h2>
+<p>For development or internal testing, generate a root CA and server
+certificates using OpenSSL:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Generate CA private key and certificate</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> genrsa <span class="at">-out</span> ca-key.pem 2048</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> req <span class="at">-x509</span> <span class="at">-new</span> <span class="at">-nodes</span> <span class="at">-key</span> ca-key.pem <span class="at">-days</span> 365 <span class="at">-out</span> ca-cert.pem <span class="at">-subj</span> <span class="st">&quot;/CN=Memcached-CA&quot;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Generate server private key and Certificate Signing Request (CSR)</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> genrsa <span class="at">-out</span> server-key.pem 2048</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> req <span class="at">-new</span> <span class="at">-key</span> server-key.pem <span class="at">-out</span> server.csr <span class="at">-subj</span> <span class="st">&quot;/CN=memcached.internal&quot;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Sign the server certificate using the CA</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> x509 <span class="at">-req</span> <span class="at">-in</span> server.csr <span class="at">-CA</span> ca-cert.pem <span class="at">-CAkey</span> ca-key.pem <span class="at">-CAcreateserial</span> <span class="at">-out</span> server-cert.pem <span class="at">-days</span> 365</span></code></pre></div>
+<p>Place <code>server-cert.pem</code>, <code>server-key.pem</code>, and
+<code>ca-cert.pem</code> into a secure directory, such as
+<code>/etc/memcached/certs/</code>, and restrict permissions:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 600 /etc/memcached/certs/server-key.pem</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 644 /etc/memcached/certs/server-cert.pem /etc/memcached/certs/ca-cert.pem</span></code></pre></div>
+<h2 id="step-2-configure-the-memcached-server">Step 2: Configure the
+Memcached Server</h2>
+<p>To enable TLS, pass the <code>-Z</code> (or
+<code>--enable-ssl</code>) flag along with the certificate parameters to
+the <code>memcached</code> binary.</p>
+<h3 id="command-line-execution">Command-Line Execution</h3>
+<p>Run Memcached directly with the required TLS options:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-p</span> 11211 <span class="dt">\</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">-u</span> memcached <span class="dt">\</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">-m</span> 1024 <span class="dt">\</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">-Z</span> <span class="dt">\</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_chain_cert=/etc/memcached/certs/server-cert.pem <span class="dt">\</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_key=/etc/memcached/certs/server-key.pem <span class="dt">\</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_ca_cert=/etc/memcached/certs/ca-cert.pem <span class="dt">\</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> ssl_verify_mode=1</span></code></pre></div>
+<p>Key TLS arguments:</p>
+<ul>
+<li><code>-Z</code> or <code>--enable-ssl</code>: Activates SSL/TLS mode
+on all listening ports.</li>
+<li><code>ssl_chain_cert</code>: Path to the server's public certificate
+or certificate chain.</li>
+<li><code>ssl_key</code>: Path to the server's private key.</li>
+<li><code>ssl_ca_cert</code>: Path to the CA certificate used for
+validating client certificates (if client authentication is
+enabled).</li>
+<li><code>ssl_verify_mode</code>: Set to <code>0</code> for none,
+<code>1</code> to request a client certificate, or <code>2</code> to
+strictly require valid client certificates (mutual TLS).</li>
+</ul>
+<h3 id="systemd-service-configuration">Systemd Service
+Configuration</h3>
+<p>If managing Memcached through <code>systemd</code>, edit
+<code>/etc/memcached.conf</code> or the systemd environment file (e.g.,
+<code>/etc/sysconfig/memcached</code> or
+<code>/etc/default/memcached</code>):</p>
+<pre class="text"><code>-Z
+-o ssl_chain_cert=/etc/memcached/certs/server-cert.pem
+-o ssl_key=/etc/memcached/certs/server-key.pem
+-o ssl_ca_cert=/etc/memcached/certs/ca-cert.pem
+-o ssl_verify_mode=1</code></pre>
+<p>Restart the service to apply the configuration:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl restart memcached</span></code></pre></div>
+<h2 id="step-3-verify-tls-on-the-server">Step 3: Verify TLS on the
+Server</h2>
+<p>Test whether Memcached is listening and requiring TLS by using
+<code>openssl s_client</code>:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">openssl</span> s_client <span class="at">-connect</span> 127.0.0.1:11211 <span class="at">-CAfile</span> /etc/memcached/certs/ca-cert.pem</span></code></pre></div>
+<p>If the handshake succeeds, the OpenSSL session details will appear.
+Enter standard Memcached commands like <code>version</code> or
+<code>stats</code> to verify that the daemon processes input over the
+encrypted channel. Plaintext connections (e.g., via standard
+<code>telnet</code> or <code>nc</code>) will now fail or be rejected
+immediately.</p>
+<h2 id="step-4-configure-client-applications">Step 4: Configure Client
+Applications</h2>
+<p>Clients must explicitly establish a TLS connection and trust the CA
+that signed the Memcached server certificate.</p>
+<h3 id="python-pymemcache">Python (pymemcache)</h3>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> ssl</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pymemcache.client.base <span class="im">import</span> Client</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>context <span class="op">=</span> ssl.create_default_context(cafile<span class="op">=</span><span class="st">&quot;/path/to/ca-cert.pem&quot;</span>)</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="co"># If mutual TLS (mTLS) is enabled on the server:</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co"># context.load_cert_chain(certfile=&quot;/path/to/client-cert.pem&quot;, keyfile=&quot;/path/to/client-key.pem&quot;)</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> Client(</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    (<span class="st">&quot;127.0.0.1&quot;</span>, <span class="dv">11211</span>),</span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>    tls_context<span class="op">=</span>context</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>client.<span class="bu">set</span>(<span class="st">&quot;secure_key&quot;</span>, <span class="st">&quot;secure_value&quot;</span>)</span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(client.get(<span class="st">&quot;secure_key&quot;</span>))</span></code></pre></div>
+<h3 id="php-php-memcached">PHP (php-memcached)</h3>
+<p>In PHP, the <code>memcached</code> PECL extension must be compiled
+against OpenSSL, or options must be supplied through stream
+configurations or custom options:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode php"><code class="sourceCode php"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span> <span class="op">=</span> <span class="kw">new</span> <span class="bu">Memcached</span>()<span class="ot">;</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_BINARY_PROTOCOL</span><span class="ot">,</span> <span class="kw">true</span>)<span class="ot">;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Configure TLS credentials where supported by libmemcached</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_SSL</span><span class="ot">,</span> <span class="kw">true</span>)<span class="ot">;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_SSL_CA_CERT</span><span class="ot">,</span> <span class="st">&#39;/path/to/ca-cert.pem&#39;</span>)<span class="ot">;</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_SSL_KEY</span><span class="ot">,</span> <span class="st">&#39;/path/to/client-key.pem&#39;</span>)<span class="ot">;</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;setOption(<span class="bu">Memcached</span>::<span class="cn">OPT_SSL_CERT</span><span class="ot">,</span> <span class="st">&#39;/path/to/client-cert.pem&#39;</span>)<span class="ot">;</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;addServer(<span class="st">&#39;127.0.0.1&#39;</span><span class="ot">,</span> <span class="dv">11211</span>)<span class="ot">;</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="va">$m</span>-&gt;set(<span class="st">&#39;secure_key&#39;</span><span class="ot">,</span> <span class="st">&#39;secure_value&#39;</span>)<span class="ot">;</span></span></code></pre></div>
+<h3 id="nodejs-memjs">Node.js (memjs)</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode javascript"><code class="sourceCode javascript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> memjs <span class="op">=</span> <span class="pp">require</span>(<span class="st">&#39;memjs&#39;</span>)<span class="op">;</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> client <span class="op">=</span> memjs<span class="op">.</span><span class="at">Client</span><span class="op">.</span><span class="fu">create</span>(<span class="st">&#39;127.0.0.1:11211&#39;</span><span class="op">,</span> {</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">sslOptions</span><span class="op">:</span> {</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">ca</span><span class="op">:</span> [fs<span class="op">.</span><span class="fu">readFileSync</span>(<span class="st">&#39;/path/to/ca-cert.pem&#39;</span>)]</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>client<span class="op">.</span><span class="fu">set</span>(<span class="st">&#39;secure_key&#39;</span><span class="op">,</span> <span class="st">&#39;secure_value&#39;</span><span class="op">,</span> {}<span class="op">,</span> (err<span class="op">,</span> val) <span class="kw">=&gt;</span> {</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>err) <span class="bu">console</span><span class="op">.</span><span class="fu">log</span>(<span class="st">&#39;Value stored securely&#39;</span>)<span class="op">;</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p>Enabling TLS adds minor cryptographic overhead, but ensures full
+confidentiality and data integrity across distributed networks hosting
+Memcached clusters.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-configure-tls-encryption-for-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

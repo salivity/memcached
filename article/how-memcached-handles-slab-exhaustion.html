@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Slab Exhaustion - memcached</title>
+    <meta name="description" content="Memcached allocates memory in fixed-size pages assigned to specific slab classes, which can lead to a condition known as slab exhaustion or slab calcification when one class runs out of space while others hold unused capacity. To resolve this imbalance, m">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-slab-exhaustion">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Slab Exhaustion - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-slab-exhaustion" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached allocates memory in fixed-size pages assigned to specific slab classes, which can lead to a condition known as slab exhaustion or slab calcification when one class runs out of space while others hold unused capacity. To resolve this imbalance, m" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-slab-exhaustion">How Memcached Handles
+Slab Exhaustion</h1>
+<p>Memcached allocates memory in fixed-size pages assigned to specific
+slab classes, which can lead to a condition known as slab exhaustion or
+slab calcification when one class runs out of space while others hold
+unused capacity. To resolve this imbalance, modern versions of Memcached
+use a combination of local Least Recently Used (LRU) evictions and
+dynamic memory reallocation mechanisms—specifically the
+<code>slabs reassign</code> interface and the automated
+<code>slab_automove</code> background thread. These tools allow the
+server to shift 1MB memory pages from idle or over-allocated slab
+classes to the starved class without requiring a service restart.</p>
+<h3 id="the-slab-allocation-architecture">The Slab Allocation
+Architecture</h3>
+<p>Memcached manages memory using a slab allocator to prevent operating
+system memory fragmentation. Memory is divided into 1MB pages, and each
+page is carved into fixed-size chunks corresponding to a specific slab
+class (e.g., 96 bytes, 120 bytes, 144 bytes). Once a page is assigned to
+a slab class, its chunk size cannot hold items designated for a
+different class.</p>
+<p>If application access patterns shift, larger or smaller keys may
+dominate the workload. This creates a scenario where a high-demand slab
+class fills completely, while slab classes mapped to unused data sizes
+retain free or idle chunks.</p>
+<h3 id="immediate-handling-per-class-lru-eviction">Immediate Handling:
+Per-Class LRU Eviction</h3>
+<p>When a slab class is exhausted and no unassigned 1MB pages remain in
+the global memory pool, Memcached's immediate response is localized LRU
+eviction:</p>
+<ul>
+<li>Memcached evaluates only the items within that specific slab
+class.</li>
+<li>The least recently used item in that class is evicted to make room
+for the new entry, even if other slab classes have completely empty
+chunks.</li>
+<li>In modern Memcached versions, this is handled through Segmented LRU
+(separating items into HOT, WARM, and COLD queues within each class) to
+ensure active keys are not prematurely removed.</li>
+</ul>
+<p>While this preserves write availability, it results in continuous
+evictions and cache misses for the active slab class, despite overall
+system memory remaining underutilized.</p>
+<h3 id="manual-slab-reassignment">Manual Slab Reassignment</h3>
+<p>To fix permanent imbalances, Memcached provides the runtime command
+<code>slabs reassign &lt;source class&gt; &lt;destination class&gt;</code>.</p>
+<p>When this command is issued:</p>
+<ol type="1">
+<li>The Memcached slab maintenance thread identifies a 1MB page in the
+source slab class.</li>
+<li>The page is unlinked from the source slab's freelist, and any
+existing items residing in that page are evicted.</li>
+<li>The page memory is cleared and re-partitioned into chunks matching
+the destination slab class.</li>
+<li>The newly partitioned chunks are added to the starved slab class's
+free pool.</li>
+</ol>
+<p>This operation runs asynchronously in the background and does not
+block client reads or writes to other pages.</p>
+<h3 id="automated-slab-reassignment-slab_automove">Automated Slab
+Reassignment (slab_automove)</h3>
+<p>Because manual intervention is impractical for variable workloads,
+Memcached includes an automated mechanism enabled via the
+<code>-o slab_automove=&lt;mode&gt;</code> startup flag or through the
+runtime settings interface.</p>
+<p>The <code>slab_automove</code> daemon periodically inspects the
+health of all slab classes using defined heuristics:</p>
+<ul>
+<li><strong>Mode 1 (Standard):</strong> If a slab class has recorded
+evictions over three consecutive monitoring windows (typically a few
+seconds apart), it is flagged as starved. The thread then searches for a
+donor slab class that has not experienced an eviction in a prolonged
+period and has free pages, or frees a page by taking the oldest data. It
+then triggers an automated page transfer.</li>
+<li><strong>Mode 2 (Aggressive / Highly Dynamic):</strong> Designed for
+segmented LRU configurations, this mode moves pages based on the
+relative age of the oldest items across slab classes. If the oldest item
+in Class A is significantly younger than the oldest item in Class B,
+Class B is treated as an over-provisioned donor, and a page is moved to
+Class A.</li>
+</ul>
+<p>By combining strict per-class LRU eviction for immediate writes with
+automated page rebalancing for macro-level workload shifts, Memcached
+resolves slab exhaustion without losing performance or wasting
+provisioned RAM.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-slab-exhaustion';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

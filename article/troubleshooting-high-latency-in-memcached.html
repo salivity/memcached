@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Troubleshooting High Latency in Memcached - memcached</title>
+    <meta name="description" content="Diagnosing high latency reports between client applications and Memcached requires a systematic methodology to isolate whether the bottleneck stems from the client environment, the network, or the Memcached server itself. By examining operational metrics,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/troubleshooting-high-latency-in-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Troubleshooting High Latency in Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/troubleshooting-high-latency-in-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Diagnosing high latency reports between client applications and Memcached requires a systematic methodology to isolate whether the bottleneck stems from the client environment, the network, or the Memcached server itself. By examining operational metrics," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="troubleshooting-high-latency-in-memcached">Troubleshooting High
+Latency in Memcached</h1>
+<p>Diagnosing high latency reports between client applications and
+Memcached requires a systematic methodology to isolate whether the
+bottleneck stems from the client environment, the network, or the
+Memcached server itself. By examining operational metrics, network
+health, client configuration, and host-level resource contention, you
+can quickly identify the root cause of slow response times and restore
+optimal cache performance.</p>
+<h3 id="1-isolate-the-source-of-latency">1. Isolate the Source of
+Latency</h3>
+<p>Before modifying configurations, determine where time is being spent
+in the request-response lifecycle:</p>
+<ul>
+<li><strong>Measure baseline round-trip time (RTT):</strong> Use tools
+like <code>ping</code>, <code>traceroute</code>, or <code>mtr</code>
+between the client host and the Memcached server to verify if baseline
+network latency matches the reported delays.</li>
+<li><strong>Segment client-side processing:</strong> Add
+application-level timing around the raw socket read/write operations
+versus data serialization and deserialization. Often, high latency
+attributed to Memcached is actually caused by CPU-heavy object
+deserialization on the client.</li>
+</ul>
+<h3 id="2-inspect-memcached-internal-metrics">2. Inspect Memcached
+Internal Metrics</h3>
+<p>Connect directly to the Memcached instance via <code>telnet</code> or
+<code>nc</code> and run the <code>stats</code> command to identify
+server-side bottlenecks:</p>
+<ul>
+<li><strong><code>rusage_user</code> and
+<code>rusage_system</code>:</strong> High CPU utilization indicates the
+server is saturated, frequently processing large volumes of commands or
+dealing with lock contention.</li>
+<li><strong><code>curr_connections</code> and
+<code>listen_disabled_num</code>:</strong> If
+<code>listen_disabled_num</code> is greater than zero, the server is
+hitting its maximum connection limit (<code>-c</code> flag) and
+temporarily refusing new connections, leading to connection timeouts and
+latency spikes.</li>
+<li><strong><code>threads</code> and thread contention:</strong> Ensure
+Memcached is utilizing multiple threads properly (<code>-t</code>
+option). High worker-thread lock contention can delay query
+handling.</li>
+<li><strong><code>evictions</code> and <code>reclaimed</code>:</strong>
+A high rate of evictions indicates memory pressure, which can cause
+internal slab allocation overhead.</li>
+</ul>
+<h3 id="3-check-for-memory-swapping-and-host-contention">3. Check for
+Memory Swapping and Host Contention</h3>
+<p>Memcached is designed entirely for in-memory operations; any disk
+interaction will degrade performance drastically:</p>
+<ul>
+<li><strong>Swap usage:</strong> Check <code>free -m</code> or
+<code>vmstat</code> on the host. If Memcached memory pages are swapped
+to disk, latency will jump from microseconds to milliseconds. Use the
+<code>-k</code> option to lock memory pages if supported, or disable
+swap on the host.</li>
+<li><strong>Host CPU saturation:</strong> Check <code>top</code> or
+<code>htop</code> to ensure other processes on the same host (noisy
+neighbors) are not stealing CPU cycles from the Memcached worker
+threads.</li>
+</ul>
+<h3 id="4-evaluate-network-and-socket-performance">4. Evaluate Network
+and Socket Performance</h3>
+<p>Memcached operations rely heavily on efficient packet delivery:</p>
+<ul>
+<li><strong>TCP retransmissions:</strong> Run <code>netstat -s</code> or
+<code>ss -ti</code> to look for TCP retransmits and dropped segments.
+Dropped packets trigger TCP backoff algorithms, causing sporadic latency
+spikes.</li>
+<li><strong>NIC saturation:</strong> Check interface bandwidth and
+packet rates using <code>sar -n DEV 1</code> or
+<code>ethtool -S &lt;interface&gt;</code>. Hitting bandwidth or
+packet-per-second (PPS) limits will queue requests at the network
+layer.</li>
+</ul>
+<h3 id="5-audit-client-side-settings-and-payloads">5. Audit Client-Side
+Settings and Payloads</h3>
+<p>Improper client usage often simulates server degradation:</p>
+<ul>
+<li><strong>Connection pooling:</strong> Verify that clients reuse
+persistent connections. Creating a new TCP connection (and tearing it
+down) for every cache operation adds significant latency overhead.</li>
+<li><strong>Item size and network buffering:</strong> Querying large
+items (nearing the default 1MB limit or customized slab limits)
+saturates network buffers. Use the <code>stats sizes</code> command to
+check the distribution of item sizes.</li>
+<li><strong>Client timeout thresholds:</strong> Excessively aggressive
+client-side socket timeouts can cause clients to drop connections
+prematurely, creating cascading retries that overwhelm the cache
+cluster.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/troubleshooting-high-latency-in-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

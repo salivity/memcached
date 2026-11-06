@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Releases Slab Memory to the OS - memcached</title>
+    <meta name="description" content="Memcached fundamentally does not release slab memory back to the operating system, even during extended periods of low traffic or idle usage. Instead of deallocating unused space, its slab allocator retains all allocated memory within the process heap to">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-releases-slab-memory-to-the-os">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Releases Slab Memory to the OS - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-releases-slab-memory-to-the-os" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached fundamentally does not release slab memory back to the operating system, even during extended periods of low traffic or idle usage. Instead of deallocating unused space, its slab allocator retains all allocated memory within the process heap to" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-releases-slab-memory-to-the-os">How Memcached
+Releases Slab Memory to the OS</h1>
+<p>Memcached fundamentally does not release slab memory back to the
+operating system, even during extended periods of low traffic or idle
+usage. Instead of deallocating unused space, its slab allocator retains
+all allocated memory within the process heap to prevent fragmentation
+and maintain sub-millisecond response times. This article explores the
+mechanics of Memcached's slab allocation, why memory is held
+indefinitely, how internal reclamation operates, and how system
+administrators can manage memory footprints during prolonged low-usage
+windows.</p>
+<h3 id="the-slab-allocation-model">The Slab Allocation Model</h3>
+<p>To understand why memory is not released to the host kernel, it is
+necessary to examine how Memcached manages storage. When started,
+Memcached allocates memory in large chunks (typically 1 megabyte per
+slab page) using standard heap allocation.</p>
+<p>These 1MB pages are partitioned into smaller, fixed-size chunks
+called slab classes. Each class is tailored to store items within a
+specific size bracket. Once a slab page is allocated from the operating
+system to a specific slab class, it remains committed to that class.</p>
+<h3 id="why-memory-is-not-returned-to-the-kernel">Why Memory Is Not
+Returned to the Kernel</h3>
+<p>When keys expire via their Time-To-Live (TTL) or are explicitly
+removed by a client via <code>DELETE</code> or <code>FLUSH_ALL</code>,
+Memcached does not invoke <code>free()</code> or <code>munmap()</code>
+to return the physical pages to the operating system. Instead, the freed
+chunk is simply appended to an internal freelist maintained for that
+particular slab class.</p>
+<p>This architectural decision is intentional:</p>
+<ol type="1">
+<li><strong>Heap Fragmentation Prevention:</strong> Constantly
+allocating and freeing memory blocks of varying sizes leads to severe
+heap fragmentation in long-running C processes.</li>
+<li><strong>Predictable Latency:</strong> Calling the kernel to allocate
+or release memory introduces system-call overhead, context switches, and
+page faults that compromise Memcached's low-latency guarantee.</li>
+<li><strong>Reusability:</strong> Memcached operates on the assumption
+that cached datasets naturally expand back to their operational limits,
+making memory deallocation counterproductive.</li>
+</ol>
+<p>Consequently, tools like <code>top</code>, <code>htop</code>, or
+memory monitoring agents will report high Resident Set Size (RSS) memory
+consumption indefinitely, even if the cache is virtually empty.</p>
+<h3 id="internal-memory-reclamation-slab-automove-and-reassign">Internal
+Memory Reclamation: Slab Automove and Reassign</h3>
+<p>While memory does not leave the Memcached process, modern versions of
+Memcached (version 1.4.11 and newer) include features to redistribute
+memory <em>internally</em> between different slab classes during
+workload shifts.</p>
+<p>Through the <code>slab_reassign</code> and <code>slab_automove</code>
+mechanisms, Memcached monitors slab usage:</p>
+<ul>
+<li>If a slab class becomes starved for memory while another class holds
+empty pages, the automover thread can reassign an entire 1MB page from
+the idle class to the starved class.</li>
+<li>This process reorganizes internal memory usage dynamically to avoid
+premature evictions, but the total memory footprint visible to the host
+operating system remains unchanged.</li>
+</ul>
+<h3 id="the-influence-of-the-underlying-allocator">The Influence of the
+Underlying Allocator</h3>
+<p>Memcached is frequently compiled with advanced memory allocators like
+<code>jemalloc</code>. While modern allocators support returning unused
+virtual memory pages to the operating system using system calls such as
+<code>madvise(..., MADV_DONTNEED)</code>, this only occurs when the
+application explicitly releases the memory back to the allocator.
+Because Memcached retains its chunk pointers in its internal freelists,
+<code>jemalloc</code> rarely sees entire multi-page segments marked as
+completely free, preventing automated kernel reclamation.</p>
+<h3 id="strategies-for-reclaiming-memory-during-low-usage">Strategies
+for Reclaiming Memory During Low Usage</h3>
+<p>Because Memcached does not downscale its memory allocation natively,
+administrators requiring dynamic memory reduction must rely on external
+operational strategies:</p>
+<ul>
+<li><strong>Process Restart:</strong> Restarting the
+<code>memcached</code> service terminates the process and immediately
+returns all committed pages to the OS kernel. This can be scheduled
+during known maintenance windows or extended off-peak seasons.</li>
+<li><strong>Dynamic Instance Scaling:</strong> In cloud environments,
+running multiple smaller Memcached nodes behind a consistent hashing
+proxy (such as Twemproxy) allows horizontally scaling down the number of
+nodes during low traffic, terminating unused instances entirely.</li>
+<li><strong>Lowering Maximum Footprint (<code>-m</code> flag):</strong>
+Setting the maximum memory parameter (<code>-m</code>) conservatively
+prevents the daemon from allocating large amounts of system memory in
+the first place, relying instead on LRU (Least Recently Used) evictions
+to discard stale data when capacity is reached.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-releases-slab-memory-to-the-os';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

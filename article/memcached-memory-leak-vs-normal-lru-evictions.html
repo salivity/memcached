@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Memory Leak vs Normal LRU Evictions - memcached</title>
+    <meta name="description" content="Distinguishing between an actual memory leak and healthy Least Recently Used (LRU) evictions in Memcached requires looking beyond standard operating system memory charts. Because Memcached pre-allocates memory via its slab allocator and is designed to run">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-memory-leak-vs-normal-lru-evictions">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Memory Leak vs Normal LRU Evictions - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-memory-leak-vs-normal-lru-evictions" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Distinguishing between an actual memory leak and healthy Least Recently Used (LRU) evictions in Memcached requires looking beyond standard operating system memory charts. Because Memcached pre-allocates memory via its slab allocator and is designed to run" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-memory-leak-vs-normal-lru-evictions">Memcached Memory
+Leak vs Normal LRU Evictions</h1>
+<p>Distinguishing between an actual memory leak and healthy Least
+Recently Used (LRU) evictions in Memcached requires looking beyond
+standard operating system memory charts. Because Memcached pre-allocates
+memory via its slab allocator and is designed to run near capacity,
+diagnosing anomalies requires analyzing internal metrics such as
+<code>evictions</code>, <code>evicted_unexpired</code>, cache hit
+ratios, and operating system Resident Set Size (RSS) relative to
+configured limits.</p>
+<h3 id="understanding-the-baseline-memcached-memory-model">Understanding
+the Baseline: Memcached Memory Model</h3>
+<p>Memcached manages memory by allocating slabs of fixed chunk sizes
+rather than allocating and freeing system memory dynamically per
+request. Once Memcached starts and absorbs data, its memory usage will
+climb to its configured limit (<code>limit_maxbytes</code>) and
+permanently remain there.</p>
+<p>Because staying at 100% capacity is by design, observing maximum
+memory consumption is not evidence of a memory leak. Under normal
+operation, when memory is full and new data enters, Memcached reclaims
+space by purging expired keys or evicting the least recently accessed
+items.</p>
+<h3 id="key-metric-differences">Key Metric Differences</h3>
+<p>To determine whether your cluster is experiencing standard LRU
+behavior, an application-level key leak, or a daemon-level C memory
+leak, compare the following metrics using <code>memcached-tool</code> or
+the <code>stats</code> command.</p>
+<h4 id="1-operating-system-rss-vs-limit_maxbytes">1. Operating System
+RSS vs. <code>limit_maxbytes</code></h4>
+<ul>
+<li><strong>Normal Operation / LRU Evictions:</strong> The OS-level
+Resident Set Size (RSS) will reach <code>limit_maxbytes</code> plus
+minor connection overhead (typically 5–15%) and plateau
+indefinitely.</li>
+<li><strong>Engine-Level Memory Leak:</strong> The RSS continues to grow
+beyond <code>limit_maxbytes</code> and the connection overhead
+threshold, ultimately causing the Linux Out-Of-Memory (OOM) killer to
+terminate the process.</li>
+</ul>
+<h4 id="2-evictions-and-evicted_unexpired">2. <code>evictions</code> and
+<code>evicted_unexpired</code></h4>
+<ul>
+<li><strong>Normal LRU Evictions:</strong> The <code>evictions</code>
+counter increases, but eviction rates match predictable traffic spikes.
+In an adequately sized cache, <code>evicted_unexpired</code> should be
+zero or negligible, meaning items are naturally expiring via their
+Time-To-Live (TTL) before being forced out.</li>
+<li><strong>Capacity Leak / Application Key Leak:</strong> The
+<code>evicted_unexpired</code> metric rises rapidly alongside regular
+<code>evictions</code>. This occurs when an application writes unbounded
+unique keys without TTLs or generates massive key bloat, aggressively
+forcing actively used, unexpired items out of memory.</li>
+</ul>
+<h4 id="3-key-count-stability-curr_items">3. Key Count Stability
+(<code>curr_items</code>)</h4>
+<ul>
+<li><strong>Normal LRU Evictions:</strong> In steady-state workloads,
+<code>curr_items</code> fluctuates within a consistent range or reaches
+an equilibrium where the rate of expired/evicted keys equals the rate of
+newly set keys (<code>cmd_set</code>).</li>
+<li><strong>Application Leak:</strong> <code>curr_items</code> displays
+a continuous upward trajectory with no plateau until memory is
+exhausted, followed by a sudden plateau and an immediate surge in
+<code>evictions</code>.</li>
+</ul>
+<h4 id="4-cache-hit-ratio-get_hits-vs-get_misses">4. Cache Hit Ratio
+(<code>get_hits</code> vs. <code>get_misses</code>)</h4>
+<ul>
+<li><strong>Normal LRU Evictions:</strong> The cache hit ratio remains
+stable. The LRU algorithm ensures that frequently requested "hot" items
+stay in memory, meaning normal evictions primarily discard cold or
+rarely used data.</li>
+<li><strong>Memory/Key Leak Impact:</strong> The hit ratio degrades
+drastically. Because unmanaged or leaked keys monopolize slabs, the LRU
+algorithm is forced to purge active, high-value cached data to
+accommodate the incoming low-value keys, driving <code>get_misses</code>
+upward.</li>
+</ul>
+<h4 id="5-slab-distribution-stats-slabs">5. Slab Distribution
+(<code>stats slabs</code>)</h4>
+<ul>
+<li><strong>Normal Operation:</strong> Slab classes reflect your payload
+sizes, and <code>used_chunks</code> corresponds proportionally to key
+access frequency across classes.</li>
+<li><strong>Slab Calcification (Simulated Leak):</strong> If historical
+traffic introduced large objects into specific slab classes that are no
+longer requested, memory can become locked into empty chunks within
+those classes if slab rebalancing (<code>slab_automove</code>) is
+disabled. This starves other slab classes and triggers high eviction
+rates despite apparent idle memory inside underutilized slabs.</li>
+</ul>
+<h3 id="diagnostic-checklist">Diagnostic Checklist</h3>
+<ol type="1">
+<li><strong>Check process size:</strong> Run
+<code>ps -o rss,vsz -p &lt;memcached_pid&gt;</code>. If RSS
+significantly exceeds <code>limit_maxbytes</code>, suspect an engine bug
+or module leak.</li>
+<li><strong>Evaluate TTL pressure:</strong> Query
+<code>stats items</code> to inspect <code>evicted_unexpired</code>
+across all slabs. Elevated numbers indicate cache starvation rather than
+natural expiration.</li>
+<li><strong>Audit key distribution:</strong> Sample your keyspace using
+<code>memcached-tool &lt;host:port&gt; dump</code> to identify
+un-expiring keys, rogue unique IDs, or bloated data models flooding the
+cache.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-memory-leak-vs-normal-lru-evictions';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

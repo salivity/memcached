@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Max Bytes vs Slab Page Count Explained - memcached</title>
+    <meta name="description" content="In Memcached, memory management relies on a slab allocation system to minimize memory fragmentation and avoid expensive operating system allocations. The configuration setting maxbytes (configured using the -m flag) defines the total memory ceiling availa">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-max-bytes-vs-slab-page-count-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Max Bytes vs Slab Page Count Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-max-bytes-vs-slab-page-count-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In Memcached, memory management relies on a slab allocation system to minimize memory fragmentation and avoid expensive operating system allocations. The configuration setting maxbytes (configured using the -m flag) defines the total memory ceiling availa" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-max-bytes-vs-slab-page-count-explained">Memcached Max
+Bytes vs Slab Page Count Explained</h1>
+<p>In Memcached, memory management relies on a slab allocation system to
+minimize memory fragmentation and avoid expensive operating system
+allocations. The configuration setting <code>maxbytes</code> (configured
+using the <code>-m</code> flag) defines the total memory ceiling
+available to the process, while the slab page count represents how that
+total memory is divided into individual storage blocks (pages).
+Understanding the direct mathematical and operational relationship
+between these two parameters is crucial for optimizing cache capacity,
+avoiding memory calcification, and preventing premature data
+evictions.</p>
+<h3 id="the-mathematical-relationship">The Mathematical
+Relationship</h3>
+<p>The relationship between <code>maxbytes</code> and slab page count is
+fundamentally proportional:</p>
+<p><span class="math display">\[\text{Total Slab Page Count} =
+\left\lfloor \frac{\text{maxbytes}}{\text{slab\_page\_size}}
+\right\rfloor\]</span></p>
+<ul>
+<li><strong><code>maxbytes</code> (<code>-m</code>)</strong>: The
+maximum amount of RAM in megabytes that Memcached is allowed to use for
+storing data. For example, <code>-m 4096</code> allocates 4,096 MB (4
+GB).</li>
+<li><strong>Slab Page Size (<code>-I</code>)</strong>: The discrete
+allocation unit used by Memcached. By default, a slab page is 1 megabyte
+(1,048,576 bytes), though it can be adjusted from 1 KB up to 1024 MB
+using the <code>-I</code> or <code>--max-item-size</code>
+parameter.</li>
+<li><strong>Slab Page Count</strong>: The integer count of discrete
+memory pages Memcached can carve out of the <code>maxbytes</code>
+pool.</li>
+</ul>
+<p>If you configure Memcached with <code>-m 1024</code> and the default
+1 MB page size, Memcached has a maximum capacity of exactly 1,024 slab
+pages.</p>
+<h3 id="slab-classes-and-page-allocation">Slab Classes and Page
+Allocation</h3>
+<p>Memcached does not allocate all slab pages at startup. Instead, it
+maintains a pool of free pages up to the limit allowed by
+<code>maxbytes</code>.</p>
+<p>When items are stored, Memcached categorizes them by size into
+distinct "slab classes":</p>
+<ol type="1">
+<li>Each slab class contains chunks of a specific size, determined by
+the growth factor (<code>-f</code>).</li>
+<li>When a slab class runs out of empty chunks to store incoming items,
+it requests a new 1 MB slab page from the unallocated pool.</li>
+<li>This new page is divided into fixed-size chunks dedicated solely to
+that specific slab class.</li>
+<li>The total slab page count increases by one, reducing the remaining
+pool of unallocated memory governed by <code>maxbytes</code>.</li>
+</ol>
+<h3 id="operational-impact-on-cache-performance">Operational Impact on
+Cache Performance</h3>
+<p>The bound between <code>maxbytes</code> and the page count influences
+runtime behavior in two critical ways:</p>
+<ul>
+<li><strong>Pool Exhaustion</strong>: When the number of allocated pages
+reaches the maximum slab page count permitted by <code>maxbytes</code>,
+Memcached can no longer allocate new pages to any class.</li>
+<li><strong>Evictions (LRU) vs. Free Pages</strong>: If the maximum slab
+page count has been reached and a specific slab class needs more space,
+it cannot obtain a new page from the global pool. It must either evict
+the least recently used (LRU) item within its own class or utilize
+Memcached's slab automove feature (<code>slab_automove</code>) to
+transfer an idle page from another class.</li>
+<li><strong>Memory Overhead</strong>: A negligible amount of the memory
+defined by <code>maxbytes</code> is reserved for internal tracking
+structures, meaning the usable page count may occasionally be slightly
+less than the raw division of <code>maxbytes</code> by page size.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-max-bytes-vs-slab-page-count-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

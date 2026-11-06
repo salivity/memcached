@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Get Requests on Cold Swap Memory - memcached</title>
+    <meta name="description" content="When Memcached receives a get request for a key whose memory page has been moved to cold swap space, the retrieval process shifts from a sub-millisecond memory lookup to a high-latency disk operation managed entirely by the operating system kernel. Becaus">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-get-requests-on-cold-swap-memory">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Get Requests on Cold Swap Memory - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-get-requests-on-cold-swap-memory" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When Memcached receives a get request for a key whose memory page has been moved to cold swap space, the retrieval process shifts from a sub-millisecond memory lookup to a high-latency disk operation managed entirely by the operating system kernel. Becaus" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-get-requests-on-cold-swap-memory">Memcached Get
+Requests on Cold Swap Memory</h1>
+<p>When Memcached receives a <code>get</code> request for a key whose
+memory page has been moved to cold swap space, the retrieval process
+shifts from a sub-millisecond memory lookup to a high-latency disk
+operation managed entirely by the operating system kernel. Because
+Memcached is agnostic to physical memory management, it relies on the
+operating system’s virtual memory manager to resolve hardware page
+faults, bringing the cold data back into physical RAM before completing
+the request. This article explains the exact technical sequence that
+occurs when fetching swapped data and highlights the performance
+implications for Memcached deployments.</p>
+<h2 id="the-virtual-memory-abstraction">The Virtual Memory
+Abstraction</h2>
+<p>Memcached allocates its memory using slab allocators mapped directly
+into its virtual address space. It does not track whether a specific
+slab or item structure physically resides in physical RAM or on a swap
+partition or file. From the perspective of the Memcached process, all
+memory is simply a collection of virtual addresses. Memory paging,
+swapping out idle pages to disk, and paging them back in are managed
+completely by the host operating system's kernel.</p>
+<h2
+id="step-by-step-execution-of-a-get-request-on-swapped-data">Step-by-Step
+Execution of a Get Request on Swapped Data</h2>
+<p>When a client issues a <code>get &lt;key&gt;</code> command targeting
+data held in cold swap, the request executes through the following
+phases:</p>
+<ol type="1">
+<li><p><strong>Request Parsing and Hash Table Lookup</strong><br />
+The dedicated worker thread reads the command from the network socket
+buffer. It hashes the key to locate the appropriate bucket in the
+primary hash table. If the hash table entry itself resides in physical
+RAM, this step completes immediately, identifying the virtual memory
+address of the target <code>item</code> pointer.</p></li>
+<li><p><strong>Pointer Dereference and Page Fault Trigger</strong><br />
+The worker thread attempts to dereference the pointer pointing to the
+item structure to read its metadata (flags, expiration time, and data
+payload). Because the data was moved to swap memory due to memory
+pressure or inactivity, the CPU's Memory Management Unit (MMU) cannot
+find the physical address in the page table. This triggers a major
+hardware page fault.</p></li>
+<li><p><strong>Kernel Intervention and Disk I/O</strong><br />
+The CPU halts the execution of the Memcached worker thread and yields
+control to the operating system kernel's page fault handler. The kernel
+identifies the disk block containing the required 4KB virtual memory
+page within the swap space and initiates a synchronous or asynchronous
+read from disk.</p></li>
+<li><p><strong>Page-In to Physical RAM</strong><br />
+The operating system reads the data from disk into an available physical
+memory frame. If physical memory is completely exhausted, the OS may
+first evict another active page using its own page replacement algorithm
+(such as Least Recently Used) to make room. Once the page is loaded into
+physical RAM, the kernel updates the process's page table
+entries.</p></li>
+<li><p><strong>Thread Resumption and Response Dispatch</strong><br />
+The kernel marks the Memcached worker thread as runnable. Once scheduled
+back onto a CPU core, the thread re-executes the memory read
+instruction. It successfully accesses the key's metadata and data
+payload, constructs the text or binary protocol response, writes it to
+the socket output buffer, and returns the value to the client.</p></li>
+</ol>
+<h2 id="performance-impact-of-swapped-lookups">Performance Impact of
+Swapped Lookups</h2>
+<p>The transition from RAM to swap fundamentally degrades Memcached's
+primary utility:</p>
+<ul>
+<li><strong>Latency Spikes:</strong> A typical in-memory retrieval takes
+tens of microseconds. If a page fault forces a read from an SSD or NVMe
+drive, latency increases to hundreds of microseconds or low
+milliseconds; on mechanical hard drives, it can exceed 10
+milliseconds.</li>
+<li><strong>Worker Thread Blocking:</strong> Memcached relies on an
+event-driven, non-blocking I/O model (using <code>libevent</code>) to
+manage network traffic. However, OS page faults block the entire thread
+at the CPU instruction level. While one worker thread waits on disk I/O,
+all other client connections multiplexed onto that same worker thread
+are queued, causing cascading latency spikes and connection timeouts
+across the application.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-get-requests-on-cold-swap-memory';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

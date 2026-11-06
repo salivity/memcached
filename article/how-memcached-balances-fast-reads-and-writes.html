@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Balances Fast Reads and Writes - memcached</title>
+    <meta name="description" content="Memcached maintains sub-millisecond latency by decoupling network I/O, thread concurrency, and memory management into dedicated subsystems. By pairing an event-driven multi-threaded architecture with fine-grained hash table locking and a pre-allocated sla">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-balances-fast-reads-and-writes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Balances Fast Reads and Writes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-balances-fast-reads-and-writes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains sub-millisecond latency by decoupling network I/O, thread concurrency, and memory management into dedicated subsystems. By pairing an event-driven multi-threaded architecture with fine-grained hash table locking and a pre-allocated sla" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-balances-fast-reads-and-writes">How Memcached
+Balances Fast Reads and Writes</h1>
+<p>Memcached maintains sub-millisecond latency by decoupling network
+I/O, thread concurrency, and memory management into dedicated
+subsystems. By pairing an event-driven multi-threaded architecture with
+fine-grained hash table locking and a pre-allocated slab storage engine,
+the system ensures that high-volume read operations execute without
+blocking, while resource-heavy write operations allocate memory
+predictably without degrading overall throughput.</p>
+<h3 id="multi-threaded-event-driven-networking">Multi-Threaded,
+Event-Driven Networking</h3>
+<p>Memcached uses <code>libevent</code> to implement an asynchronous,
+non-blocking I/O model. It operates with a single main thread dedicated
+to accepting incoming TCP/UDP connections and assigning them across a
+configurable pool of worker threads via a round-robin mechanism.</p>
+<p>Each worker thread runs its own event loop and manages its assigned
+client sockets independently. Because read and write operations are
+processed by worker threads rather than a single monolithic thread,
+network I/O operations do not serialize. Fast read requests are parsed
+and answered concurrently without being stalled by network transmission
+delays from slower client write payloads.</p>
+<h3 id="fine-grained-hash-table-locking">Fine-Grained Hash Table
+Locking</h3>
+<p>To prevent race conditions between concurrent reads and writes,
+Memcached relies on an internal hash table partitioned by locks:</p>
+<ul>
+<li><strong>Bucket-Level Locks:</strong> Instead of a single global lock
+over the entire cache, Memcached divides the primary hash table into
+multiple lock partitions (typically thousands of hash buckets per
+lock).</li>
+<li><strong>Read-Write Isolation:</strong> A write operation
+(<code>SET</code>, <code>ADD</code>, <code>REPLACE</code>) only acquires
+the specific lock associated with the target key's hash bucket.
+Concurrent read requests (<code>GET</code>) targeting items in other
+buckets proceed entirely unimpeded.</li>
+<li><strong>Incremental Rehashing:</strong> When the volume of items
+grows large enough to degrade lookup performance, Memcached expands its
+hash table. This rehashing occurs incrementally across small batches in
+the background, preventing write spikes from causing global latency
+pauses for reads.</li>
+</ul>
+<h3 id="the-slab-allocation-engine">The Slab Allocation Engine</h3>
+<p>Standard dynamic memory allocation (<code>malloc</code> and
+<code>free</code>) introduces memory fragmentation and unpredictable
+execution times, which severely penalize write-heavy workloads.
+Memcached bypasses this via a slab allocator:</p>
+<ol type="1">
+<li><strong>Memory Pre-Allocation:</strong> Memory is reserved at
+startup and broken down into 1 MB slab pages.</li>
+<li><strong>Slab Classes:</strong> Slabs are sliced into fixed-size
+chunks tailored for specific item sizes (e.g., 96-byte chunks, 120-byte
+chunks, etc.).</li>
+<li><strong>Deterministic Writes:</strong> When a write request arrives,
+Memcached maps the item’s size to the nearest fitting slab class and
+writes directly into a pre-allocated chunk. This transforms what would
+be an expensive memory allocation into an almost instantaneous <span
+class="math inline">\(O(1)\)</span> pointer assignment.</li>
+</ol>
+<p>Because memory is never released back to the operating system during
+standard operations, writes execute with consistent latency, avoiding
+CPU spikes and memory fragmentation that could otherwise stall
+concurrent read pipelines.</p>
+<h3 id="non-blocking-lru-evictions">Non-Blocking LRU Evictions</h3>
+<p>When memory is full and a write requires space, Memcached relies on a
+segmented Least Recently Used (LRU) algorithm to evict data without
+blocking read requests:</p>
+<ul>
+<li><strong>Split LRU Queues:</strong> Modern Memcached splits item
+management into distinct queues (e.g., <code>HOT</code>,
+<code>WARM</code>, <code>COLD</code>, and <code>TEMP</code>).</li>
+<li><strong>Background LRU Maintenance:</strong> Moving items between
+LRU lists is handled by background crawler threads rather than inline on
+the worker threads.</li>
+<li><strong>Asynchronous Evictions:</strong> When a write needs to
+reclaim space, it quickly reclaims memory from the tail of the
+appropriate slab class's <code>COLD</code> queue. Read requests that hit
+valid keys do not wait on background cleanup or LRU sorting, maintaining
+strict isolation between write-driven evictions and read execution
+paths.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-balances-fast-reads-and-writes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

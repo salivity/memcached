@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>High Memcached Read Throughput on Multi-Socket CPUs - memcached</title>
+    <meta name="description" content="Memcached achieves exceptional read throughput on multi-socket CPU architectures by combining an asynchronous, event-driven multithreading model with fine-grained concurrency controls and NUMA-aware system tuning. Rather than relying on a single global lo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/high-memcached-read-throughput-on-multi-socket-cp-us">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="High Memcached Read Throughput on Multi-Socket CPUs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/high-memcached-read-throughput-on-multi-socket-cp-us" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached achieves exceptional read throughput on multi-socket CPU architectures by combining an asynchronous, event-driven multithreading model with fine-grained concurrency controls and NUMA-aware system tuning. Rather than relying on a single global lo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="high-memcached-read-throughput-on-multi-socket-cpus">High
+Memcached Read Throughput on Multi-Socket CPUs</h1>
+<p>Memcached achieves exceptional read throughput on multi-socket CPU
+architectures by combining an asynchronous, event-driven multithreading
+model with fine-grained concurrency controls and NUMA-aware system
+tuning. Rather than relying on a single global lock, it distributes
+network I/O across worker threads and utilizes hash-table lock striping
+to minimize lock contention. Under heavy read workloads, Memcached
+avoids modifying shared memory states whenever possible, mitigating the
+cross-socket interconnect bottlenecks and cache-line invalidation
+penalties typical of multi-socket Non-Uniform Memory Access (NUMA)
+hardware.</p>
+<h2 id="multithreaded-event-driven-architecture">Multithreaded
+Event-Driven Architecture</h2>
+<p>Memcached uses <code>libevent</code> to drive an asynchronous,
+non-blocking network model based on a master-worker thread pattern. When
+deployed on high-core, multi-socket servers, the workload is distributed
+as follows:</p>
+<ul>
+<li><strong>Dispatcher Thread:</strong> Listens for incoming client
+TCP/UDP connections and assigns them to worker threads via a round-robin
+mechanism over internal pipes.</li>
+<li><strong>Worker Threads:</strong> Each worker thread manages its own
+event loop and handles multiple client connections concurrently. This
+prevents context switching overhead and allows the server to fully
+saturate available CPU cores across all sockets.</li>
+</ul>
+<p>By isolating connection handling to distinct threads, Memcached
+eliminates inter-thread coordination for network reads and writes.</p>
+<h2 id="hash-table-lock-striping">Hash Table Lock Striping</h2>
+<p>Early versions of Memcached utilized a single global cache lock,
+which severely degraded performance on multi-core and multi-socket
+setups due to lock contention. Modern Memcached replaces this with
+granular lock striping across its primary hash table:</p>
+<ul>
+<li><strong>Item Locks:</strong> The hash table is partitioned into
+thousands of distinct lock buckets (using a power-of-two array of
+mutexes).</li>
+<li><strong>Targeted Synchronization:</strong> When a worker thread
+reads an item, it computes the key's hash and acquires only the specific
+lock governing that hash bucket.</li>
+<li><strong>High Concurrency:</strong> Concurrent reads targeting
+different hash buckets execute simultaneously across different CPU
+sockets without blocking each other.</li>
+</ul>
+<p>Because read operations do not require updating the hash table
+structure itself, contention on these bucket locks remains minimal
+during read-heavy traffic.</p>
+<h2 id="mitigating-cache-line-bouncing-on-multi-socket-cpus">Mitigating
+Cache-Line Bouncing on Multi-Socket CPUs</h2>
+<p>In a multi-socket machine, CPUs communicate across high-speed
+interconnects (such as Intel UPI or AMD Infinity Fabric). If multiple
+sockets frequently write to the same memory address, the hardware cache
+coherence protocol continuously invalidates CPU L1/L2 caches, causing
+"cache-line bouncing" and degrading memory bandwidth.</p>
+<p>Memcached optimizes the read path to prevent this:</p>
+<ul>
+<li><strong>Read-Only Key Traversal:</strong> Read operations traverse
+the hash table and read the data payload without mutating shared
+structures.</li>
+<li><strong>Decoupled Statistics:</strong> Global counters and telemetry
+are often thread-local or aggregated asynchronously, preventing
+cross-socket atomic updates on every single <code>get</code>
+operation.</li>
+<li><strong>Optimized Reference Counting:</strong> While reference
+counts on items must be adjusted to prevent premature eviction during a
+read, modern optimizations minimize the duration of these atomic
+increments and decrements, reducing cross-socket synchronization
+latencies.</li>
+</ul>
+<h2 id="numa-awareness-and-memory-placement">NUMA Awareness and Memory
+Placement</h2>
+<p>Multi-socket architectures feature Non-Uniform Memory Access (NUMA),
+where accessing memory attached to a local socket is significantly
+faster than accessing remote memory attached to another socket.</p>
+<p>To maximize read throughput:</p>
+<ul>
+<li><strong>Thread and Memory Pinning:</strong> Administrators often run
+Memcached with CPU affinity using utilities like <code>numactl</code> or
+<code>taskset</code>. Pinning specific worker threads to the CPU socket
+physically closest to the memory nodes holding the hash table reduces
+interconnect traversal.</li>
+<li><strong>Interleaved Allocation:</strong> In instances where a single
+Memcached instance spans all sockets, configuring NUMA policy to
+interleave memory across all nodes prevents memory bus saturation on a
+single socket.</li>
+<li><strong>Instance Partitioning:</strong> In high-scale deployments,
+the standard practice is running multiple distinct Memcached instances
+bound to individual NUMA nodes rather than a single large instance
+spanning sockets, effectively eliminating cross-socket latency
+altogether.</li>
+</ul>
+<h2 id="network-stack-scaling-via-so_reuseport">Network Stack Scaling
+via SO_REUSEPORT</h2>
+<p>To prevent the kernel network stack from becoming the bottleneck
+across sockets, Memcached supports the <code>SO_REUSEPORT</code> socket
+option. This allows multiple worker threads to bind independently to the
+exact same listening port. The Linux kernel then distributes incoming
+connections directly across the worker threads at the socket layer,
+distributing packet processing across the CPU sockets and eliminating
+the single dispatcher thread bottleneck entirely.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/high-memcached-read-throughput-on-multi-socket-cp-us';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

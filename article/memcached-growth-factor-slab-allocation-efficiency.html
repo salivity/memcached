@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Growth Factor: Slab Allocation Efficiency - memcached</title>
+    <meta name="description" content="The growth factor in Memcached governs the rate at which chunk sizes increase across successive slab classes, directly dictating how efficiently memory pages are allocated and utilized. By controlling the size differential between adjacent classes, this p">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-growth-factor-slab-allocation-efficiency">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Growth Factor: Slab Allocation Efficiency - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-growth-factor-slab-allocation-efficiency" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The growth factor in Memcached governs the rate at which chunk sizes increase across successive slab classes, directly dictating how efficiently memory pages are allocated and utilized. By controlling the size differential between adjacent classes, this p" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-growth-factor-slab-allocation-efficiency">Memcached
+Growth Factor: Slab Allocation Efficiency</h1>
+<p>The growth factor in Memcached governs the rate at which chunk sizes
+increase across successive slab classes, directly dictating how
+efficiently memory pages are allocated and utilized. By controlling the
+size differential between adjacent classes, this parameter determines
+the balance between internal memory fragmentation (wasted bytes within a
+chunk) and structural fragmentation (wasted capacity across
+underutilized slab classes). Correctly tuning the growth factor allows
+database administrators to align Memcached's memory profile with their
+application's specific item size distribution, maximizing overall cache
+density and preventing premature key evictions.</p>
+<h3 id="understanding-the-slab-allocation-mechanism">Understanding the
+Slab Allocation Mechanism</h3>
+<p>Memcached manages memory using a slab allocation system to avoid
+operating system-level memory fragmentation. Memory is carved into 1
+megabyte (MB) pages, and each page is assigned to a specific slab class.
+A slab class divides its 1 MB pages into fixed-size chunks to store
+key-value pairs.</p>
+<p>When an item is stored, Memcached places it into the smallest slab
+class with chunks large enough to accommodate the item's key, flags,
+metadata, and value. The size progression from one slab class to the
+next is controlled by the growth factor parameter, configured via the
+<code>-f</code> flag at startup (with a default value of 1.25).</p>
+<h3 id="the-influence-of-a-high-growth-factor">The Influence of a High
+Growth Factor</h3>
+<p>Setting a larger growth factor (such as 1.5 or 2.0) causes the chunk
+sizes between successive slab classes to increase rapidly, resulting in
+fewer overall slab classes.</p>
+<ul>
+<li><strong>Fewer, Broader Slab Classes:</strong> With fewer classes, 1
+MB memory pages are pooled among a smaller set of buckets, reducing the
+risk of slab exhaustion where memory is locked in classes that are no
+longer actively written to.</li>
+<li><strong>Increased Internal Fragmentation:</strong> The major
+drawback is increased wasted space per item. If an item is 101 bytes and
+the available slab classes are 100 bytes and 200 bytes, the item is
+forced into the 200-byte class, wasting 99 bytes (nearly 50% of the
+chunk). Over millions of keys, this slack space degrades overall storage
+capacity.</li>
+</ul>
+<h3 id="the-influence-of-a-low-growth-factor">The Influence of a Low
+Growth Factor</h3>
+<p>Lowering the growth factor (such as 1.05 or 1.1) produces a tight
+progression of chunk sizes, yielding a larger number of distinct slab
+classes.</p>
+<ul>
+<li><strong>Minimizing Internal Slack Space:</strong> Chunks are
+tailored closely to the actual size of the data, dramatically reducing
+the unused space inside each individual chunk.</li>
+<li><strong>Risk of Structural Inefficiency:</strong> Because Memcached
+allocates memory in discrete 1 MB pages per slab class, spreading keys
+across too many classes can trap memory. A slab class that receives only
+a handful of writes will still occupy an entire 1 MB page. If the key
+distribution shifts, classes with high demand may run out of memory and
+trigger aggressive Least Recently Used (LRU) evictions, even while other
+slab classes have empty, unused chunks.</li>
+</ul>
+<h3 id="achieving-optimal-allocation-efficiency">Achieving Optimal
+Allocation Efficiency</h3>
+<p>Allocation efficiency is optimized when the growth factor aligns with
+the variability of your payload sizes:</p>
+<ol type="1">
+<li><strong>Uniform Data Sizes:</strong> If cached objects have
+homogeneous sizes, a lower growth factor minimizes padding overhead
+without creating unused slab classes.</li>
+<li><strong>Variable Data Sizes:</strong> If object sizes vary widely or
+unpredictably, a moderate growth factor (between 1.15 and 1.25) prevents
+excessive class proliferation and keeps pages fungible.</li>
+<li><strong>Automated Rebalancing:</strong> Modern versions of Memcached
+feature the slab automover (<code>-o slab_automove</code>), which helps
+mitigate the class-starvation risks of lower growth factors by migrating
+unused pages between classes at runtime.</li>
+</ol>
+<p>Evaluating efficiency requires inspecting runtime statistics via the
+<code>stats slabs</code> command. Monitoring the ratio between total
+allocated bytes (<code>total_chunks * chunk_size</code>) and used bytes
+reveals the exact degree of internal fragmentation, indicating whether
+the growth factor should be tightened or relaxed.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-growth-factor-slab-allocation-efficiency';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

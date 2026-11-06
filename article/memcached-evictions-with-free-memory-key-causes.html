@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Evictions with Free Memory: Key Causes - memcached</title>
+    <meta name="description" content="Memcached instances often report unexpected item evictions even when total system or process memory appears readily available. This counterintuitive behavior occurs primarily because Memcached does not manage memory as a single contiguous pool, but rather">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-evictions-with-free-memory-key-causes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Evictions with Free Memory: Key Causes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-evictions-with-free-memory-key-causes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached instances often report unexpected item evictions even when total system or process memory appears readily available. This counterintuitive behavior occurs primarily because Memcached does not manage memory as a single contiguous pool, but rather" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-evictions-with-free-memory-key-causes">Memcached
+Evictions with Free Memory: Key Causes</h1>
+<p>Memcached instances often report unexpected item evictions even when
+total system or process memory appears readily available. This
+counterintuitive behavior occurs primarily because Memcached does not
+manage memory as a single contiguous pool, but rather through a rigid
+chunk-allocation architecture. This article breaks down the primary
+technical causes of unexpected evictions under free memory conditions,
+explaining the internal mechanisms of slab classes, the limits of the
+Least Recently Used (LRU) algorithm, and configuration bottlenecks.</p>
+<h3 id="1-slab-class-memory-exhaustion">1. Slab Class Memory
+Exhaustion</h3>
+<p>Memcached uses a slab allocation mechanism to prevent memory
+fragmentation. Memory is partitioned into 1MB pages, which are assigned
+to specific "slab classes." Each slab class handles items within a
+predefined byte-size range using fixed-size chunks.</p>
+<ul>
+<li><strong>Independent Allocations:</strong> Once a 1MB memory page is
+assigned to a specific slab class (e.g., Slab Class 10 for items up to
+1KB), that memory is locked to that class.</li>
+<li><strong>Localized Evictions:</strong> If Slab Class 10 fills up and
+a new 1KB item arrives, Memcached must evict an older item <em>from Slab
+Class 10</em>, even if Slab Class 20 (for 8KB items) has hundreds of
+megabytes of completely unused memory.</li>
+</ul>
+<h3 id="2-workload-shifts-and-inactive-slabs">2. Workload Shifts and
+Inactive Slabs</h3>
+<p>When an application's data profile changes over time, older memory
+pages often remain trapped in obsolete slab classes:</p>
+<ul>
+<li>If an application initially caches millions of 200-byte objects,
+Memcached allocates most of its memory to small-chunk slabs.</li>
+<li>If a code update shifts the average object size to 1.5KB, Memcached
+quickly exhausts the few pages assigned to the larger slab class.</li>
+<li>Because the older, smaller pages are already claimed and hold valid
+(or unexpired) data, Memcached evicts keys within the larger slab class
+rather than consuming unused capacity locked elsewhere.</li>
+</ul>
+<h3 id="3-disabled-or-ineffective-slab-automove">3. Disabled or
+Ineffective Slab Automove</h3>
+<p>Memcached includes a feature to rebalance pages across slab classes
+dynamically (<code>slab_automove</code>), but it has limitations:</p>
+<ul>
+<li><strong>Default Settings:</strong> In some versions or
+configurations, <code>slab_reassign</code> and
+<code>slab_automove</code> are disabled by default. Without dynamic
+reassignment, a slab class cannot steal unused pages from other
+classes.</li>
+<li><strong>Conservative Automove Algorithms:</strong> Even when enabled
+(e.g., <code>slab_automove=1</code> or <code>2</code>), the rebalancing
+thread acts conservatively to prevent performance spikes. If an influx
+of writes exceeds the speed at which pages can be unmapped and
+reassigned, evictions will occur before rebalancing can catch up.</li>
+</ul>
+<h3 id="4-per-slab-lru-eviction-logic">4. Per-Slab LRU Eviction
+Logic</h3>
+<p>Evictions in Memcached are evaluated locally, not globally:</p>
+<ul>
+<li>Each slab class maintains its own LRU queue.</li>
+<li>Memcached does not search globally for the oldest overall key across
+the entire server to evict.</li>
+<li>As long as a specific slab class runs out of free chunks within its
+allocated pages, it immediately triggers an eviction at the tail of its
+own local LRU list, disregarding whether total instance memory usage is
+far below the <code>-m</code> (maximum memory) threshold.</li>
+</ul>
+<h3 id="5-premature-evictions-via-the-modern-segmented-lru">5. Premature
+Evictions via the Modern Segmented LRU</h3>
+<p>Modern versions of Memcached feature a segmented LRU
+(<code>HOT</code>, <code>WARM</code>, <code>COLD</code>, and
+<code>TEMP</code> queues) to avoid lock contention and protect
+frequently read items:</p>
+<ul>
+<li>Items enter the <code>HOT</code> or <code>WARM</code> queues based
+on access patterns.</li>
+<li>Under heavy write loads, if the background maintainer thread cannot
+migrate items between queues quickly enough, items may drop out of the
+<code>COLD</code> queue of an active slab class prematurely, even if
+total RAM metrics suggest idle headroom.</li>
+</ul>
+<h3 id="diagnostic-verification">Diagnostic Verification</h3>
+<p>To identify which slab class is suffering from premature evictions,
+run the following commands via <code>telnet</code> or
+<code>nc</code>:</p>
+<ul>
+<li><code>stats slabs</code>: Displays page distribution, chunk sizing,
+and eviction counts broken down per individual slab class. Look for high
+eviction numbers isolated to specific slab IDs.</li>
+<li><code>stats items</code>: Shows detailed LRU status, expired items,
+and age of the oldest evicted items for each slab class.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-evictions-with-free-memory-key-causes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

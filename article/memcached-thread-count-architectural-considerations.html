@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Thread Count Architectural Considerations - memcached</title>
+    <meta name="description" content="Configuring the optimal thread count in Memcached is critical for maximizing I/O performance and cache throughput while avoiding latency-inducing synchronization bottlenecks. This article examines the architectural constraints that govern thread allocatio">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-thread-count-architectural-considerations">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Thread Count Architectural Considerations - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-thread-count-architectural-considerations" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Configuring the optimal thread count in Memcached is critical for maximizing I/O performance and cache throughput while avoiding latency-inducing synchronization bottlenecks. This article examines the architectural constraints that govern thread allocatio" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-thread-count-architectural-considerations">Memcached
+Thread Count Architectural Considerations</h1>
+<p>Configuring the optimal thread count in Memcached is critical for
+maximizing I/O performance and cache throughput while avoiding
+latency-inducing synchronization bottlenecks. This article examines the
+architectural constraints that govern thread allocation, detailing how
+CPU topology, libevent-based networking, internal lock contention, and
+multi-instance deployments influence the <code>-t</code> parameter.</p>
+<h2 id="cpu-topology-and-core-allocation">CPU Topology and Core
+Allocation</h2>
+<p>Memcached relies on an event-driven, multithreaded architecture.
+Setting the thread count begins with the underlying hardware:</p>
+<ul>
+<li><strong>Physical Cores vs. Hyper-Threading:</strong> Assigning
+threads to match the number of physical cores generally yields
+predictable latency. While hyper-threads can provide extra throughput
+under I/O stalls, they share L1/L2 caches and execution units, which can
+increase lock contention under heavy cache operations.</li>
+<li><strong>NUMA Architecture:</strong> On multi-socket Non-Uniform
+Memory Access (NUMA) systems, worker threads operating across NUMA nodes
+suffer significant memory access latency penalties. If a thread on Node
+1 accesses cache items allocated in memory physically wired to Node 0,
+the cross-interconnect overhead degrades performance. Pinning instances
+to specific NUMA nodes often outperforms running a single massive
+instance spanning all sockets.</li>
+</ul>
+<h2 id="the-event-driven-networking-model">The Event-Driven Networking
+Model</h2>
+<p>Memcached uses <code>libevent</code> to manage concurrent network
+connections. The architecture divides responsibilities between:</p>
+<ul>
+<li><strong>The Dispatcher Thread:</strong> Listens for incoming TCP/UDP
+connections and distributes accepted file descriptors across worker
+threads in a round-robin fashion.</li>
+<li><strong>Worker Threads:</strong> Each worker thread runs its own
+<code>libevent</code> instance, handling connection reads, command
+parsing, cache lookups, and writes for its assigned sockets.</li>
+</ul>
+<p>If the thread count is set significantly higher than the number of
+active CPU cores, the operating system incurs unnecessary
+context-switching overhead. Conversely, too few threads can lead to
+head-of-line blocking on network processing if a subset of connections
+experiences bursty data traffic.</p>
+<h2 id="internal-lock-contention-and-scaling-limits">Internal Lock
+Contention and Scaling Limits</h2>
+<p>Although modern Memcached features fine-grained locking, it is not
+completely lock-free:</p>
+<ul>
+<li><strong>Item and Hash Table Locks:</strong> Reading and writing
+items requires acquiring bucket-level locks within the hash table.
+Highly concurrent workloads targeting the same hot keys will serialize
+on these locks, negating the benefit of additional worker threads.</li>
+<li><strong>Slab Allocator and LRU Locks:</strong> Memory allocation and
+Least Recently Used (LRU) maintenance rely on per-slab-class locking.
+Write-heavy workloads that frequently allocate, evict, or reassign
+memory trigger lock contention across threads.</li>
+<li><strong>Diminishing Returns:</strong> Due to lock synchronization
+overhead, Memcached typically scales well up to 4 to 8 threads. Scaling
+beyond 16 threads within a single process often results in flat or
+diminishing throughput gains accompanied by tail-latency spikes.</li>
+</ul>
+<h2 id="workload-profile-read-vs-write-ratios">Workload Profile: Read
+vs. Write Ratios</h2>
+<p>The balance between read (GET) and write (SET/ADD/REPLACE) operations
+dictates concurrency limits:</p>
+<ul>
+<li><strong>Read-Heavy Workloads:</strong> Read operations primarily
+acquire shared locks and cause minimal state mutation, allowing the
+server to scale effectively across more threads (e.g., 8 to 16
+threads).</li>
+<li><strong>Write-Heavy Workloads:</strong> Writes necessitate exclusive
+locks for item insertion, slab allocation, and LRU updates. On
+write-heavy workloads, higher thread counts exacerbate contention,
+making lower thread counts (e.g., 4 to 8) more stable.</li>
+</ul>
+<h2 id="multi-instance-strategy-vs-high-thread-count">Multi-Instance
+Strategy vs. High Thread Count</h2>
+<p>When running on high-core hardware (such as 32, 64, or 128 cores),
+scaling a single Memcached process via the <code>-t</code> flag is an
+architectural anti-pattern.</p>
+<p>Instead, the standard industry practice is to deploy multiple
+independent Memcached instances on the same host, each bound to a
+dedicated NUMA node or CPU socket, utilizing 4 to 8 threads per
+instance. Client-side consistent hashing is then used to distribute
+traffic across these local instances. This horizontal-on-vertical
+scaling model eliminates cross-core lock contention, isolates memory
+footprints, and fully utilizes total network and memory bandwidth.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-thread-count-architectural-considerations';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

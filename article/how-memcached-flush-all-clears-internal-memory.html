@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached flush_all Clears Internal Memory - memcached</title>
+    <meta name="description" content="The flushall command in Memcached does not immediately purge or reinitialize internal memory structures, allocate new slab buffers, or delete hash table entries. Instead, it performs an instant, lazy invalidation by updating an internal global timestamp v">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-flush-all-clears-internal-memory">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached flush_all Clears Internal Memory - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-flush-all-clears-internal-memory" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The flushall command in Memcached does not immediately purge or reinitialize internal memory structures, allocate new slab buffers, or delete hash table entries. Instead, it performs an instant, lazy invalidation by updating an internal global timestamp v" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-flush_all-clears-internal-memory">How Memcached
+flush_all Clears Internal Memory</h1>
+<p>The <code>flush_all</code> command in Memcached does not immediately
+purge or reinitialize internal memory structures, allocate new slab
+buffers, or delete hash table entries. Instead, it performs an instant,
+lazy invalidation by updating an internal global timestamp variable
+known as <code>oldest_live</code>. This design enables the command to
+execute in constant <span class="math inline">\(O(1)\)</span> time,
+avoiding severe latency spikes that would otherwise occur if millions of
+keys were synchronously dereferenced and unlinked from memory.</p>
+<h3 id="the-oldest_live-timestamp-mechanism">The
+<code>oldest_live</code> Timestamp Mechanism</h3>
+<p>When a client issues the <code>flush_all</code> command, the
+Memcached server updates the internal <code>settings.oldest_live</code>
+attribute to the current server timestamp (using
+<code>current_time</code>). If an optional integer parameter is supplied
+(e.g., <code>flush_all 30</code>), Memcached sets
+<code>settings.oldest_live</code> to a future timestamp equal to
+<code>current_time + delay</code>.</p>
+<p>At the moment the command is processed, the memory footprint of
+Memcached remains unchanged. All slab classes, chunk allocations, and
+the global item hash table retain their data in physical RAM.</p>
+<h3 id="lazy-invalidation-on-read-operations">Lazy Invalidation on Read
+Operations</h3>
+<p>The actual clearing of memory occurs incrementally when items are
+requested via standard retrieval commands like <code>get</code>.
+Whenever a key is accessed:</p>
+<ol type="1">
+<li>Memcached locates the item in the internal hash table.</li>
+<li>The server compares the item's creation timestamp
+(<code>time</code>) against the current
+<code>settings.oldest_live</code> value.</li>
+<li>If the item's timestamp is less than <code>oldest_live</code>,
+Memcached treats the item as expired, even if its individual
+time-to-live (TTL) has not elapsed.</li>
+<li>The server unlinks the item from the hash table and the Least
+Recently Used (LRU) list, returns a cache miss to the client, and
+releases the chunk back to its designated slab class.</li>
+</ol>
+<h3 id="memory-reclamation-during-writes-and-allocations">Memory
+Reclamation During Writes and Allocations</h3>
+<p>Items that are never queried after a <code>flush_all</code> command
+are reclaimed by Memcached's slab allocator and LRU maintenance
+routines:</p>
+<ul>
+<li><strong>Slab Page Reuse:</strong> When a write command requires
+space within a specific slab class, Memcached searches the tail of that
+class's LRU queue. Any item marked as expired—either via individual TTL
+or through comparison with <code>oldest_live</code>—is immediately
+reclaimed and overwritten with new data.</li>
+<li><strong>LRU Crawler:</strong> If the background LRU crawler thread
+is enabled, it incrementally traverses the internal item lists, detects
+items rendered invalid by the <code>oldest_live</code> timestamp, and
+unlinks them to release memory chunks without requiring client read
+requests.</li>
+</ul>
+<p>Through this lazy deletion pattern, Memcached avoids blocking the
+event loop and safely clears its internal storage structures on
+demand.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-flush-all-clears-internal-memory';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

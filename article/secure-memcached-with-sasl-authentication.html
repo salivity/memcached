@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Memcached with SASL Authentication - memcached</title>
+    <meta name="description" content="This guide provides a step-by-step walkthrough for securing a Memcached deployment using Simple Authentication and Security Layer (SASL). By enabling SASL, you can prevent unauthorized access and data tampering by requiring client authentication before ex">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/secure-memcached-with-sasl-authentication">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Secure Memcached with SASL Authentication - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/secure-memcached-with-sasl-authentication" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This guide provides a step-by-step walkthrough for securing a Memcached deployment using Simple Authentication and Security Layer (SASL). By enabling SASL, you can prevent unauthorized access and data tampering by requiring client authentication before ex" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="secure-memcached-with-sasl-authentication">Secure Memcached with
+SASL Authentication</h1>
+<p>This guide provides a step-by-step walkthrough for securing a
+Memcached deployment using Simple Authentication and Security Layer
+(SASL). By enabling SASL, you can prevent unauthorized access and data
+tampering by requiring client authentication before executing cache
+commands. Below, you will find instructions for installing the necessary
+SASL dependencies, setting up user credentials, configuring the
+Memcached daemon with SASL support, and verifying your secured
+connection.</p>
+<h2 id="1-install-required-packages">1. Install Required Packages</h2>
+<p>To enable SASL, your system requires the Cyrus SASL libraries and
+administrative utilities alongside the Memcached package. Most modern
+distributions provide Memcached precompiled with SASL support.</p>
+<p>On Ubuntu or Debian systems:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get update</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get install memcached sasl2-bin libsasl2-modules libsasl2-dev</span></code></pre></div>
+<p>On Rocky Linux, AlmaLinux, or RHEL:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> dnf install memcached cyrus-sasl cyrus-sasl-plain cyrus-sasl-devel</span></code></pre></div>
+<h2 id="2-configure-the-sasl-application-file">2. Configure the SASL
+Application File</h2>
+<p>Memcached looks for a SASL configuration file defining the
+authentication mechanisms and password checking methods. Create or edit
+<code>/etc/sasl2/memcached.conf</code>:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode conf"><code class="sourceCode toml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dt">mech_list</span><span class="er">:</span> <span class="dt">plain</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">pwcheck_method</span><span class="er">:</span> <span class="dt">auxprop</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">auxprop_plugin</span><span class="er">:</span> <span class="dt">sasldb</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="dt">sasldb_path</span><span class="er">:</span> <span class="er">/</span><span class="dt">etc</span><span class="er">/</span><span class="dt">sasl2</span><span class="er">/</span><span class="dt">memcached-sasldb</span></span></code></pre></div>
+<ul>
+<li><code>mech_list: plain</code> specifies the authentication
+mechanism.</li>
+<li><code>pwcheck_method: auxprop</code> directs SASL to use an
+auxiliary property plugin for password lookups.</li>
+<li><code>auxprop_plugin: sasldb</code> specifies the SASL database
+backend.</li>
+<li><code>sasldb_path</code> points to the database file storing the
+user credentials.</li>
+</ul>
+<h2 id="3-create-credentials-in-the-sasl-database">3. Create Credentials
+in the SASL Database</h2>
+<p>Use <code>saslpasswd2</code> to create the administrative or
+application credentials within the specified database.</p>
+<p>Run the following command, replacing <code>cacheuser</code> with your
+desired username:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> saslpasswd2 <span class="at">-a</span> memcached <span class="at">-c</span> <span class="at">-f</span> /etc/sasl2/memcached-sasldb cacheuser</span></code></pre></div>
+<p>You will be prompted to enter and confirm a password.</p>
+<p>Next, set the correct ownership and file permissions so the Memcached
+daemon can read the database file:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># On Debian/Ubuntu:</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> chown memcache:memcache /etc/sasl2/memcached-sasldb</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> chmod 600 /etc/sasl2/memcached-sasldb</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="co"># On RHEL/Rocky Linux:</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> chown memcached:memcached /etc/sasl2/memcached-sasldb</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> chmod 600 /etc/sasl2/memcached-sasldb</span></code></pre></div>
+<h2 id="4-enable-sasl-in-memcached-configuration">4. Enable SASL in
+Memcached Configuration</h2>
+<p>To enforce authentication, pass the <code>-S</code> flag to the
+Memcached daemon.</p>
+<h3 id="on-debianubuntu">On Debian/Ubuntu:</h3>
+<p>Edit <code>/etc/memcached.conf</code> and add the <code>-S</code>
+flag on a new line:</p>
+<pre><code>-S</code></pre>
+<h3 id="on-rhelcentos">On RHEL/CentOS:</h3>
+<p>Edit <code>/etc/sysconfig/memcached</code> and append <code>-S</code>
+to the <code>OPTIONS</code> variable:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="va">OPTIONS</span><span class="op">=</span><span class="st">&quot;-S -l 127.0.0.1 -U 0&quot;</span></span></code></pre></div>
+<p>After modifying the configuration, restart the Memcached service:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl restart memcached</span></code></pre></div>
+<p>Verify that the service is running with SASL enabled:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl status memcached</span></code></pre></div>
+<h2 id="5-verify-the-authenticated-configuration">5. Verify the
+Authenticated Configuration</h2>
+<p>To confirm that unauthenticated access is blocked and authenticated
+access functions correctly, you can test the setup using Python and a
+SASL-compatible client library such as <code>bmemcached</code>.</p>
+<p>Install the test client:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install python-binary-memcached</span></code></pre></div>
+<p>Run a simple script to verify:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> bmemcached</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Attempt to connect using credentials</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> bmemcached.Client((<span class="st">&#39;127.0.0.1:11211&#39;</span>,), <span class="st">&#39;cacheuser&#39;</span>, <span class="st">&#39;your_password&#39;</span>)</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Set and retrieve a key</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>client.<span class="bu">set</span>(<span class="st">&#39;test_key&#39;</span>, <span class="st">&#39;SASL_Verified&#39;</span>)</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>value <span class="op">=</span> client.get(<span class="st">&#39;test_key&#39;</span>)</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f&quot;Retrieved: </span><span class="sc">{</span>value<span class="sc">}</span><span class="ss">&quot;</span>)</span></code></pre></div>
+<p>If the credentials are valid, the client returns the cached value.
+Requests made without valid SASL authentication will be rejected by the
+server, ensuring that only authorized applications can access or modify
+your Memcached data.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/secure-memcached-with-sasl-authentication';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

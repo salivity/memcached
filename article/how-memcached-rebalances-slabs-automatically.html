@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Rebalances Slabs Automatically - memcached</title>
+    <meta name="description" content="Memcached addresses shifting memory demands and prevents memory calcification through a background mechanism known as Slab Automove, which operates alongside the Slab Reassign feature. This article explains how memory calcification occurs in Memcached, ho">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-rebalances-slabs-automatically">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Rebalances Slabs Automatically - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-rebalances-slabs-automatically" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached addresses shifting memory demands and prevents memory calcification through a background mechanism known as Slab Automove, which operates alongside the Slab Reassign feature. This article explains how memory calcification occurs in Memcached, ho" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-rebalances-slabs-automatically">How Memcached
+Rebalances Slabs Automatically</h1>
+<p>Memcached addresses shifting memory demands and prevents memory
+calcification through a background mechanism known as Slab Automove,
+which operates alongside the Slab Reassign feature. This article
+explains how memory calcification occurs in Memcached, how the Slab
+Reassign engine primitive functions, and how the Slab Automove thread
+continuously monitors item eviction patterns to dynamically transfer 1MB
+memory pages between slab classes without service interruption.</p>
+<h2 id="the-challenge-of-slab-calcification">The Challenge of Slab
+Calcification</h2>
+<p>Memcached manages memory using a slab allocator. It divides memory
+into 1MB pages, which are then assigned to specific slab classes
+tailored to store items within defined size ranges. By default, once a
+1MB page is allocated to a specific slab class, it remains assigned to
+that class indefinitely.</p>
+<p>If an application's data profile changes—for instance, transitioning
+from storing many 100-byte objects to storing 2-kilobyte objects—the
+memory can become "calcified." In a calcified state, slab classes
+holding older, smaller data types retain unused or rarely accessed
+memory, while slab classes handling the new, larger data types run out
+of space and begin aggressively evicting active keys.</p>
+<h2 id="the-slab-reassign-engine">The Slab Reassign Engine</h2>
+<p>To solve calcification, Memcached implemented <strong>Slab
+Reassign</strong>. Slab Reassign is the low-level primitive that
+physically moves a 1MB page from a donor slab class to a receiver slab
+class.</p>
+<p>When a slab reassign occurs:</p>
+<ol type="1">
+<li>A 1MB page in the donor slab class is selected.</li>
+<li>The items residing on that page are invalidated or evicted.</li>
+<li>The page is detached from the donor slab class.</li>
+<li>The page is reassigned and partitioned according to the chunk size
+of the target slab class.</li>
+</ol>
+<p>While Slab Reassign can be triggered manually via administrative
+console commands, it is best utilized automatically through background
+monitoring.</p>
+<h2 id="the-slab-automove-mechanism">The Slab Automove Mechanism</h2>
+<p><strong>Slab Automove</strong> is an integrated background
+maintenance thread that monitors cache activity and automatically
+executes <code>slab_reassign</code> operations when it detects uneven
+memory pressure. It monitors key metrics such as eviction frequency,
+page utilization, and data age across all slab classes.</p>
+<p>When enabled, the automove thread periodically samples memory metrics
+(typically once per second) and decides whether to move pages based on
+configured heuristic algorithms:</p>
+<h3 id="1-standard-automove-algorithm-1">1. Standard Automove (Algorithm
+1)</h3>
+<p>The standard algorithm looks for persistent imbalances over a sliding
+time window (typically three consecutive sampling periods):</p>
+<ul>
+<li><strong>Source Identification:</strong> It looks for a slab class
+that has completely free memory pages or has not had to evict any items
+recently.</li>
+<li><strong>Target Identification:</strong> It looks for a slab class
+that is actively evicting items due to space exhaustion.</li>
+<li>If a class evicts items across three monitoring intervals and
+another class has unallocated pages or idle memory, one 1MB page is
+reassigned from the idle class to the struggling class.</li>
+</ul>
+<h3 id="2-age-based-automove-algorithm-2">2. Age-Based Automove
+(Algorithm 2)</h3>
+<p>Introduced to work closely with Memcached's modern segmented LRU
+(Least Recently Used) design, Algorithm 2 relies on the tail age of
+items:</p>
+<ul>
+<li>It analyzes the age of the oldest items (tail age) across the
+different slab classes.</li>
+<li>If items in Slab Class A are being evicted after living for only 60
+seconds, while items in Slab Class B are surviving untouched for days,
+the automover recognizes an imbalance in cache efficiency.</li>
+<li>Pages are systematically moved from the class with significantly
+older tail items to the class with premature evictions, balancing
+eviction ages across the entire system.</li>
+</ul>
+<h2 id="enabling-and-configuring-slab-rebalancing">Enabling and
+Configuring Slab Rebalancing</h2>
+<p>To utilize automatic slab rebalancing, Memcached must be started with
+slab reassignment enabled, along with the desired automove
+algorithm:</p>
+<ul>
+<li><code>-o slab_reassign</code>: Enables the underlying memory
+reassignment capability.</li>
+<li><code>-o slab_automove=&lt;0|1|2&gt;</code>: Sets the automove
+behavior:
+<ul>
+<li><code>0</code>: Standby mode (reassign is enabled, but automove is
+disabled; moves must be triggered manually).</li>
+<li><code>1</code>: Standard algorithm (conservative; triggers on
+continuous evictions and free pages).</li>
+<li><code>2</code>: Aggressive/Age-based algorithm (rebalances pages to
+equalize the LRU tail age across classes).</li>
+</ul></li>
+</ul>
+<p>These parameters allow Memcached instances to adapt to fluctuating
+traffic and data structures over time, maintaining optimal hit rates
+without requiring cache restarts or manual maintenance.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-rebalances-slabs-automatically';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>
