@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Tracks Active TCP Connection States - memcached</title>
+    <meta name="description" content="This article explores how Memcached monitors and manages thousands of concurrent incoming TCP streams using an asynchronous, event-driven architecture. By pairing the libevent notification library with a multi-threaded master-worker model, Memcached repre">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-tracks-active-tcp-connection-states">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Tracks Active TCP Connection States - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-tracks-active-tcp-connection-states" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how Memcached monitors and manages thousands of concurrent incoming TCP streams using an asynchronous, event-driven architecture. By pairing the libevent notification library with a multi-threaded master-worker model, Memcached repre" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-tracks-active-tcp-connection-states">How Memcached
+Tracks Active TCP Connection States</h1>
+<p>This article explores how Memcached monitors and manages thousands of
+concurrent incoming TCP streams using an asynchronous, event-driven
+architecture. By pairing the <code>libevent</code> notification library
+with a multi-threaded master-worker model, Memcached represents every
+open socket as a dedicated connection state machine. This design allows
+the daemon to handle non-blocking read and write cycles, process
+commands, and clean up idle or terminated streams with minimal overhead
+and zero thread contention per connection.</p>
+<h3 id="the-master-worker-thread-architecture">The Master-Worker Thread
+Architecture</h3>
+<p>Memcached separates network connection acceptance from request
+processing using a primary dispatcher thread and a pool of worker
+threads. The dispatcher thread binds to the configured network interface
+and listens for new incoming TCP handshakes. When a client establishes a
+connection via <code>accept()</code>, the dispatcher creates a
+connection queue item containing the new file descriptor
+(<code>fd</code>) and assigns it to a worker thread using a round-robin
+algorithm.</p>
+<p>Communication between the dispatcher and worker threads occurs
+through internal UNIX pipes. Each worker thread monitors its own pipe
+end via <code>libevent</code>. Once notified of an assigned descriptor,
+the worker thread extracts the socket, registers it with its local event
+loop, and takes complete ownership of tracking that connection's
+lifecycle.</p>
+<h3 id="the-conn-state-machine">The <code>conn</code> State Machine</h3>
+<p>Memcached tracks the state of each TCP stream using an internal C
+structure known as <code>conn</code>. The <code>conn</code> structure
+serves as a stateful container that persists for the entire lifetime of
+a TCP stream. It stores:</p>
+<ul>
+<li>The socket file descriptor.</li>
+<li>Dynamic read and write buffers.</li>
+<li>The current state of the connection within its lifecycle.</li>
+<li>Protocol-specific parsing metadata (ASCII or binary).</li>
+<li>Pointer references to data items currently being fetched or
+stored.</li>
+</ul>
+<p>The core of Memcached's execution loop is a finite state machine
+implemented in the <code>drive_machine()</code> function. At any point
+in time, an active connection resides in a specific state, such as:</p>
+<ul>
+<li><code>conn_listening</code>: Awaiting new incoming connections (used
+by the main thread).</li>
+<li><code>conn_read</code>: Reading incoming packets from the TCP stream
+into the read buffer.</li>
+<li><code>conn_parse_cmd</code>: Parsing protocol commands from
+accumulated buffer data.</li>
+<li><code>conn_nread</code>: Reading raw binary payload data (such as
+value bytes for a <code>set</code> command).</li>
+<li><code>conn_write</code> / <code>conn_mwrite</code>: Transmitting
+responses back to the client over the socket.</li>
+<li><code>conn_waiting</code>: Pausing processing until external
+operations or pending data become available.</li>
+<li><code>conn_closing</code>: Gracefully shutting down the connection
+and freeing buffers.</li>
+</ul>
+<h3 id="asynchronous-event-monitoring-with-libevent">Asynchronous Event
+Monitoring with <code>libevent</code></h3>
+<p>TCP is a stream-oriented protocol, meaning packets can arrive
+fragmented, out of order, or delayed. To prevent worker threads from
+blocking while waiting for data, Memcached sets all client sockets to
+non-blocking mode (<code>O_NONBLOCK</code>).</p>
+<p>Instead of polling sockets, worker threads register each connection’s
+file descriptor with an underlying OS-specific multiplexing
+mechanism—such as <code>epoll</code> on Linux or <code>kqueue</code> on
+BSD/macOS—via <code>libevent</code>. When the operating system signals
+that a socket has data ready to read (<code>EV_READ</code>) or capacity
+to send data (<code>EV_WRITE</code>), <code>libevent</code> invokes the
+registered callback handler. The handler assigns the connection state
+machine to execute transitions inside <code>drive_machine()</code> until
+the socket would block again, at which point the thread yields back to
+the event loop.</p>
+<h3 id="stream-fragmentation-and-buffer-management">Stream Fragmentation
+and Buffer Management</h3>
+<p>Each <code>conn</code> struct allocates dedicated read
+(<code>rbuf</code>) and write (<code>wbuf</code>) memory areas to manage
+stream boundaries:</p>
+<ol type="1">
+<li><strong>Partial Reads:</strong> If a client sends a partial command,
+the read operation exhausts available bytes and returns
+<code>EAGAIN</code> or <code>EWOULDBLOCK</code>. Memcached leaves the
+connection in the <code>conn_read</code> state, updates buffer offsets
+to track received bytes, and returns control to <code>libevent</code>
+until more segments arrive.</li>
+<li><strong>Partial Writes:</strong> When sending large cached values
+back to a client, the socket send buffer may become saturated. Memcached
+transitions the connection to <code>conn_write</code>, tracks how many
+bytes were sent, and registers an <code>EV_WRITE</code> event with
+<code>libevent</code> to resume writing the remaining payload as soon as
+the kernel drains the socket buffer.</li>
+</ol>
+<h3 id="connection-termination-and-resource-reclamation">Connection
+Termination and Resource Reclamation</h3>
+<p>Memcached monitors TCP tear-down semantics through read return values
+and error flags. If a read call returns <code>0</code>, indicating that
+the client has sent a TCP FIN packet to close the stream, or returns a
+socket error like <code>ECONNRESET</code>, the state machine immediately
+transitions to <code>conn_closing</code>. In this phase, the worker
+thread unregisters the file descriptor from <code>libevent</code>,
+closes the network socket, deallocates or recycles the dynamic buffers
+back into an internal memory freelist, and destroys the
+<code>conn</code> reference, ensuring zero resource leakage across
+millions of transient TCP streams.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-tracks-active-tcp-connection-states';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

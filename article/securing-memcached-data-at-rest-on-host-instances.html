@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Securing Memcached Data at Rest on Host Instances - memcached</title>
+    <meta name="description" content="Memcached is designed as a volatile, in-memory caching system that does not natively write data to persistent storage, which presents unique considerations for encryption at rest. On a host instance, data originally held in memory can still come to rest o">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/securing-memcached-data-at-rest-on-host-instances">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Securing Memcached Data at Rest on Host Instances - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/securing-memcached-data-at-rest-on-host-instances" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is designed as a volatile, in-memory caching system that does not natively write data to persistent storage, which presents unique considerations for encryption at rest. On a host instance, data originally held in memory can still come to rest o" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="securing-memcached-data-at-rest-on-host-instances">Securing
+Memcached Data at Rest on Host Instances</h1>
+<p>Memcached is designed as a volatile, in-memory caching system that
+does not natively write data to persistent storage, which presents
+unique considerations for encryption at rest. On a host instance, data
+originally held in memory can still come to rest on physical disks
+through OS-level paging, swap files, core dumps, or crash logs. Because
+Memcached lacks built-in native encryption mechanisms for stored data,
+securing Memcached data at rest requires a combination of host
+configuration, operating system controls, disk-level encryption, and
+client-side measures.</p>
+<h3 id="disable-or-encrypt-swap-memory">Disable or Encrypt Swap
+Memory</h3>
+<p>The primary way Memcached data lands on persistent disk is through
+operating system memory paging. If the host experiences memory pressure,
+pages containing cached keys and values can be written to the swap
+partition.</p>
+<ul>
+<li><strong>Disable swap completely:</strong> The most secure option is
+to disable swap space entirely on the host instance by running
+<code>swapoff -a</code> and removing swap entries from
+<code>/etc/fstab</code>. This ensures cache payloads never touch the
+disk under any memory condition.</li>
+<li><strong>Lock memory pages (<code>mlock</code>):</strong> Start the
+Memcached daemon with the <code>-k</code> flag. This locks all allocated
+memory pages into RAM using <code>mlockall</code>, preventing the
+operating system from paging Memcached memory out to swap.</li>
+<li><strong>Encrypt the swap partition:</strong> If swap is mandatory
+for system stability, configure it with temporary, ephemeral encryption
+using <code>dm-crypt</code> and Linux Unified Key Setup (LUKS). A
+randomly generated key created at boot ensures any swapped data becomes
+unrecoverable once the instance reboots or terminates.</li>
+</ul>
+<h3 id="implement-full-disk-encryption-fde">Implement Full-Disk
+Encryption (FDE)</h3>
+<p>Any diagnostic files, system crash reports, or operational logs could
+inadvertently persist sensitive Memcached artifacts to the host's block
+storage.</p>
+<ul>
+<li><strong>Host-level LUKS:</strong> For bare-metal or self-managed
+virtual machines, encrypt all host partitions (including root and
+temporary mounts like <code>/tmp</code> and <code>/var/log</code>) using
+LUKS/dm-crypt.</li>
+<li><strong>Cloud provider storage encryption:</strong> When running on
+cloud infrastructure (e.g., AWS EC2, Google Cloud Compute Engine, or
+Azure Virtual Machines), enable default block-level encryption on all
+attached storage volumes (such as AWS EBS or GCP Persistent Disks) using
+provider-managed or customer-managed keys (KMS).</li>
+</ul>
+<h3 id="restrict-and-disable-core-dumps">Restrict and Disable Core
+Dumps</h3>
+<p>When a process crashes, the operating system can dump the entire
+memory contents of the process to the disk for debugging. A Memcached
+core dump will contain plain-text cached items.</p>
+<ul>
+<li><strong>Set process core dump limits:</strong> Disable core dumps
+for the Memcached process by setting the hard and soft core file limits
+to zero (<code>ulimit -c 0</code>) in the systemd service unit or the
+environment configuration.</li>
+<li><strong>System-wide crash dump controls:</strong> Disable or
+restrict crash-reporting utilities such as <code>kdump</code>,
+<code>apport</code>, or <code>systemd-coredump</code> to prevent
+system-wide memory capture from persisting onto host drives during a
+kernel panic or unexpected crash.</li>
+</ul>
+<h3 id="application-side-client-side-encryption">Application-Side
+(Client-Side) Encryption</h3>
+<p>The most resilient defense against resting data exposure is
+encrypting values before they enter Memcached.</p>
+<ul>
+<li>Encrypt payloads at the application level using strong cryptographic
+standards (such as AES-GCM-256) before passing them to the Memcached
+client.</li>
+<li>With this architecture, data residing in Memcached memory—and any
+residual data that touches disk via swap, core dumps, or forensic
+imaging—remains encrypted ciphertext. The encryption keys remain
+strictly within the consuming application services and are never exposed
+to the Memcached host.</li>
+</ul>
+<h3
+id="utilize-confidential-computing-and-hardware-memory-encryption">Utilize
+Confidential Computing and Hardware Memory Encryption</h3>
+<p>Modern cloud environments and enterprise hardware offer
+hardware-level encryption of system memory (such as AMD SEV or Intel
+TME/SGX).</p>
+<ul>
+<li>Deploying Memcached inside a Confidential Virtual Machine ensures
+that data in RAM is automatically encrypted by the CPU hardware
+controllers.</li>
+<li>This mitigates risks related to cold-boot attacks, non-volatile
+DIMMs, hypervisor compromises, or unmapped memory being written to
+physical persistent media.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/securing-memcached-data-at-rest-on-host-instances';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

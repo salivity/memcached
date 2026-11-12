@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached flush_all Works and Its Impact - memcached</title>
+    <meta name="description" content="This article examines how the Memcached flushall command functions under the hood and details the severe operational consequences it can have on live production environments. While commonly perceived as a quick way to clear cached data, flushall does not">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-flush-all-works-and-its-impact">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached flush_all Works and Its Impact - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-flush-all-works-and-its-impact" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines how the Memcached flushall command functions under the hood and details the severe operational consequences it can have on live production environments. While commonly perceived as a quick way to clear cached data, flushall does not" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-flush_all-works-and-its-impact">How Memcached
+flush_all Works and Its Impact</h1>
+<p>This article examines how the Memcached <code>flush_all</code>
+command functions under the hood and details the severe operational
+consequences it can have on live production environments. While commonly
+perceived as a quick way to clear cached data, <code>flush_all</code>
+does not instantly delete records from memory; instead, it relies on
+timestamp-based lazy invalidation. Understanding this underlying
+mechanism is essential to preventing catastrophic backend failures,
+database saturation, and application downtime caused by sudden,
+widespread cache misses.</p>
+<h2 id="how-the-flush_all-command-works">How the flush_all Command
+Works</h2>
+<p>The <code>flush_all</code> command invalidates all existing items in
+a Memcached instance. Contrary to common assumption, it does not iterate
+through memory to actively erase or deallocate keys when executed. Doing
+so would block the single-threaded event loop or lock data structures,
+causing noticeable latency.</p>
+<p>Instead, Memcached uses a timestamp-based lazy expiration
+mechanism:</p>
+<ol type="1">
+<li><strong>Global Timestamp Update:</strong> When
+<code>flush_all</code> is issued, Memcached updates an internal global
+setting called <code>oldest_live</code> to the current server timestamp
+(or a specified future timestamp).</li>
+<li><strong>Lazy Eviction:</strong> Existing items remain untouched in
+memory. When a client subsequently issues a <code>get</code> request for
+a key, Memcached checks the item’s creation or last update timestamp
+against <code>oldest_live</code>.</li>
+<li><strong>Cache Miss Generation:</strong> If the item was stored prior
+to the <code>oldest_live</code> timestamp, Memcached treats it as
+expired, frees the memory for that specific slab, and returns a cache
+miss to the client.</li>
+<li><strong>Delayed Flushing:</strong> Memcached also accepts an
+optional integer argument representing a delay in seconds (e.g.,
+<code>flush_all 30</code>). This schedules the invalidation for a
+specific point in the future rather than executing it immediately.</li>
+</ol>
+<p>Because keys are only cleared as they are requested or as space is
+needed for new allocations (via the LRU algorithm), memory usage metrics
+often remain high immediately after a flush.</p>
+<h2 id="operational-impact-on-running-applications">Operational Impact
+on Running Applications</h2>
+<p>Although the execution of <code>flush_all</code> inside Memcached
+takes almost zero CPU time and completes in milliseconds, its downstream
+impact on dependent systems can be disastrous.</p>
+<h3 id="1-the-thundering-herd-problem-cache-stampede">1. The Thundering
+Herd Problem (Cache Stampede)</h3>
+<p>When all cached items are invalidated at once, the hit rate drops to
+zero. Every incoming application request that normally relies on cached
+responses will simultaneously miss. As a result, hundreds or thousands
+of concurrent application threads will attempt to recalculate the same
+data or fetch it from persistent storage at the exact same moment.</p>
+<h3 id="2-database-and-backend-overload">2. Database and Backend
+Overload</h3>
+<p>Without the shielding layer of the cache, the primary database or
+downstream microservices bear the brunt of the entire read traffic
+volume. This sudden, massive spike in traffic can cause:</p>
+<ul>
+<li>Exhaustion of database connection pools.</li>
+<li>Extreme CPU and memory saturation on primary read replicas.</li>
+<li>Slow query queues and cascading timeouts across the application
+stack.</li>
+<li>Outages that persist even after restarting application servers, as
+restarted nodes immediately try to re-query the already overwhelmed
+database.</li>
+</ul>
+<h3 id="3-application-latency-and-degradation">3. Application Latency
+and Degradation</h3>
+<p>As backend services struggle under the load, response times spike.
+User-facing requests begin to time out, triggering error states (such as
+HTTP 504 Gateway Timeouts), degraded user experiences, and potential
+cascading failures in upstream reverse proxies or load balancers.</p>
+<h2 id="safer-alternatives-and-mitigation-strategies">Safer Alternatives
+and Mitigation Strategies</h2>
+<p>Flushing an entire cache should be treated as an emergency action
+rather than routine maintenance. To avoid the operational risks of
+<code>flush_all</code>, consider the following patterns:</p>
+<ul>
+<li><strong>Key Versioning (Namespacing):</strong> Prefix keys with a
+global version identifier (e.g., <code>v1:user:123</code>). To
+invalidate the cache, simply increment the global version prefix in your
+application configuration to <code>v2</code>. This allows for gradual
+transition and predictable invalidation.</li>
+<li><strong>Staggered Expirations (TTL Jitter):</strong> If items must
+be renewed frequently, assign them distinct, randomized time-to-live
+(TTL) values to ensure they do not all expire simultaneously.</li>
+<li><strong>Targeted Deletions:</strong> Delete or update only the
+specific keys associated with mutated data rather than wiping the entire
+cache cluster.</li>
+<li><strong>Request Collapsing (Mutex Locks):</strong> Implement locks
+or "single-flight" patterns in the application layer. When a cache miss
+occurs, only one worker thread is permitted to query the database and
+repopulate the cache, while other concurrent requests wait for that
+single result.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-flush-all-works-and-its-impact';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

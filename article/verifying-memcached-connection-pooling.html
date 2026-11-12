@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifying Memcached Connection Pooling - memcached</title>
+    <meta name="description" content="Connection pooling in Memcached improves application performance by maintaining a set of reusable TCP connections, avoiding the high overhead of establishing a new handshake for every cache operation. Verifying that connection pooling functions correctly">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/verifying-memcached-connection-pooling">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Verifying Memcached Connection Pooling - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/verifying-memcached-connection-pooling" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Connection pooling in Memcached improves application performance by maintaining a set of reusable TCP connections, avoiding the high overhead of establishing a new handshake for every cache operation. Verifying that connection pooling functions correctly" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="verifying-memcached-connection-pooling">Verifying Memcached
+Connection Pooling</h1>
+<p>Connection pooling in Memcached improves application performance by
+maintaining a set of reusable TCP connections, avoiding the high
+overhead of establishing a new handshake for every cache operation.
+Verifying that connection pooling functions correctly involves
+inspecting Memcached server statistics, monitoring operating system
+socket states, and analyzing network traffic under load. This guide
+details the practical methods developers can use to ensure their
+client-side connection pool is active, correctly sized, and avoiding
+connection churn.</p>
+<h3 id="1-monitor-server-side-connection-statistics">1. Monitor
+Server-Side Connection Statistics</h3>
+<p>The most direct way to check connection behavior is by querying the
+Memcached server's internal metrics. You can inspect these stats using
+<code>telnet</code> or <code>nc</code> (netcat):</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;stats&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> 127.0.0.1 11211</span></code></pre></div>
+<p>Pay close attention to two specific metrics:</p>
+<ul>
+<li><strong><code>curr_connections</code></strong>: The number of
+currently open connections to the server.</li>
+<li><strong><code>total_connections</code></strong>: The cumulative
+count of connections opened since the Memcached service started.</li>
+</ul>
+<p><strong>Verification criteria:</strong> Under consistent application
+traffic, <code>curr_connections</code> should stabilize around your
+expected pool size (e.g., client instances multiplied by configured pool
+capacity). More importantly, <code>total_connections</code> should
+remain relatively static. If <code>total_connections</code> increments
+continuously with every incoming cache read or write, the client is
+tearing down and reopening connections rather than reusing them from a
+pool.</p>
+<h3 id="2-inspect-os-socket-states-with-ss-or-netstat">2. Inspect OS
+Socket States with <code>ss</code> or <code>netstat</code></h3>
+<p>You can verify connection lifecycle behavior directly on either the
+application host or the database host by checking the state of TCP
+sockets.</p>
+<p>Run the following command on the client or server:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">ss</span> <span class="at">-tan</span> <span class="st">&#39;( sport = :11211 or dport = :11211 )&#39;</span></span></code></pre></div>
+<p><strong>Verification criteria:</strong></p>
+<ul>
+<li><strong>Persistent <code>ESTABLISHED</code> sockets:</strong> You
+should observe a steady number of sockets in the
+<code>ESTABLISHED</code> state corresponding to your pool
+configuration.</li>
+<li><strong>Absence of <code>TIME_WAIT</code> churn:</strong> A high
+number of sockets in the <code>TIME_WAIT</code> state indicates that
+connections are being actively closed and reopened. While a few
+<code>TIME_WAIT</code> sockets can occur during pool resizing or node
+rebalancing, continuous <code>TIME_WAIT</code> generation under load is
+a definitive sign that connection pooling is failing.</li>
+</ul>
+<h3 id="3-trace-network-packets-using-tcpdump">3. Trace Network Packets
+Using <code>tcpdump</code></h3>
+<p>For definitive proof at the protocol level, inspect the raw network
+traffic between your application and Memcached. Run a packet capture on
+the Memcached port:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> tcpdump <span class="at">-i</span> any <span class="at">-nn</span> port 11211</span></code></pre></div>
+<p><strong>Verification criteria:</strong></p>
+<ul>
+<li><strong>Healthy pooling:</strong> You should see TCP packets
+containing payload data (Psh/Ack flags) exchanged over the same source
+and destination port pairs repeatedly.</li>
+<li><strong>Failed pooling:</strong> If you observe frequent 3-way
+handshakes (<code>[S]</code> / SYN flags) followed immediately by
+connection terminations (<code>[F]</code> / FIN or <code>[R]</code> /
+RST flags) for individual requests, the client is operating in a
+single-use connection pattern instead of drawing from a managed
+pool.</li>
+</ul>
+<h3 id="4-enable-client-side-debug-logging-and-metrics">4. Enable
+Client-Side Debug Logging and Metrics</h3>
+<p>Most mature Memcached client libraries (such as Spymemcached for
+Java, EnyimMemcached for .NET, or PyMemcache for Python) offer
+configuration options to expose pool telemetry.</p>
+<ul>
+<li><strong>Client Metrics:</strong> Export client metrics into
+monitoring systems like Prometheus or Datadog. Track pool-specific
+metrics such as <code>active_connections</code>,
+<code>idle_connections</code>, <code>pool_exhausted_count</code>, and
+<code>borrow_wait_time</code>.</li>
+<li><strong>Debug Logging:</strong> Temporarily set the client logger
+level to <code>DEBUG</code> or <code>TRACE</code> in a staging
+environment. Verify log outputs to confirm that worker threads are
+acquiring existing connections from the pool queue and releasing them
+back, rather than triggering initialization routines on each
+operation.</li>
+</ul>
+<h3 id="5-run-a-high-concurrency-load-test">5. Run a High-Concurrency
+Load Test</h3>
+<p>Connection pooling issues frequently disguise themselves during
+low-traffic local development. Simulate concurrent traffic using tools
+like Apache Bench (<code>ab</code>), <code>k6</code>, or custom scripts
+executing multiple simultaneous cache requests.</p>
+<p>Observe the relationship between request volume and connections. When
+connection pooling functions correctly, an increase from 10 to 1,000
+requests per second should significantly increase throughput and
+maintain stable socket counts without triggering connection timeout
+errors or running out of local ephemeral ports.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/verifying-memcached-connection-pooling';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

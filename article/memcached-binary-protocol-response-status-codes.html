@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Binary Protocol Response Status Codes - memcached</title>
+    <meta name="description" content="This article provides an overview of how the Memcached binary protocol structures and handles command response status codes. Unlike the human-readable text-based ASCII protocol, the binary protocol uses a rigid, fixed-length header to report the outcome o">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-binary-protocol-response-status-codes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Binary Protocol Response Status Codes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-binary-protocol-response-status-codes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article provides an overview of how the Memcached binary protocol structures and handles command response status codes. Unlike the human-readable text-based ASCII protocol, the binary protocol uses a rigid, fixed-length header to report the outcome o" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-binary-protocol-response-status-codes">Memcached
+Binary Protocol Response Status Codes</h1>
+<p>This article provides an overview of how the Memcached binary
+protocol structures and handles command response status codes. Unlike
+the human-readable text-based ASCII protocol, the binary protocol uses a
+rigid, fixed-length header to report the outcome of operations. By
+dedicating a specific 16-bit field within every response header to
+status codes, Memcached enables fast, deterministic error handling and
+status verification without requiring string parsing or delimiter
+scanning.</p>
+<h3 id="the-24-byte-header-structure">The 24-Byte Header Structure</h3>
+<p>Every response packet in the Memcached binary protocol begins with a
+mandatory, fixed-size 24-byte header. The server uses this uniform
+structure to transmit metadata about the response before any
+variable-length data (such as keys, extras, or values) is sent.</p>
+<p>The response header layout assigns distinct byte offsets for each
+field:</p>
+<ul>
+<li><strong>Byte 0:</strong> Magic byte (<code>0x81</code> indicating a
+response).</li>
+<li><strong>Byte 1:</strong> Opcode (identifying the command being
+answered).</li>
+<li><strong>Bytes 2–3:</strong> Key length.</li>
+<li><strong>Byte 4:</strong> Extras length.</li>
+<li><strong>Byte 5:</strong> Data type.</li>
+<li><strong>Bytes 6–7:</strong> Status code (16-bit unsigned
+integer).</li>
+<li><strong>Bytes 8–11:</strong> Total body length.</li>
+<li><strong>Bytes 12–15:</strong> Opaque identifier (matching the
+request's opaque token).</li>
+<li><strong>Bytes 16–23:</strong> CAS (Compare-And-Swap)
+identifier.</li>
+</ul>
+<p>While bytes 6 and 7 represent the Virtual Bucket (VBucket) ID in
+request packets, they are repurposed as the <strong>Status</strong>
+field in all response packets.</p>
+<h3 id="how-status-codes-are-processed">How Status Codes are
+Processed</h3>
+<p>The status code is encoded as a 16-bit unsigned integer in network
+byte order (big-endian). When a client application receives a response,
+it inspects bytes 6 and 7 to immediately determine whether the command
+succeeded or failed.</p>
+<ul>
+<li><strong>Success:</strong> A status code of <code>0x0000</code>
+indicates <code>NoError</code>. The client can proceed to read any
+returned values or metadata.</li>
+<li><strong>Failure:</strong> Any non-zero status code signifies an
+exceptional state or error.</li>
+</ul>
+<p>When a non-zero status code is returned, the Memcached server
+frequently includes a human-readable textual error message inside the
+payload body. The client calculates the length of this message using the
+<code>Total Body Length</code> field (bytes 8–11), subtracting any key
+or extra lengths. This design allows the client to programmatically
+branch based on the numeric code while preserving diagnostic information
+for logging.</p>
+<h3 id="standard-binary-response-status-codes">Standard Binary Response
+Status Codes</h3>
+<p>The protocol defines standard two-byte hex values for operational
+states:</p>
+<ul>
+<li><code>0x0000</code> (<strong>NoError</strong>): The command
+completed successfully.</li>
+<li><code>0x0001</code> (<strong>KeyNotFound</strong>): The requested
+key does not exist in the cache.</li>
+<li><code>0x0002</code> (<strong>KeyExists</strong>): An attempt to
+store an item failed because the key already exists (e.g., an
+<code>Add</code> command) or a CAS mismatch occurred.</li>
+<li><code>0x0003</code> (<strong>ValueTooLarge</strong>): The payload
+data exceeds the server's configured maximum item size.</li>
+<li><code>0x0004</code> (<strong>InvalidArguments</strong>): The request
+contained invalid header flags or an invalid structure.</li>
+<li><code>0x0005</code> (<strong>ItemNotStored</strong>): The item could
+not be stored (e.g., conditions for an append/prepend or replacement
+were not met).</li>
+<li><code>0x0006</code> (<strong>NonNumeric</strong>): An increment or
+decrement operation was attempted on a non-numeric value.</li>
+<li><code>0x0020</code> (<strong>AuthError</strong>): Authentication
+credentials were missing, incorrect, or invalid.</li>
+<li><code>0x0021</code> (<strong>AuthContinue</strong>): Additional
+authentication steps are required (used during multi-step SASL
+negotiations).</li>
+<li><code>0x0081</code> (<strong>UnknownCommand</strong>): The opcode
+sent in the request header is unrecognized.</li>
+<li><code>0x0082</code> (<strong>OutOfMemory</strong>): The server
+cannot allocate memory for the item and cannot evict an existing
+item.</li>
+<li><code>0x0084</code> (<strong>InternalError</strong>): An unexpected
+server-side error occurred.</li>
+</ul>
+<h3 id="advantages-of-the-binary-status-handling">Advantages of the
+Binary Status Handling</h3>
+<p>By embedding status codes directly into a fixed-offset binary field,
+the protocol eliminates the ambiguities of text parsing. Client
+libraries do not need to scan for newline characters (<code>\r\n</code>)
+or match variable-length strings like <code>"STORED"</code>,
+<code>"NOT_FOUND"</code>, or <code>"SERVER_ERROR"</code>. Instead,
+clients execute a simple bitwise extraction on bytes 6 and 7, enabling
+low-overhead dispatching, high-throughput network handling, and clear
+separation between application-level failures and protocol-level
+errors.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-binary-protocol-response-status-codes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

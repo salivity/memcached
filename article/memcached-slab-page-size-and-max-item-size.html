@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Slab Page Size and Max Item Size - memcached</title>
+    <meta name="description" content="In Memcached, the slab page size and the maximum item size share a direct, 1:1 dependency: the slab page size defines the absolute upper limit for the maximum item size that can be stored. Because Memcached utilizes a slab allocation system where individu">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-slab-page-size-and-max-item-size">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Slab Page Size and Max Item Size - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-slab-page-size-and-max-item-size" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In Memcached, the slab page size and the maximum item size share a direct, 1:1 dependency: the slab page size defines the absolute upper limit for the maximum item size that can be stored. Because Memcached utilizes a slab allocation system where individu" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-slab-page-size-and-max-item-size">Memcached Slab Page
+Size and Max Item Size</h1>
+<p>In Memcached, the slab page size and the maximum item size share a
+direct, 1:1 dependency: the slab page size defines the absolute upper
+limit for the maximum item size that can be stored. Because Memcached
+utilizes a slab allocation system where individual items cannot span
+multiple memory pages, an item—including its key, metadata, and
+value—must fit entirely within a single page chunk. Understanding this
+relationship is critical for configuring memory allocation, avoiding
+unexpected storage errors, and maintaining high cache efficiency.</p>
+<h3 id="the-mechanics-of-the-slab-allocator">The Mechanics of the Slab
+Allocator</h3>
+<p>Memcached avoids operating system-level memory fragmentation by
+pre-allocating memory in large blocks known as slab pages. By default,
+each slab page is 1 megabyte (1MB) in size.</p>
+<p>These pages are assigned to specific "slab classes." Within a slab
+class, the page is sliced into smaller, equally sized partitions called
+chunks. For example, one slab class might hold chunks of 128 bytes,
+while another holds chunks of 1 kilobyte. When an item is stored,
+Memcached identifies the slab class with chunk dimensions closest to,
+but not smaller than, the total size of the item.</p>
+<h3 id="the-direct-dependency">The Direct Dependency</h3>
+<p>Because an item must reside completely inside a single chunk, and
+chunks are created by dividing a single page, a chunk can never be
+larger than the page itself. Consequently:</p>
+<ul>
+<li><strong>Slab Page Size = Maximum Chunk Size = Maximum Item
+Size.</strong></li>
+<li>Memcached does not support chunking across multiple pages (no memory
+segmentation or page-spanning for a single record).</li>
+<li>If an incoming item exceeds the slab page size, Memcached rejects it
+with an error (e.g.,
+<code>SERVER_ERROR object too large for cache</code>).</li>
+</ul>
+<p>By default, since the slab page size is 1MB, the maximum allowable
+item size is also 1MB.</p>
+<h3 id="configuring-page-and-item-sizes">Configuring Page and Item
+Sizes</h3>
+<p>Modern versions of Memcached allow you to adjust this limit using the
+<code>-I</code> (or <code>--max-item-size</code>) command-line flag
+during daemon startup. This single argument alters both parameters
+simultaneously:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-I</span> 5m</span></code></pre></div>
+<p>In this example, specifying <code>5m</code> sets both the slab page
+size and the maximum item size to 5 megabytes. The minimum allowable
+page size is typically 1 kilobyte, and the maximum defaults to 1024
+megabytes, depending on system architecture and compile-time flags.</p>
+<h3 id="operational-trade-offs">Operational Trade-offs</h3>
+<p>Increasing the slab page size to accommodate larger items carries
+operational consequences:</p>
+<ol type="1">
+<li><strong>Memory Waste (Internal Fragmentation):</strong> If you
+increase the page size to 10MB to accommodate a handful of large
+objects, Memcached will allocate memory in 10MB increments for all slab
+classes. If your cache primarily stores small items (e.g., 200 bytes),
+memory overhead and wasted space per slab increase significantly.</li>
+<li><strong>Network and Thread Blocking:</strong> Memcached is optimized
+for high-throughput, small-payload operations. Storing and retrieving
+multi-megabyte payloads can saturate network buffers, increase latency,
+and degrade the responsiveness of the worker threads.</li>
+</ol>
+<p>To maintain optimal performance, the slab page size should be kept as
+close to the default 1MB as possible, scaling up only when larger single
+payloads are strictly necessary.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-slab-page-size-and-max-item-size';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

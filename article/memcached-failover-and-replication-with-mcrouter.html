@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Failover and Replication with Mcrouter - memcached</title>
+    <meta name="description" content="Memcached is fundamentally an in-memory, key-value store that prioritizes raw performance over built-in clustering, high availability, and replication. To achieve enterprise-grade resilience, infrastructure engineers rely on proxy solutions like Meta’s mc">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-failover-and-replication-with-mcrouter">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Failover and Replication with Mcrouter - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-failover-and-replication-with-mcrouter" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is fundamentally an in-memory, key-value store that prioritizes raw performance over built-in clustering, high availability, and replication. To achieve enterprise-grade resilience, infrastructure engineers rely on proxy solutions like Meta’s mc" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-failover-and-replication-with-mcrouter">Memcached
+Failover and Replication with Mcrouter</h1>
+<p>Memcached is fundamentally an in-memory, key-value store that
+prioritizes raw performance over built-in clustering, high availability,
+and replication. To achieve enterprise-grade resilience, infrastructure
+engineers rely on proxy solutions like Meta’s mcrouter. Sitting
+transparently between client applications and Memcached servers,
+mcrouter intercepts memcached protocol requests and dynamically routes
+them based on configurable routing trees. This article explores how
+mcrouter implements automated failover, regional failover, and
+asynchronous cross-region replication to eliminate single points of
+failure in caching architectures.</p>
+<h3 id="the-role-of-a-caching-proxy">The Role of a Caching Proxy</h3>
+<p>In standard Memcached deployments, the client library uses consistent
+hashing to map keys directly to specific server instances. If a server
+crashes, the client either fails the operation or recalculates the hash
+ring, redistributing traffic and causing heavy cache churn.</p>
+<p>A proxy like mcrouter abstracts server topology away from the
+application. Clients send standard Memcached protocol commands to a
+local mcrouter instance (typically deployed as a sidecar container or a
+local daemon). The proxy parses the keys and routes commands through
+user-defined routing rules known as Route Handles, handling server
+selection, retry logic, connection pooling, and multi-node
+synchronization natively.</p>
+<h3 id="mechanisms-for-high-availability-and-local-failover">Mechanisms
+for High Availability and Local Failover</h3>
+<p>mcrouter manages node failure through configurable fallback
+strategies, ensuring applications experience near-zero latency
+degradation when underlying cache servers drop offline.</p>
+<h4 id="failoverroute">FailoverRoute</h4>
+<p>The primary tool for local resiliency is the
+<code>FailoverRoute</code>. Under normal operations, queries are
+directed to a designated primary server pool. If a target node fails to
+respond, returns a network error, or exceeds a configured timeout,
+mcrouter immediately attempts the request against one or more backup
+servers in a fallback pool. This process is completely invisible to the
+requesting client application.</p>
+<h4 id="health-checking-and-tbf-rate-limiting">Health Checking and TBF
+Rate Limiting</h4>
+<p>To prevent cascading failures and "thundering herds," mcrouter
+incorporates Token Bucket Filter (TBF) rate limiters and background
+health checks. When a backend node starts timing out, mcrouter
+temporarily marks the connection as degraded or dead, automatically
+diverting traffic to backups without waiting for full TCP connection
+timeouts on every subsequent request. Once the primary node passes
+periodic health checks, mcrouter safely reintegrates it into the active
+pool.</p>
+<h4 id="cache-warm-up-routing">Cache Warm-Up Routing</h4>
+<p>Replacing a dead cache node normally floods downstream databases as
+the new, empty node warms up. Using a <code>WarmUpRoute</code>, mcrouter
+mitigates this:</p>
+<ol type="1">
+<li>A read request goes to the new (cold) target node.</li>
+<li>If the key misses, mcrouter reads the key from an existing (warm)
+backup node.</li>
+<li>If the warm node hits, mcrouter writes that data into the cold node
+before returning the response to the client.</li>
+</ol>
+<h3 id="multi-region-replication-architecture">Multi-Region Replication
+Architecture</h3>
+<p>Operating across multiple data centers requires serving reads locally
+to avoid WAN latency penalties while ensuring updates reach all regions.
+mcrouter achieves this by decoupling read paths from write paths.</p>
+<h4 id="read-local-write-global-routing">Read-Local, Write-Global
+Routing</h4>
+<p>Multi-region deployments typically employ an active-active or
+active-passive pattern:</p>
+<ul>
+<li><strong>Reads (<code>HashRoute</code> /
+<code>LatestRoute</code>):</strong> Read requests are directed entirely
+to the local cluster within the same availability zone or region,
+maintaining sub-millisecond response times.</li>
+<li><strong>Writes (<code>AllSyncRoute</code> /
+<code>AllAsyncRoute</code>):</strong> When an application issues an
+update (<code>SET</code>, <code>DELETE</code>, <code>ADD</code>),
+mcrouter intercepts the write. Through <code>AllSyncRoute</code>, it
+writes to the local cluster synchronously to ensure immediate
+read-your-own-writes consistency. Simultaneously, it uses
+<code>AllAsyncRoute</code> to fire non-blocking writes to remote
+mcrouter instances or cache pools in secondary regions over WAN
+connections.</li>
+</ul>
+<h4 id="asynchronous-spooling-via-asynclog">Asynchronous Spooling via
+AsyncLog</h4>
+<p>Cross-region network partitions are common. If a WAN link drops,
+naive cross-region writes either block local clients or drop
+synchronization updates entirely, leading to stale cache data.</p>
+<p>mcrouter resolves this by logging failed cross-region writes to an
+on-disk transaction log (<code>AsyncLog</code>). When a remote region is
+unreachable, failed writes are spooled locally as mutation logs. A
+background daemon continuously inspects the spool and replays the cached
+mutations once network connectivity to the target region is restored.
+This guarantees eventual consistency across geographical regions without
+delaying local application writes.</p>
+<h3 id="prefix-based-routing-for-granular-control">Prefix-Based Routing
+for Granular Control</h3>
+<p>mcrouter supports routing configurations based on key prefixes via
+the <code>PrefixSelectorRoute</code>. This allows operators to define
+granular policies per data type:</p>
+<ul>
+<li><strong>Ephemeral/Session Data:</strong> Routed to a local cluster
+with rapid <code>FailoverRoute</code> to a standby pool, avoiding
+cross-region overhead.</li>
+<li><strong>Global Metadata:</strong> Routed with
+<code>AllSyncRoute</code> locally and asynchronously mirrored across
+every active region.</li>
+<li><strong>Read-Heavy Static Caches:</strong> Directed to locally
+replicated pools with automated cold-cache warm-up behavior.</li>
+</ul>
+<p>By centralizing connection management, health checking, and routing
+intelligence at the proxy layer, mcrouter converts Memcached from a
+simple, isolated memory cache into a distributed, fault-tolerant,
+multi-region caching tier.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-failover-and-replication-with-mcrouter';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

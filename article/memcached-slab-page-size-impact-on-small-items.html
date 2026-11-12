@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Slab Page Size Impact on Small Items - memcached</title>
+    <meta name="description" content="Configuring large slab page sizes in Memcached primarily affects memory efficiency, chunk distribution, and memory allocation granularity. While increasing the slab page size allows Memcached to store individual items larger than the default 1MB limit, ap">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-slab-page-size-impact-on-small-items">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Slab Page Size Impact on Small Items - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-slab-page-size-impact-on-small-items" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Configuring large slab page sizes in Memcached primarily affects memory efficiency, chunk distribution, and memory allocation granularity. While increasing the slab page size allows Memcached to store individual items larger than the default 1MB limit, ap" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-slab-page-size-impact-on-small-items">Memcached Slab
+Page Size Impact on Small Items</h1>
+<p>Configuring large slab page sizes in Memcached primarily affects
+memory efficiency, chunk distribution, and memory allocation
+granularity. While increasing the slab page size allows Memcached to
+store individual items larger than the default 1MB limit, applying this
+configuration to workloads dominated by small items leads to internal
+memory fragmentation, inefficient page allocation across slab classes,
+and premature cache evictions.</p>
+<h3 id="understanding-memcached-slab-allocation">Understanding Memcached
+Slab Allocation</h3>
+<p>Memcached manages memory through a slab allocation system to prevent
+operating system-level memory fragmentation. Memory is divided into
+pages (defaulting to 1MB), and each page is pre-allocated to a specific
+"slab class." Each slab class carves its assigned pages into fixed-size
+chunks determined by the growth factor. When a key-value pair arrives,
+Memcached places it into the slab class with the smallest chunk size
+capable of holding the data.</p>
+<h3 id="coarser-memory-granularity-and-trapped-memory">Coarser Memory
+Granularity and Trapped Memory</h3>
+<p>The most direct impact of increasing the slab page size (configured
+via the <code>-I</code> or <code>--max-item-size</code> parameter) is
+the loss of allocation granularity. When you increase the page size—for
+example, to 10MB or 64MB—the minimum unit of memory Memcached can
+allocate to any slab class becomes that larger page size.</p>
+<p>If your application stores predominantly small items (e.g., 256-byte
+session tokens or small JSON objects), a slab class will receive an
+entire large page even if it only needs to store a handful of items. For
+instance:</p>
+<ul>
+<li>A 10MB page assigned to a 256-byte chunk slab class creates roughly
+40,960 chunks.</li>
+<li>If your workload only ever needs 2,000 items in that specific size
+class, the remaining ~38,960 chunks sit idle within that page.</li>
+<li>Memcached cannot lend that unused, allocated space within the page
+to other slab classes that might be running out of memory.</li>
+</ul>
+<p>This leads to "trapped memory," where significant amounts of RAM are
+technically allocated to slab classes but remain unused, reducing the
+effective capacity of the cache.</p>
+<h3 id="premature-evictions-and-slab-starvation">Premature Evictions and
+Slab Starvation</h3>
+<p>Memcached operates within a fixed total memory boundary set by the
+<code>-m</code> flag. Total memory is partitioned into a finite number
+of pages:</p>
+<p><span class="math display">\[\text{Total Pages} = \frac{\text{Total
+Memory}}{\text{Page Size}}\]</span></p>
+<p>Increasing the page size drastically reduces the total number of
+pages available:</p>
+<ul>
+<li>With 1GB of total memory and a default 1MB page size, the instance
+manages 1,024 pages.</li>
+<li>With 1GB of total memory and a 32MB page size, the instance manages
+only 32 pages.</li>
+</ul>
+<p>Because pages are distributed among different slab classes, having
+fewer total pages increases the likelihood of slab starvation. If a
+spike occurs in one item size, an entire 32MB page is assigned to it,
+consuming over 3% of the total instance memory in a single allocation.
+Other slab classes with small items may quickly run out of their few
+allocated pages, triggering Least Recently Used (LRU) evictions
+prematurely, even when significant total capacity appears to be
+available globally.</p>
+<h3 id="cpu-cache-and-memory-access-patterns">CPU Cache and Memory
+Access Patterns</h3>
+<p>While small items continue to occupy chunks sized appropriately for
+their payload, organizing small items across very large contiguous
+memory blocks can alter access locality. Large memory strides across
+expansive pages may increase CPU L1/L2/L3 cache misses and Translation
+Lookaside Buffer (TLB) thrashing under heavy multi-threaded access,
+slightly degrading throughput compared to the default 1MB paging
+layout.</p>
+<h3 id="configuration-recommendations">Configuration
+Recommendations</h3>
+<p>To maintain optimal performance for small item workloads:</p>
+<ul>
+<li><strong>Retain the default 1MB page size:</strong> Do not increase
+<code>-I</code> unless your workload strictly requires caching
+individual values larger than 1MB.</li>
+<li><strong>Segregate clusters:</strong> If the system must handle both
+large payloads and small items, run two distinct Memcached clusters.
+Dedicate one instance with the default 1MB page size to small,
+high-throughput items, and tune a separate instance with a larger slab
+page size exclusively for bulk data.</li>
+<li><strong>Enable slab rebalancing:</strong> If varying item sizes are
+unavoidable, ensure modern memory rebalancing features
+(<code>-o slab_reassign,slab_automove</code>) are active to mitigate
+imbalances caused by coarse page allocations over time.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-slab-page-size-impact-on-small-items';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

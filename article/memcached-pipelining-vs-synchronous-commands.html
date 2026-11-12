@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Pipelining vs Synchronous Commands - memcached</title>
+    <meta name="description" content="Pipelining in Memcached allows clients to send multiple commands over a single network connection without waiting for the response of each command before issuing the next. By batching operations together, pipelining dramatically cuts down round-trip netwo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-pipelining-vs-synchronous-commands">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Pipelining vs Synchronous Commands - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-pipelining-vs-synchronous-commands" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Pipelining in Memcached allows clients to send multiple commands over a single network connection without waiting for the response of each command before issuing the next. By batching operations together, pipelining dramatically cuts down round-trip netwo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-pipelining-vs-synchronous-commands">Memcached
+Pipelining vs Synchronous Commands</h1>
+<p>Pipelining in Memcached allows clients to send multiple commands over
+a single network connection without waiting for the response of each
+command before issuing the next. By batching operations together,
+pipelining dramatically cuts down round-trip network latency, minimizes
+operating system overhead, and substantially increases throughput
+compared to traditional synchronous, request-response execution.</p>
+<h3 id="elimination-of-round-trip-latency">Elimination of Round-Trip
+Latency</h3>
+<p>In a standard synchronous model, every command follows a strict
+request-response cycle: the client issues a command, the packet travels
+across the network, Memcached processes it, the response travels back,
+and only then can the client send the next operation. If the network
+round-trip time (RTT) between the application and the cache is 1
+millisecond, executing 100 individual commands synchronously will
+consume at least 100 milliseconds purely in transit time.</p>
+<p>Pipelining groups these requests. The client sends 100 commands into
+the socket buffer sequentially without blocking. Memcached reads and
+executes them in sequence, streaming the responses back. As a result,
+the total execution time drops from <span class="math inline">\(N \times
+\text{RTT}\)</span> to approximately <span class="math inline">\(1
+\times \text{RTT}\)</span> plus the negligible server-side processing
+time.</p>
+<h3 id="higher-throughput-and-operations-per-second">Higher Throughput
+and Operations Per Second</h3>
+<p>Because synchronous communication forces the client and server into
+an idle wait state while packets traverse the network, the maximum
+achievable operations per second (OPS) on a single connection is
+severely bounded by latency. Pipelining keeps the network pipe
+saturated. By removing the wait-state bottleneck, applications can
+process thousands of operations in the time it previously took to
+execute dozens, unlocking the full throughput capabilities of the
+Memcached instance.</p>
+<h3 id="decreased-system-call-and-kernel-overhead">Decreased System Call
+and Kernel Overhead</h3>
+<p>Every network transmission involves operating system kernel
+operations. Executing synchronous commands requires individual
+<code>write()</code> and <code>read()</code> system calls for each
+operation, leading to frequent context switches between user space and
+kernel space.</p>
+<p>Pipelining aggregates multiple protocol commands into single TCP
+packets and larger I/O buffers. This aggregation yields:</p>
+<ul>
+<li>Fewer total read and write system calls on both client and
+server.</li>
+<li>Reduced TCP/IP packet header overhead across the network wire.</li>
+<li>Lower CPU utilization on both the application host and the Memcached
+node, allowing hardware resources to focus on data processing rather
+than packet handling.</li>
+</ul>
+<h3 id="versatility-beyond-standard-multi-key-commands">Versatility
+Beyond Standard Multi-Key Commands</h3>
+<p>Memcached natively supports multi-key retrieval via commands like
+<code>get key1 key2 key3</code>. While effective, this is limited to
+read operations. Pipelining works at the transport and protocol layer,
+meaning it applies to all Memcached commands. With pipelining, an
+application can interleave mixed operations—such as batching multiple
+<code>set</code>, <code>add</code>, <code>delete</code>, and
+<code>incr</code> commands alongside read requests—in a single
+stream.</p>
+<h3 id="streamlined-bulk-updates">Streamlined Bulk Updates</h3>
+<p>When warming caches, invalidating stale datasets, or writing large
+sets of user session data, pipelining transforms an otherwise heavy
+sequential process into a rapid, non-blocking batch execution. This
+prevents database queries from backing up while waiting for cache writes
+to complete, leading to more responsive application lifecycles and
+stable response times.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-pipelining-vs-synchronous-commands';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

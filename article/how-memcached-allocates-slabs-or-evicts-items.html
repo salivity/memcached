@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Allocates Slabs or Evicts Items - memcached</title>
+    <meta name="description" content="Memcached manages memory through a slab allocation system designed to prevent fragmentation and optimize read/write speeds. When handling new data under memory load, the engine follows a strict hierarchical evaluation to determine whether it should draw a">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-allocates-slabs-or-evicts-items">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Allocates Slabs or Evicts Items - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-allocates-slabs-or-evicts-items" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached manages memory through a slab allocation system designed to prevent fragmentation and optimize read/write speeds. When handling new data under memory load, the engine follows a strict hierarchical evaluation to determine whether it should draw a" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-allocates-slabs-or-evicts-items">How Memcached
+Allocates Slabs or Evicts Items</h1>
+<p>Memcached manages memory through a slab allocation system designed to
+prevent fragmentation and optimize read/write speeds. When handling new
+data under memory load, the engine follows a strict hierarchical
+evaluation to determine whether it should draw a new slab page from
+global memory or evict an existing item. This article explains the exact
+criteria Memcached evaluates—including slab class matching, global
+memory limits, and Least Recently Used (LRU) queues—to decide between
+allocation and eviction.</p>
+<h3 id="the-memory-model-slabs-and-classes">The Memory Model: Slabs and
+Classes</h3>
+<p>When Memcached initializes, it allocates a single continuous block of
+memory defined by the <code>-m</code> flag. This memory is divided into
+1MB pages. Pages are assigned to specific <strong>slab classes</strong>,
+each configured to hold items of a particular size range (determined by
+a growth factor, usually 1.25).</p>
+<p>When a write command (such as <code>set</code> or <code>add</code>)
+arrives, Memcached maps the item's byte size to the smallest slab class
+capable of holding it. From there, the engine decides how to acquire a
+chunk within that class.</p>
+<h3 id="the-decision-hierarchy">The Decision Hierarchy</h3>
+<p>Memcached evaluates memory availability using a deterministic order
+of operations:</p>
+<ol type="1">
+<li><p><strong>Check for Available Chunks Within the Slab
+Class</strong><br />
+Memcached first checks if the target slab class has any unused chunks on
+its internal freelist. These chunks come from items that were previously
+deleted or explicitly expired. If a chunk is available, Memcached reuses
+it immediately without allocating new pages or evicting items.</p></li>
+<li><p><strong>Check the Global Memory Pool</strong><br />
+If no free chunk exists in the target slab class, Memcached evaluates
+the total memory consumption of the instance.</p>
+<ul>
+<li><strong>If total allocated memory &lt; maximum allowed limit
+(<code>-m</code>):</strong> Memcached allocates a new 1MB page from the
+global pool, assigns it to the target slab class, slices it into chunks
+of that class's fixed size, and places the new item into the first
+available chunk.</li>
+<li><strong>If total allocated memory has reached the limit:</strong> No
+new pages can be created from the global pool. Memcached must resort to
+eviction within that specific slab class.</li>
+</ul></li>
+<li><p><strong>Check the Slab-Specific LRU Queue for
+Evictions</strong><br />
+Because memory cannot grow beyond the configured limit, Memcached
+inspects the Least Recently Used (LRU) list belonging <em>only</em> to
+the targeted slab class. It will not evict items from other slab classes
+to satisfy the write.</p>
+<ul>
+<li><strong>Expired Items First:</strong> Memcached inspects the oldest
+items at the tail of the slab class's LRU chain. If an item has already
+expired based on its TTL (Time-To-Live), Memcached reclaims its chunk
+without incrementing the eviction counter.</li>
+<li><strong>Active Item Eviction:</strong> If the tail items are still
+valid and have not expired, Memcached checks the eviction configuration.
+By default, eviction is enabled: the oldest active item at the tail of
+the LRU is discarded, its memory is reused, and the
+<code>evictions</code> metric increments.</li>
+<li><strong>Out of Memory Error:</strong> If the <code>-M</code> flag
+(disable eviction) was passed at startup, Memcached skips item eviction
+and returns an out-of-memory error to the client.</li>
+</ul></li>
+</ol>
+<h3 id="slab-calcification-and-dynamic-slab-reassignment">Slab
+Calcification and Dynamic Slab Reassignment</h3>
+<p>In earlier versions of Memcached, a page assigned to a slab class
+remained locked to that class permanently. This led to "slab
+calcification," where one slab class could run out of space and evict
+active items even if other slab classes held idle, unused pages.</p>
+<p>Modern Memcached versions resolve this using the <strong>slab
+reassign</strong> and <strong>slab automove</strong> mechanisms:</p>
+<ul>
+<li>The background thread monitors memory access patterns and eviction
+rates across all classes.</li>
+<li>If a class is experiencing consistent evictions while another class
+has unused pages or low access rates, Memcached can detach a 1MB page
+from the donor class and reassign it to the starved class.</li>
+<li>Once reassigned, the memory acts as a newly allocated page for the
+receiving class, reducing the need for immediate item eviction.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-allocates-slabs-or-evicts-items';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

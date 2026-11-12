@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached stats items and Key Expiration Guide - memcached</title>
+    <meta name="description" content="The stats items command in Memcached provides aggregate, slab-level telemetry on stored items, allowing administrators to evaluate cache retention, lifecycle behavior, and eviction patterns. While the command does not return an individual list of key name">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-items-and-key-expiration-guide">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached stats items and Key Expiration Guide - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-items-and-key-expiration-guide" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The stats items command in Memcached provides aggregate, slab-level telemetry on stored items, allowing administrators to evaluate cache retention, lifecycle behavior, and eviction patterns. While the command does not return an individual list of key name" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-stats-items-and-key-expiration-guide">Memcached stats
+items and Key Expiration Guide</h1>
+<p>The <code>stats items</code> command in Memcached provides aggregate,
+slab-level telemetry on stored items, allowing administrators to
+evaluate cache retention, lifecycle behavior, and eviction patterns.
+While the command does not return an individual list of key names
+approaching expiration, it supplies critical metrics—such as the age of
+the oldest item in a slab class and the frequency of unread expired
+items—that help determine whether items are surviving until their
+intended time-to-live (TTL) or are being evicted prematurely due to
+memory constraints.</p>
+<h2 id="understanding-the-stats-items-command">Understanding the stats
+items Command</h2>
+<p>Memcached groups memory allocations into distinct slab classes based
+on item size. Executing <code>stats items</code> outputs statistical
+data for each slab class rather than global cache totals. This
+granularity is essential because expiration and memory pressure often
+affect specific data sizes disproportionately.</p>
+<p>When evaluating key expiration dynamics, several metrics returned by
+<code>stats items</code> are directly relevant:</p>
+<ul>
+<li><strong><code>age</code></strong>: The age, in seconds, of the
+oldest item in the slab's Least Recently Used (LRU) queue.</li>
+<li><strong><code>expired_unfetched</code></strong>: The cumulative
+count of items that reached their expiration time and were reclaimed
+without ever being requested by a client.</li>
+<li><strong><code>evicted</code> and
+<code>evicted_nonzero</code></strong>: The number of valid items
+discarded to make space for new writes before their explicit TTL had
+passed.</li>
+<li><strong><code>crawler_reclaimed</code></strong>: Items reclaimed
+through the background LRU crawler inspecting expired data.</li>
+</ul>
+<h2 id="evaluating-key-expiration-via-lru-age">Evaluating Key Expiration
+via LRU Age</h2>
+<p>The primary indicator of how close keys are to reaching their full
+lifespan is the <code>age</code> metric. Because Memcached organizes
+items in an LRU queue per slab:</p>
+<ol type="1">
+<li><strong>Age vs. TTL Comparison</strong>: If your application sets a
+3,600-second (1 hour) TTL on items, but the <code>age</code> of the
+oldest item in a given slab class is consistently reported around 600
+seconds, items are likely being evicted 3,000 seconds before their
+planned expiration due to slab exhaustion.</li>
+<li><strong>Healthy Expiration States</strong>: If the <code>age</code>
+in a slab class regularly approaches or exceeds the configured TTL
+values of stored keys, keys are surviving long enough to reach their
+expiration window naturally.</li>
+</ol>
+<h2 id="monitoring-unfetched-expired-keys">Monitoring Unfetched Expired
+Keys</h2>
+<p>The <code>expired_unfetched</code> metric helps identify keys that
+have already reached expiration without serving their intended purpose.
+A high ratio of <code>expired_unfetched</code> compared to total
+insertions indicates that:</p>
+<ul>
+<li>Write operations are frequently caching short-lived or low-utility
+data.</li>
+<li>Keys are remaining in memory until their TTL expires rather than
+being renewed, providing an indirect measure of expiration efficiency
+across specific data slabs.</li>
+</ul>
+<h2 id="limitations-and-granular-key-inspection">Limitations and
+Granular Key Inspection</h2>
+<p>The <code>stats items</code> command is designed for statistical
+oversight, not granular key introspection. It does not display raw key
+strings, individual creation timestamps, or precise expiration
+targets.</p>
+<p>To locate specific keys approaching expiration rather than reviewing
+slab health:</p>
+<ul>
+<li>Use the <strong>LRU Crawler</strong> via the
+<code>lru_crawler metadump</code> command, which dumps
+metadata—including raw keys and exact expiration timestamps—with minimal
+locking overhead.</li>
+<li>Implement client-side logging or application-level tracing to log
+generated TTLs at the time of cache writes.</li>
+</ul>
+<p>Used correctly, <code>stats items</code> serves as a macro-level
+diagnostic tool to verify that cache memory is appropriately sized,
+ensuring keys remain stored long enough to reach their defined
+expiration targets.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-items-and-key-expiration-guide';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>jemalloc vs Standard malloc in Memcached - memcached</title>
+    <meta name="description" content="This article examines how memory allocation in Memcached differs when using jemalloc compared to the standard system allocator (typically glibc&#39;s ptmalloc). While Memcached uses its own internal slab allocator to manage cached data items, the underlying C">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/jemalloc-vs-standard-malloc-in-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="jemalloc vs Standard malloc in Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/jemalloc-vs-standard-malloc-in-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines how memory allocation in Memcached differs when using jemalloc compared to the standard system allocator (typically glibc&#39;s ptmalloc). While Memcached uses its own internal slab allocator to manage cached data items, the underlying C" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="jemalloc-vs-standard-malloc-in-memcached">jemalloc vs Standard
+malloc in Memcached</h1>
+<p>This article examines how memory allocation in Memcached differs when
+using jemalloc compared to the standard system allocator (typically
+glibc's ptmalloc). While Memcached uses its own internal slab allocator
+to manage cached data items, the underlying C memory allocator handles
+slab page allocation, network buffers, connection states, and internal
+metadata. Choosing between jemalloc and standard malloc significantly
+impacts heap fragmentation, multi-threaded concurrency, Resident Set
+Size (RSS) predictability, and overall throughput under heavy
+workloads.</p>
+<h3 id="memcacheds-memory-architecture">Memcached's Memory
+Architecture</h3>
+<p>Memcached avoids standard operating system memory fragmentation for
+cached keys and values by using a built-in slab allocator. It
+pre-allocates memory in 1MB slab pages and slices them into fixed-size
+chunks to store items.</p>
+<p>However, the internal slab system does not manage all process memory.
+Memcached still relies on the underlying system allocator for:</p>
+<ul>
+<li>Allocating the 1MB slab pages themselves.</li>
+<li>Managing connection buffers (read/write network buffers via
+<code>libevent</code>).</li>
+<li>Tracking hash table expansion and internal data structures.</li>
+<li>Handling transient allocations generated during high-concurrency
+client requests.</li>
+</ul>
+<p>Under heavy traffic, the performance and behavior of these secondary
+allocations dictate the server's stability.</p>
+<h3 id="thread-contention-and-concurrency">Thread Contention and
+Concurrency</h3>
+<p>Standard glibc <code>malloc</code> uses a fixed pool of memory arenas
+to reduce lock contention across threads. By default, it scales arenas
+based on the number of CPU cores. However, when Memcached runs with many
+worker threads handling tens of thousands of concurrent network
+connections, threads inevitably contend for arena locks. This lock
+contention leads to increased CPU latency and performance
+bottlenecks.</p>
+<p><code>jemalloc</code> was explicitly engineered for high-concurrency
+multi-threaded environments. It isolates threads using thread-specific
+caches (tcache) and a larger number of arenas mapped directly to threads
+via round-robin or thread IDs. Small allocations—such as temporary
+network buffers—are served entirely from the thread's local cache
+without acquiring a lock. This architecture allows Memcached to scale
+throughput linearly across high core counts without suffering
+allocator-induced wait states.</p>
+<h3 id="memory-fragmentation-and-rss-drift">Memory Fragmentation and RSS
+Drift</h3>
+<p>Memory fragmentation is the most significant operational difference
+between standard malloc and jemalloc in long-running Memcached
+instances.</p>
+<ul>
+<li><strong>Standard malloc:</strong> Glibc's allocator organizes memory
+into chunks and heaps. When small, short-lived buffers are interleaved
+with long-lived allocations, glibc often cannot return freed memory
+pages back to the operating system. Even if Memcached reports that it is
+only storing 10 GB of data, the process's Resident Set Size (RSS) can
+balloon to 20 GB or more. This phenomenon, known as heap bloat,
+frequently triggers Out-Of-Memory (OOM) killer events in
+production.</li>
+<li><strong>jemalloc:</strong> Employs precise size classes (binning)
+and extent-based allocation. It groups allocations of similar sizes
+together, dramatically reducing external fragmentation. Furthermore,
+jemalloc actively purges unused physical memory pages back to the
+operating system using <code>madvise(MADV_DONTNEED)</code> or
+<code>madvise(MADV_FREE)</code>. This keeps Memcached's actual RSS
+tightly aligned with its true memory utilization.</li>
+</ul>
+<h3 id="slab-management-and-page-eviction">Slab Management and Page
+Eviction</h3>
+<p>When Memcached dynamically moves memory between slab classes (slab
+automove) or allocates new slab pages, it issues 1MB allocation
+requests.</p>
+<p>Under glibc, repeatedly allocating, freeing, and reallocating large
+blocks alongside high rates of small connection allocations can cause
+address space fragmentation. Over time, glibc may fail to find
+contiguous physical pages for new 1MB slabs, forcing allocation latency
+spikes.</p>
+<p><code>jemalloc</code> manages chunk and extent allocations cleanly
+through direct <code>mmap</code> calls, maintaining clear separation
+between small, short-lived metadata objects and large, long-lived slab
+allocations. This guarantees that large page requests are fulfilled
+predictably without scanning fragmented heaps.</p>
+<h3 id="introspection-and-diagnostics">Introspection and
+Diagnostics</h3>
+<p>Standard <code>malloc</code> provides minimal runtime visibility into
+allocation health without external profiling tools that introduce
+performance overhead.</p>
+<p>In contrast, <code>jemalloc</code> includes built-in introspection.
+When Memcached is compiled with jemalloc, administrators can query
+allocator statistics directly through Memcached diagnostic commands or
+via jemalloc's <code>malloc_stats_print()</code> API. This exposes
+precise metrics regarding thread cache utilization, active vs. allocated
+pages, fragmentation ratios, and metadata overhead, simplifying capacity
+planning and debugging.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/jemalloc-vs-standard-malloc-in-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

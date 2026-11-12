@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached System Calls for Network I/O Multiplexing - memcached</title>
+    <meta name="description" content="Memcached achieves high-performance caching and handles tens of thousands of concurrent connections through an event-driven, non-blocking I/O model. Rather than dedicating a thread to each client, it leverages the libevent library to abstract OS-level I/O">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-system-calls-for-network-i-o-multiplexing">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached System Calls for Network I/O Multiplexing - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-system-calls-for-network-i-o-multiplexing" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached achieves high-performance caching and handles tens of thousands of concurrent connections through an event-driven, non-blocking I/O model. Rather than dedicating a thread to each client, it leverages the libevent library to abstract OS-level I/O" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-system-calls-for-network-io-multiplexing">Memcached
+System Calls for Network I/O Multiplexing</h1>
+<p>Memcached achieves high-performance caching and handles tens of
+thousands of concurrent connections through an event-driven,
+non-blocking I/O model. Rather than dedicating a thread to each client,
+it leverages the <code>libevent</code> library to abstract OS-level I/O
+multiplexing primitives. This article examines the core system calls
+Memcached relies on to manage events, accept incoming connections,
+exchange network data, and coordinate internal worker threads without
+introducing latency bottlenecks.</p>
+<h2 id="event-multiplexing-epoll-and-kqueue">Event Multiplexing: epoll
+and kqueue</h2>
+<p>Memcached relies on modern, stateful kernel-polling system calls to
+monitor thousands of file descriptors simultaneously in <span
+class="math inline">\(O(1)\)</span> time complexity, avoiding the <span
+class="math inline">\(O(N)\)</span> overhead associated with legacy
+calls like <code>select()</code> or <code>poll()</code>.</p>
+<ul>
+<li><strong><code>epoll_create1()</code> / <code>epoll_ctl()</code> /
+<code>epoll_wait()</code> (Linux):</strong> On Linux platforms,
+Memcached relies on the <code>epoll</code> family.
+<code>epoll_create1()</code> initializes an epoll instance with
+close-on-exec flags. <code>epoll_ctl()</code> registers, modifies, or
+deletes socket file descriptors associated with readable or writable
+states using edge-triggered or level-triggered flags.
+<code>epoll_wait()</code> suspends the calling thread until network
+events occur, returning only the active descriptors to user space.</li>
+<li><strong><code>kqueue()</code> / <code>kevent()</code> (FreeBSD,
+macOS, OpenBSD):</strong> On BSD-derived systems, Memcached uses
+<code>kqueue</code> and <code>kevent</code>. <code>kqueue()</code>
+creates the event filter queue, while <code>kevent()</code> registers
+filters and polls for events such as <code>EVFILT_READ</code> and
+<code>EVFILT_WRITE</code>.</li>
+</ul>
+<h2 id="connection-lifecycle-management">Connection Lifecycle
+Management</h2>
+<p>The master listening thread handles new inbound TCP connections
+before assigning them to worker threads:</p>
+<ul>
+<li><strong><code>accept4()</code> / <code>accept()</code>:</strong>
+When a read event triggers on the listening socket, Memcached invokes
+<code>accept4()</code> (on Linux) or <code>accept()</code> followed by
+<code>fcntl()</code>. Using <code>accept4()</code> allows Memcached to
+atomically set flags like <code>SOCK_NONBLOCK</code> and
+<code>SOCK_CLOEXEC</code> directly during descriptor creation,
+eliminating extra round-trips to kernel space.</li>
+<li><strong><code>fcntl()</code>:</strong> Used to inspect and configure
+file descriptor properties, notably toggling non-blocking mode
+(<code>O_NONBLOCK</code>) when modern flags cannot be set directly
+during socket creation.</li>
+<li><strong><code>close()</code>:</strong> Closes client sockets upon
+connection termination, timeouts, or unrecoverable protocol errors,
+automatically deregistering them from the kernel event table.</li>
+</ul>
+<h2 id="high-throughput-network-io">High-Throughput Network I/O</h2>
+<p>To reduce user-to-kernel context switches, Memcached avoids multiple
+separate write calls per protocol interaction:</p>
+<ul>
+<li><strong><code>writev()</code> (Scatter-Gather I/O):</strong>
+Memcached frequently uses vectored I/O via <code>writev()</code> to
+assemble outgoing responses. Because responses often consist of an ASCII
+or binary protocol header located in one memory buffer and the cached
+item payload in another, <code>writev()</code> allows Memcached to
+transmit disjoint memory segments in a single system call without
+copying or concatenating buffers in user space.</li>
+<li><strong><code>readv()</code>:</strong> Similarly, Memcached can read
+incoming data packets into non-contiguous memory chunks when processing
+streaming pipelined commands.</li>
+<li><strong><code>recv()</code> / <code>send()</code> /
+<code>read()</code> / <code>write()</code>:</strong> Standard
+non-blocking data exchange calls. These calls return <code>EAGAIN</code>
+or <code>EWOULDBLOCK</code> when network buffers are empty or saturated,
+signaling Memcached to yield control back to the event loop.</li>
+</ul>
+<h2 id="inter-thread-coordination">Inter-Thread Coordination</h2>
+<p>Memcached employs a multi-threaded architecture consisting of a
+primary dispatcher thread and several dedicated worker threads. Each
+worker runs its own event loop and communicates with the dispatcher
+thread via specific kernel primitives:</p>
+<ul>
+<li><strong><code>pipe()</code> / <code>pipe2()</code>:</strong> On
+standard POSIX systems, the dispatcher creates a unidirectional
+communication pipe for each worker. When a new connection arrives, the
+dispatcher writes the new socket file descriptor into the pipe. The
+worker's event loop monitors the read end of the pipe, wakes up, and
+assumes ownership of the connection.</li>
+<li><strong><code>eventfd()</code>:</strong> On Linux,
+<code>libevent</code> can use <code>eventfd()</code> as a lightweight
+alternative to pipes. It functions as an internal kernel counter,
+reducing memory footprint and context-switch costs compared to
+traditional file-descriptor-based pipes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-system-calls-for-network-i-o-multiplexing';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

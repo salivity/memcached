@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Bind Memcached to the Loopback Interface - memcached</title>
+    <meta name="description" content="By default, an improperly secured Memcached instance may expose caching services to the public internet, making it vulnerable to unauthorized data inspection and distributed denial-of-service (DDoS) amplification attacks. Configuring Memcached to listen e">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-bind-memcached-to-the-loopback-interface">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Bind Memcached to the Loopback Interface - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-bind-memcached-to-the-loopback-interface" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="By default, an improperly secured Memcached instance may expose caching services to the public internet, making it vulnerable to unauthorized data inspection and distributed denial-of-service (DDoS) amplification attacks. Configuring Memcached to listen e" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-bind-memcached-to-the-loopback-interface">How to Bind
+Memcached to the Loopback Interface</h1>
+<p>By default, an improperly secured Memcached instance may expose
+caching services to the public internet, making it vulnerable to
+unauthorized data inspection and distributed denial-of-service (DDoS)
+amplification attacks. Configuring Memcached to listen exclusively on
+the local loopback interface (<code>127.0.0.1</code> for IPv4 or
+<code>::1</code> for IPv6) ensures that only applications hosted on the
+same physical or virtual server can interact with the cache. This guide
+outlines the necessary configuration file edits and service restart
+commands across major Linux distributions to lock down Memcached.</p>
+<h3 id="1-locate-the-configuration-file">1. Locate the Configuration
+File</h3>
+<p>The path to the Memcached configuration file depends on your
+operating system:</p>
+<ul>
+<li><strong>Debian / Ubuntu:</strong>
+<code>/etc/memcached.conf</code></li>
+<li><strong>RHEL / CentOS / Rocky Linux / AlmaLinux:</strong>
+<code>/etc/sysconfig/memcached</code></li>
+</ul>
+<h3 id="2-update-the-listen-ip-address">2. Update the Listen IP
+Address</h3>
+<p>Open the appropriate configuration file in a text editor with
+administrative privileges.</p>
+<h4 id="on-debian--ubuntu">On Debian / Ubuntu</h4>
+<p>Open the file:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> nano /etc/memcached.conf</span></code></pre></div>
+<p>Find the <code>-l</code> parameter. By default, it may already be set
+to <code>127.0.0.1</code>. If it is commented out, missing, or set to
+<code>0.0.0.0</code>, update it as follows:</p>
+<pre class="text"><code>-l 127.0.0.1</code></pre>
+<p>To support both IPv4 and IPv6 loopback interfaces simultaneously,
+specify both separated by a comma:</p>
+<pre class="text"><code>-l 127.0.0.1,::1</code></pre>
+<p>Save and exit the file.</p>
+<h4 id="on-rhel--centos--fedora">On RHEL / CentOS / Fedora</h4>
+<p>Open the file:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> nano /etc/sysconfig/memcached</span></code></pre></div>
+<p>Locate the <code>OPTIONS</code> parameter and set the IP address
+using the <code>-l</code> flag:</p>
+<pre class="text"><code>OPTIONS=&quot;-l 127.0.0.1&quot;</code></pre>
+<p>Save and exit the file.</p>
+<h3 id="3-disable-the-udp-listener-recommended">3. Disable the UDP
+Listener (Recommended)</h3>
+<p>To fully mitigate UDP-based amplification attacks, disable UDP
+listening by ensuring port <code>0</code> is passed to the
+<code>-U</code> parameter.</p>
+<ul>
+<li><p>On Debian/Ubuntu, add or uncomment:</p>
+<pre class="text"><code>-U 0</code></pre></li>
+<li><p>On RHEL-based systems, append <code>-U 0</code> to the
+<code>OPTIONS</code> string:</p>
+<pre class="text"><code>OPTIONS=&quot;-l 127.0.0.1 -U 0&quot;</code></pre></li>
+</ul>
+<h3 id="4-restart-the-memcached-service">4. Restart the Memcached
+Service</h3>
+<p>Apply the changes by restarting the Memcached daemon:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl restart memcached</span></code></pre></div>
+<h3 id="5-verify-the-binding">5. Verify the Binding</h3>
+<p>Verify that Memcached is listening only on the loopback interface
+using <code>ss</code> or <code>netstat</code>:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ss <span class="at">-tlpn</span> <span class="kw">|</span> <span class="fu">grep</span> memcached</span></code></pre></div>
+<p>The output should confirm that the service is bound strictly to
+<code>127.0.0.1:11211</code> (and <code>[::1]:11211</code> if IPv6 was
+configured), rather than <code>0.0.0.0:11211</code> or
+<code>*:11211</code>:</p>
+<pre class="text"><code>LISTEN 0      1024   127.0.0.1:11211   0.0.0.0:*    users:((&quot;memcached&quot;,pid=1234,fd=26))</code></pre></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-bind-memcached-to-the-loopback-interface';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

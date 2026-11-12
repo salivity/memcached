@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Memory Allocation for Variable Keys - memcached</title>
+    <meta name="description" content="Memcached uses a specialized slab allocation mechanism to manage memory, preventing fragmentation caused by continuous dynamic allocations. When keys and values vary dramatically in size, Memcached determines memory placement based on the total item footp">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-memory-allocation-for-variable-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Memory Allocation for Variable Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-memory-allocation-for-variable-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached uses a specialized slab allocation mechanism to manage memory, preventing fragmentation caused by continuous dynamic allocations. When keys and values vary dramatically in size, Memcached determines memory placement based on the total item footp" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-memory-allocation-for-variable-keys">Memcached Memory
+Allocation for Variable Keys</h1>
+<p>Memcached uses a specialized slab allocation mechanism to manage
+memory, preventing fragmentation caused by continuous dynamic
+allocations. When keys and values vary dramatically in size, Memcached
+determines memory placement based on the <em>total item
+footprint</em>—combining the key, data payload, and internal
+metadata—rather than allocating space for the key alone. This article
+explains how the slab allocator places variable-length items into
+fixed-size chunks, the performance trade-offs involved such as internal
+fragmentation, and how the system mitigates memory imbalances caused by
+erratic item sizes.</p>
+<h3 id="the-slab-allocation-system">The Slab Allocation System</h3>
+<p>To avoid the overhead and operating system fragmentation of standard
+C-library <code>malloc</code> and <code>free</code> operations,
+Memcached pre-allocates a continuous block of memory. This pool is
+divided into 1MB pages (by default). Each page is assigned to a specific
+<strong>Slab Class</strong>, which slices the 1MB page into equal-sized
+units called <strong>Chunks</strong>.</p>
+<p>Slab classes are arranged in an increasing progression of chunk sizes
+governed by a growth factor (defaulting to 1.25). For example:</p>
+<ul>
+<li><strong>Slab Class 1:</strong> 96 bytes per chunk</li>
+<li><strong>Slab Class 2:</strong> 120 bytes per chunk</li>
+<li><strong>Slab Class 3:</strong> 152 bytes per chunk</li>
+</ul>
+<h3 id="how-variable-key-sizes-impact-allocation">How Variable Key Sizes
+Impact Allocation</h3>
+<p>When an item is written to Memcached, the engine calculates the total
+byte size required:</p>
+<p><span class="math display">\[\text{Total Size} = \text{Key Length} +
+\text{Value Length} + \text{Item Structure Metadata (roughly 48–56
+bytes)}\]</span></p>
+<p>Because the key is bundled directly with the value and metadata into
+a single contiguous item structure, dramatic differences in key length
+directly shift the total item size into different slab classes:</p>
+<ol type="1">
+<li><strong>Class Selection:</strong> Memcached inspects the total item
+size and identifies the smallest slab class with chunks large enough to
+hold it.</li>
+<li><strong>Chunk Placement:</strong> The item is placed into an
+available pre-allocated chunk within that slab class. The remaining
+unused bytes inside that chunk cannot be shared with any other key-value
+pair.</li>
+</ol>
+<h3 id="challenges-with-drastically-varying-keys">Challenges with
+Drastically Varying Keys</h3>
+<p>When key lengths vary wildly—for instance, standard 16-byte keys
+mixed with multi-kilobyte composite keys—two main issues arise:</p>
+<h4 id="1-internal-fragmentation">1. Internal Fragmentation</h4>
+<p>If an item requires 121 bytes, it cannot fit into a 120-byte chunk
+and must be placed into a 152-byte chunk. The remaining 31 bytes
+represent internal fragmentation (slack space). If key lengths fluctuate
+unpredictably, the ratio of wasted chunk space can increase, lowering
+the effective cache capacity.</p>
+<h4 id="2-slab-calcification">2. Slab Calcification</h4>
+<p>If a workload initially stores millions of short keys with small
+values, Memcached dedicates the majority of its 1MB pages to smaller
+slab classes. If the application later shifts to using very long keys,
+Memcached may encounter slab calcification: small-slab pages cannot
+naturally accommodate large-slab items, causing premature evictions in
+larger slab classes even if small-slab chunks remain underutilized.</p>
+<h3 id="how-memcached-mitigates-these-disparities">How Memcached
+Mitigates These Disparities</h3>
+<p>Modern versions of Memcached implement several features to handle
+dramatic shifts in item sizes:</p>
+<ul>
+<li><strong>Tunable Growth Factor (<code>-f</code> flag):</strong>
+Administrators can decrease the growth factor (e.g., from 1.25 down to
+1.1 or 1.05) to create a denser gradient of slab classes. This minimizes
+internal fragmentation by ensuring chunk sizes closely match the
+requested item sizes.</li>
+<li><strong>Slab Automove and Slab Reassign
+(<code>slab_automove</code>):</strong> Background threads monitor
+eviction rates across classes. If larger slabs are evicting hot keys
+while smaller slabs have surplus memory, the engine dynamically moves
+1MB pages from one slab class to another.</li>
+<li><strong>Key Length Limits:</strong> Memcached enforces a hard limit
+on key length (typically 250 bytes by default). This design restriction
+ensures that keys cannot independently consume an entire slab chunk,
+forcing applications to hash or truncate oversized keys before
+caching.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-memory-allocation-for-variable-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Memory Limit Impact on Performance - memcached</title>
+    <meta name="description" content="Configuring an overly small memory allocation limit in Memcached severely undermines its role as a caching layer by driving up eviction rates and lowering cache hit ratios. When the allocated memory cannot accommodate the application&#39;s active working set,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-memory-limit-impact-on-performance">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Memory Limit Impact on Performance - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-memory-limit-impact-on-performance" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Configuring an overly small memory allocation limit in Memcached severely undermines its role as a caching layer by driving up eviction rates and lowering cache hit ratios. When the allocated memory cannot accommodate the application&#39;s active working set," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-memory-limit-impact-on-performance">Memcached Memory
+Limit Impact on Performance</h1>
+<p>Configuring an overly small memory allocation limit in Memcached
+severely undermines its role as a caching layer by driving up eviction
+rates and lowering cache hit ratios. When the allocated memory cannot
+accommodate the application's active working set, Memcached is forced to
+prematurely purge frequently needed data. This article explores the
+operational consequences of an inadequate memory limit, including
+backend database degradation, elevated application latency, CPU
+overhead, and strategies to identify and resolve memory constraints.</p>
+<h3 id="accelerated-lru-evictions">Accelerated LRU Evictions</h3>
+<p>Memcached manages memory using a Least Recently Used (LRU) eviction
+algorithm. When the configured memory limit (set via the <code>-m</code>
+flag) is reached and new items are written, Memcached immediately purges
+existing keys—even if their time-to-live (TTL) has not expired. A memory
+limit that is too low causes aggressive, continuous evictions. Items
+that should remain cached for minutes or hours may only survive for
+seconds, causing high memory churn and preventing the cache from
+establishing a stable working dataset.</p>
+<h3 id="plummeting-cache-hit-ratios">Plummeting Cache Hit Ratios</h3>
+<p>The primary metric of caching efficiency is the cache hit ratio. When
+memory is restricted, the probability that requested data resides in
+memory drops sharply. As the hit ratio degrades, the cache fails to
+serve its core purpose: offloading read traffic from slower persistent
+storage. A drop in hit ratio directly correlates with degraded end-user
+response times, as requests that should be resolved in sub-millisecond
+memory lookups are delayed.</p>
+<h3 id="backend-database-saturation-and-outages">Backend Database
+Saturation and Outages</h3>
+<p>When Memcached misses a key, the application must query the primary
+database to retrieve the record and write it back into the cache. An
+undersized Memcached instance shifts the read workload back to the
+primary datastore. This sudden influx of queries can exhaust database
+connection pools, saturate database CPU and disk I/O, and trigger "cache
+stampedes" or thundering herd problems. Under peak traffic, this
+cascading failure can bring down relational databases or search backends
+that were architected under the assumption of a high cache hit rate.</p>
+<h3 id="increased-application-latency-and-cpu-overhead">Increased
+Application Latency and CPU Overhead</h3>
+<p>An undersized cache introduces processing inefficiencies across the
+entire stack:</p>
+<ul>
+<li><strong>Application Layer:</strong> Application servers spend more
+time waiting for I/O operations from databases, resulting in accumulated
+thread utilization and memory consumption.</li>
+<li><strong>Memcached Instance:</strong> Memcached itself incurs CPU
+overhead continuously scanning slab classes, executing eviction logic,
+and managing slab memory churn rather than simply serving key-value
+pairs from memory.</li>
+<li><strong>Network Utilization:</strong> Bandwidth usage between
+application servers and the database tier surges as non-cached payloads
+are fetched repeatedly over the wire.</li>
+</ul>
+<h3 id="slab-allocation-inefficiencies-and-premature-eviction">Slab
+Allocation Inefficiencies and Premature Eviction</h3>
+<p>Memcached partitions memory into predetermined slab classes based on
+item sizes. An overly restrictive global memory pool magnifies slab
+allocation issues. If traffic shifts toward a particular payload size,
+the corresponding slab class may run out of pages while other slabs hold
+unused space. With insufficient total memory, Memcached cannot allocate
+new pages to starved slab classes, triggering severe evictions within
+specific data types even if the aggregate memory capacity appears
+partially utilized.</p>
+<h3 id="identifying-and-resolving-the-issue">Identifying and Resolving
+the Issue</h3>
+<p>Detecting an undersized memory limit involves monitoring key
+Memcached operational statistics via the <code>stats</code> command:</p>
+<ul>
+<li><strong><code>evictions</code>:</strong> A steadily climbing
+eviction counter indicates that memory is insufficient to hold the
+current working set.</li>
+<li><strong><code>bytes</code> vs. <code>limit_maxbytes</code>:</strong>
+If current usage is constantly pinned to <code>limit_maxbytes</code>
+alongside high eviction rates, the allocation limit is too low.</li>
+<li><strong><code>get_hits</code> vs. <code>get_misses</code>:</strong>
+A widening gap favoring misses signals poor cache retention.</li>
+</ul>
+<p>To resolve the issue, increase the memory ceiling using the
+<code>-m</code> runtime parameter to match the true size of the active
+working set, or scale the caching infrastructure horizontally by adding
+more Memcached nodes to the cluster.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-memory-limit-impact-on-performance';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

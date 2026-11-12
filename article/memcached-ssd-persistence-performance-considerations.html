@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached SSD Persistence Performance Considerations - memcached</title>
+    <meta name="description" content="Integrating solid-state drives (SSDs) as a persistent or tiered storage layer for Memcached—often implemented via its native Extstore engine—allows organizations to scale cache capacity cost-effectively while retaining high throughput. However, bridging p">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-ssd-persistence-performance-considerations">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached SSD Persistence Performance Considerations - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-ssd-persistence-performance-considerations" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Integrating solid-state drives (SSDs) as a persistent or tiered storage layer for Memcached—often implemented via its native Extstore engine—allows organizations to scale cache capacity cost-effectively while retaining high throughput. However, bridging p" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-ssd-persistence-performance-considerations">Memcached
+SSD Persistence Performance Considerations</h1>
+<p>Integrating solid-state drives (SSDs) as a persistent or tiered
+storage layer for Memcached—often implemented via its native Extstore
+engine—allows organizations to scale cache capacity cost-effectively
+while retaining high throughput. However, bridging purely in-memory
+caching with persistent non-volatile storage introduces critical
+performance trade-offs. Maximizing throughput and stability requires
+evaluating latency differentials between RAM and flash, optimizing
+object size thresholds, mitigating SSD write amplification, managing
+drive endurance, and dampening tail latency caused by underlying I/O
+operations.</p>
+<h3 id="latency-disparity-and-memory-tiering">Latency Disparity and
+Memory Tiering</h3>
+<p>While modern NVMe SSDs offer high IOPS, solid-state storage remains
+orders of magnitude slower than system memory. Dynamic RAM serves
+requests in tens of nanoseconds, whereas NVMe read operations take
+between 10 to 100 microseconds. To prevent the degradation of average
+response times, Memcached must not treat the SSD as an identical
+replacement for RAM. Instead, a hybrid architecture must be maintained:
+keys, metadata, and hash tables reside permanently in RAM, while only
+large, less latency-critical values are pushed to flash storage.</p>
+<h3 id="item-sizing-and-extstore-thresholds">Item Sizing and Extstore
+Thresholds</h3>
+<p>Flash storage degrades in efficiency when subjected to high volumes
+of small, random reads and writes. Memcached’s Extstore addresses this
+by defining a minimum item size threshold (typically between 1KB and
+4KB) for data eligible to be stored on SSDs. Items below this threshold
+are kept strictly in DRAM. Setting this threshold too low leads to
+excessive I/O overhead, filling drive queues with tiny payloads and
+lowering overall system throughput. Setting it too high leaves the SSD
+underutilized while continuing to pressure expensive RAM.</p>
+<h3 id="write-amplification-and-drive-endurance">Write Amplification and
+Drive Endurance</h3>
+<p>Memcached operates under heavy write and eviction churn. Solid-state
+media cannot overwrite data in place; it must erase entire flash blocks
+to write new pages. When Memcached frequently updates or evicts values
+stored on SSDs, it induces write amplification, where the physical data
+written to the drive exceeds the logical data sent by the application.
+This causes severe drive wear, quickly depleting the SSD's Terabytes
+Written (TBW) limits and causing drive-level garbage collection routines
+to stall write pipelines. To maintain performance, enterprise-grade SSDs
+with high write endurance (e.g., 3+ Drive Writes Per Day) and adequate
+over-provisioning must be deployed.</p>
+<h3 id="asynchronous-io-and-thread-contention">Asynchronous I/O and
+Thread Contention</h3>
+<p>Traditional Memcached relies on event loops optimized for
+non-blocking in-memory lookups. When an SSD layer is introduced, storage
+I/O operations cannot block the worker threads serving active network
+connections. Utilizing asynchronous I/O (AIO) frameworks or dedicated
+disk-reading threads is mandatory to isolate disk wait states from
+network event loops. If the IOPS limit of the SSD subsystem is
+saturated, worker queues will back up, consuming network buffers and
+leading to connection timeouts.</p>
+<h3 id="p99-tail-latency-and-flash-garbage-collection">P99 Tail Latency
+and Flash Garbage Collection</h3>
+<p>While average read and write latencies on NVMe drives are
+predictable, tail latencies (P99 and P99.9) are vulnerable to
+hardware-level maintenance tasks. Background garbage collection, thermal
+throttling, and TRIM commands executed by the SSD controller can
+introduce transient latency spikes reaching into the tens of
+milliseconds. In distributed systems using consistent hashing, a single
+node suffering an SSD latency spike can cascade into application-wide
+slowdowns. Using high-queue-depth storage controllers, ensuring proper
+filesystem alignment, and avoiding drive saturation above 80% capacity
+are necessary steps to minimize latency variance.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-ssd-persistence-performance-considerations';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

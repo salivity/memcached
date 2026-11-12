@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached on Multi-NUMA Sockets - memcached</title>
+    <meta name="description" content="Deploying Memcached on multi-NUMA (Non-Uniform Memory Access) socket systems requires careful resource partitioning to avoid severe latency degradation and bus saturation. This article outlines key architectural considerations, including why running multi">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-on-multi-numa-sockets">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached on Multi-NUMA Sockets - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-on-multi-numa-sockets" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Deploying Memcached on multi-NUMA (Non-Uniform Memory Access) socket systems requires careful resource partitioning to avoid severe latency degradation and bus saturation. This article outlines key architectural considerations, including why running multi" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-on-multi-numa-sockets">Memcached on Multi-NUMA
+Sockets</h1>
+<p>Deploying Memcached on multi-NUMA (Non-Uniform Memory Access) socket
+systems requires careful resource partitioning to avoid severe latency
+degradation and bus saturation. This article outlines key architectural
+considerations, including why running multiple pinned instances
+outperforms a single monolithic process, how cross-socket interconnects
+impact throughput, network interface card (NIC) alignment, and relevant
+Linux kernel tuning parameters.</p>
+<h3 id="the-numa-bottleneck-in-memcached">The NUMA Bottleneck in
+Memcached</h3>
+<p>In a multi-socket server, each CPU socket accesses its directly
+attached local memory significantly faster than remote memory attached
+to another socket. When a standard Memcached instance spans multiple
+sockets, worker threads running on Socket 0 frequently access cache
+items allocated in memory physically attached to Socket 1. This
+generates heavy cross-socket traffic over the interconnect (such as
+Intel UPI or AMD Infinity Fabric), introducing latency spikes and
+reducing total operations per second (OPS).</p>
+<p>Furthermore, Memcached utilizes global and per-slab locks. When
+threads on different sockets contend for these locks, cache-line
+bouncing occurs across the CPU interconnect, further degrading
+performance.</p>
+<h3 id="single-instance-vs-multi-instance-strategy">Single Instance vs.
+Multi-Instance Strategy</h3>
+<p>Running a single, large Memcached process across all sockets is
+rarely optimal. The two primary deployment models are:</p>
+<ol type="1">
+<li><strong>Multiple Independent Instances (Recommended):</strong> The
+most efficient pattern involves running one isolated Memcached daemon
+per NUMA node. Each instance is pinned strictly to its local CPU cores
+and local memory node. A client-side hashing mechanism (such as
+consistent hashing) or a lightweight local proxy (such as Twemproxy or
+Envoy) distributes cache requests across these instances. This
+guarantees that 100% of memory accesses remain local and locks are never
+contested across sockets.</li>
+<li><strong>Single Instance with Interleaving (Compromise):</strong> If
+application architecture strictly demands a single large port/endpoint
+without an intermediary proxy, you must configure memory interleaving.
+This distributes memory allocations round-robin across all NUMA nodes to
+prevent one node from exhausting its memory while others remain empty,
+though it incurs a consistent remote-access latency penalty on roughly
+half or more of all operations.</li>
+</ol>
+<h3 id="cpu-and-memory-pinning-via-numactl">CPU and Memory Pinning via
+<code>numactl</code></h3>
+<p>To achieve strict NUMA node isolation for separate instances, use the
+<code>numactl</code> utility rather than relying on automatic OS
+scheduling.</p>
+<p>For an instance bound to Node 0:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">numactl</span> <span class="at">--cpunodebind</span><span class="op">=</span>0 <span class="at">--membind</span><span class="op">=</span>0 memcached <span class="at">-m</span> <span class="op">&lt;</span>RAM_MB<span class="op">&gt;</span> -p 11211 <span class="at">-t</span> <span class="op">&lt;</span>thread_count<span class="op">&gt;</span> -u memcached</span></code></pre></div>
+<p>For an instance bound to Node 1:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">numactl</span> <span class="at">--cpunodebind</span><span class="op">=</span>1 <span class="at">--membind</span><span class="op">=</span>1 memcached <span class="at">-m</span> <span class="op">&lt;</span>RAM_MB<span class="op">&gt;</span> -p 11212 <span class="at">-t</span> <span class="op">&lt;</span>thread_count<span class="op">&gt;</span> -u memcached</span></code></pre></div>
+<ul>
+<li><code>--cpunodebind</code> restricts execution strictly to CPUs
+inside that NUMA node.</li>
+<li><code>--membind</code> ensures memory is only allocated from the
+specified node, returning an out-of-memory error rather than spilling
+over to remote memory.</li>
+<li>Set the thread count (<code>-t</code>) to match the physical core
+count of that single NUMA domain (avoiding hyperthreads if deterministic
+latency is required). Memcached internal lock scaling typically drops
+off beyond 8 to 16 threads.</li>
+</ul>
+<h3 id="nic-locality-and-network-irq-affinity">NIC Locality and Network
+IRQ Affinity</h3>
+<p>Network interface cards are connected directly to specific PCIe root
+complexes associated with a single socket. If network traffic arrives at
+a NIC attached to Socket 0, but the processing Memcached instance
+resides on Socket 1, packets must travel over the cross-socket
+interconnect before processing begins.</p>
+<p>To eliminate this overhead:</p>
+<ul>
+<li>Identify which PCIe bus and NUMA node the network card belongs to
+using <code>lspci -tv</code> or
+<code>/sys/class/net/&lt;interface&gt;/device/numa_node</code>.</li>
+<li>Ensure network interrupt requests (IRQs) for that interface are
+pinned to the CPU cores belonging to that same NUMA node via
+<code>smp_affinity</code>.</li>
+<li>If scaling across multiple nodes, deploy dual-port or multi-NIC
+setups where each NIC is wired to a different socket, routing traffic
+directly to the local Memcached instance.</li>
+</ul>
+<h3 id="operating-system-and-kernel-considerations">Operating System and
+Kernel Considerations</h3>
+<ul>
+<li><p><strong>Disable Automatic NUMA Balancing:</strong> The Linux
+kernel includes an automated mechanism to scan and migrate pages closer
+to active threads (<code>kernel.numa_balancing</code>). For
+high-throughput in-memory caches, this introduces CPU overhead and
+latency jitter. Disable it via:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">sysctl</span> <span class="at">-w</span> kernel.numa_balancing=0</span></code></pre></div></li>
+<li><p><strong>Transparent Huge Pages (THP):</strong> THP often causes
+unpredictable tail latencies during allocation and defragmentation
+cycles. Disable THP or set it to <code>madvise</code> to keep
+allocations predictable.</p></li>
+<li><p><strong>Zone Reclaim Mode:</strong> Ensure
+<code>vm.zone_reclaim_mode</code> is set to <code>0</code>. Enabling
+zone reclaim causes the kernel to aggressively reclaim cached disk pages
+within a node rather than allocating from a remote node, leading to
+severe stall times.</p></li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-on-multi-numa-sockets';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

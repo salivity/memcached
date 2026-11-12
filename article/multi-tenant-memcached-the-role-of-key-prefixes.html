@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Tenant Memcached: The Role of Key Prefixes - memcached</title>
+    <meta name="description" content="Using key prefixes is the primary architectural pattern for implementing multi-tenancy within a single Memcached instance. Because Memcached operates as a flat, global key-value store without native database divisions, key prefixes establish logical names">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/multi-tenant-memcached-the-role-of-key-prefixes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Multi-Tenant Memcached: The Role of Key Prefixes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/multi-tenant-memcached-the-role-of-key-prefixes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Using key prefixes is the primary architectural pattern for implementing multi-tenancy within a single Memcached instance. Because Memcached operates as a flat, global key-value store without native database divisions, key prefixes establish logical names" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="multi-tenant-memcached-the-role-of-key-prefixes">Multi-Tenant
+Memcached: The Role of Key Prefixes</h1>
+<p>Using key prefixes is the primary architectural pattern for
+implementing multi-tenancy within a single Memcached instance. Because
+Memcached operates as a flat, global key-value store without native
+database divisions, key prefixes establish logical namespaces that
+prevent collisions, secure tenant boundaries, and streamline cache
+invalidation. This article explores how key prefixes work, why they are
+essential for multi-tenant isolation, and the operational advantages
+they bring to resource sharing.</p>
+<h3 id="simulating-namespaces-in-a-flat-architecture">Simulating
+Namespaces in a Flat Architecture</h3>
+<p>Memcached does not offer built-in multi-tenancy constructs such as
+schemas, logical databases, or access-control lists per key set. Every
+key exists in the same global pool. Without a partitioning strategy, two
+distinct tenants attempting to cache a resource with the same
+identifier—such as <code>user:1001</code>—would overwrite each other's
+data.</p>
+<p>Key prefixes solve this by appending a unique tenant identifier to
+the beginning of every key (for example, <code>tenantA:user:1001</code>
+and <code>tenantB:user:1001</code>). This transforms a completely flat
+storage engine into an organized, pseudo-hierarchical system, creating
+distinct boundaries for each tenant's working dataset.</p>
+<h3 id="preventing-collisions-and-data-leaks">Preventing Collisions and
+Data Leaks</h3>
+<p>The foremost role of the key prefix is deterministic data isolation.
+In a multi-tenant environment, data bleeding between customers is a
+critical security and compliance failure.</p>
+<p>By enforcing prefixes at the application or cache client level,
+software ensures that a query meant for Tenant A can never retrieve or
+overwrite Tenant B’s data. The cache client automatically prepends the
+active tenant’s ID to any key requested during a lookup or write
+operation, abstracting the multi-tenancy logic away from the core
+business code and preventing accidental cross-tenant access.</p>
+<h3 id="granular-and-instantaneous-cache-invalidation">Granular and
+Instantaneous Cache Invalidation</h3>
+<p>Flushing an entire Memcached instance using <code>flush_all</code>
+clears all data globally, which disrupts every tenant on the server and
+can cause severe cache stampedes against the primary database. Prefixes
+enable targeted invalidation strategies without touching other tenants'
+caches.</p>
+<p>A common implementation is the "namespaced prefix with versioning"
+technique:</p>
+<ol type="1">
+<li>The application stores a tenant-specific version token (e.g.,
+<code>tenantA_version = 1</code>).</li>
+<li>Subsequent keys are constructed dynamically:
+<code>tenantA:v1:user:1001</code>.</li>
+<li>To invalidate Tenant A's entire cache, the application simply
+increments the tenant version counter
+(<code>tenantA_version = 2</code>).</li>
+</ol>
+<p>Once incremented, previous keys naturally expire based on their
+standard TTL (Time-To-Live) or Memcached’s Least Recently Used (LRU)
+eviction algorithm, effectively wiping Tenant A's cache immediately
+without any downtime or cache misses for Tenant B.</p>
+<h3 id="resource-monitoring-and-quota-management">Resource Monitoring
+and Quota Management</h3>
+<p>While Memcached does not natively enforce per-tenant memory quotas,
+prefixes allow application-level monitoring tools to aggregate cache
+usage statistics. By sampling keys or logging cache hit/miss ratios by
+prefix, operators can detect "noisy neighbor" scenarios where an
+individual tenant's high traffic or large payload size is monopolizing
+memory space and evicting data belonging to other tenants.</p>
+<h3 id="implementation-best-practices">Implementation Best
+Practices</h3>
+<p>To maximize the efficiency of key prefixes in Memcached:</p>
+<ul>
+<li><strong>Keep Prefixes Short:</strong> Memcached imposes a 250-byte
+limit on key length. Long, descriptive prefixes consume key space and
+increase network overhead. Use concise IDs, such as numeric database IDs
+or short hashes (e.g., <code>t12:usr:1001</code>), rather than verbose
+identifiers.</li>
+<li><strong>Standardize Delimiters:</strong> Use consistent separators
+such as colons (<code>:</code>) or pipe symbols (<code>|</code>) to
+maintain uniformity across caching layers.</li>
+<li><strong>Enforce at the Driver Layer:</strong> Never rely on
+developers manually typing prefixes in application queries. Wrap the
+Memcached client so that the tenant prefix is injected automatically
+based on the current execution context.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/multi-tenant-memcached-the-role-of-key-prefixes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

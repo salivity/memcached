@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Quiet Mode Reduces Network Traffic - memcached</title>
+    <meta name="description" content="Memcached&#39;s binary protocol includes a specialized &quot;quiet mode&quot; that significantly cuts network traffic and socket overhead by suppressing unnecessary server responses. In standard protocol interactions, the server replies to every client command with an">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-quiet-mode-reduces-network-traffic">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Quiet Mode Reduces Network Traffic - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-quiet-mode-reduces-network-traffic" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached&#39;s binary protocol includes a specialized &quot;quiet mode&quot; that significantly cuts network traffic and socket overhead by suppressing unnecessary server responses. In standard protocol interactions, the server replies to every client command with an" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-quiet-mode-reduces-network-traffic">How Memcached
+Quiet Mode Reduces Network Traffic</h1>
+<p>Memcached's binary protocol includes a specialized "quiet mode" that
+significantly cuts network traffic and socket overhead by suppressing
+unnecessary server responses. In standard protocol interactions, the
+server replies to every client command with an explicit status code,
+confirming success or failure. Quiet mode commands alter this behavior
+by instructing the server to only return data when an error occurs or
+when requested data is found, drastically reducing packet counts,
+bandwidth consumption, and serialization overhead during batch
+operations.</p>
+<h3 id="eliminating-redundant-write-acknowledgments">Eliminating
+Redundant Write Acknowledgments</h3>
+<p>Under the standard binary protocol, write operations such as
+<code>SET</code>, <code>ADD</code>, <code>REPLACE</code>, and
+<code>DELETE</code> require the server to transmit a 24-byte header back
+to the client confirming the operation succeeded. In write-heavy
+workloads or bulk data loads, sending individual acknowledgments for
+thousands of successful operations floods the network with small,
+repetitive packets.</p>
+<p>Quiet variants of these commands—such as <code>SetQ</code>,
+<code>AddQ</code>, and <code>DeleteQ</code>—tell the server to remain
+silent on success. The server only generates and transmits a response
+packet if the command fails (for example, a <code>KEY_EEXISTS</code>
+error on an <code>AddQ</code> command). If the operation succeeds, no
+network packets are sent back to the client, effectively cutting the
+response bandwidth for successful write batches to zero.</p>
+<h3 id="streamlining-bulk-reads-getq">Streamlining Bulk Reads
+(<code>GetQ</code>)</h3>
+<p>Fetching multiple keys simultaneously (multi-get) can generate
+substantial network overhead if many keys do not exist in the cache.
+Using standard <code>GET</code> commands, Memcached transmits a 24-byte
+response packet with a <code>KEY_ENOENT</code> (key not found) status
+for every missed key.</p>
+<p>With the quiet equivalent, <code>GetQ</code>, the server only
+responds when a key is found and returns its associated data. If a key
+is missing, the server silently discards the query without sending a
+negative acknowledgment. Because the client receives only cache hits,
+upstream network traffic from the cache node is minimized, preventing
+network saturation when cache hit ratios fluctuate.</p>
+<h3 id="batch-synchronization-with-sentinel-commands">Batch
+Synchronization with Sentinel Commands</h3>
+<p>To prevent client-side desynchronization when matching silent
+requests to missing responses, quiet commands are typically combined
+with a final non-quiet command acting as a sentinel:</p>
+<ol type="1">
+<li>The client pipelines a stream of quiet commands (e.g., dozens of
+<code>GetQ</code> or <code>SetQ</code> requests) through a single TCP
+socket buffer.</li>
+<li>The client appends a single non-quiet command at the end of the
+sequence, such as a standard <code>NOOP</code> or an ordinary
+<code>GET</code>.</li>
+<li>The server processes all queued commands in order, returning data
+only for errors or positive hits.</li>
+<li>When the server reaches the sentinel command, it transmits a
+standard response.</li>
+</ol>
+<p>Once the client receives the response to the sentinel command, it
+knows with certainty that all preceding quiet commands have been
+executed by the server.</p>
+<h3 id="lowering-network-and-cpu-overhead">Lowering Network and CPU
+Overhead</h3>
+<p>By dropping redundant success headers and negative lookup packets,
+quiet mode lowers total Ethernet frame counts. This reduction minimizes
+TCP/IP header overhead, cuts down on the generation of TCP
+acknowledgment (ACK) packets, and prevents buffer bloat on network
+interfaces. Additionally, processing fewer incoming and outgoing packets
+conserves CPU cycles on both the Memcached host and the client
+application, allowing for higher operational throughput over existing
+infrastructure.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-quiet-mode-reduces-network-traffic';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

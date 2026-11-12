@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Version Command for Node Availability - memcached</title>
+    <meta name="description" content="The version command in Memcached serves as an efficient, lightweight health check mechanism that operational monitoring systems use to verify node availability. By sending this basic command, monitoring tools can test end-to-end network connectivity, conf">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-version-command-for-node-availability">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Version Command for Node Availability - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-version-command-for-node-availability" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The version command in Memcached serves as an efficient, lightweight health check mechanism that operational monitoring systems use to verify node availability. By sending this basic command, monitoring tools can test end-to-end network connectivity, conf" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-version-command-for-node-availability">Memcached
+Version Command for Node Availability</h1>
+<p>The <code>version</code> command in Memcached serves as an efficient,
+lightweight health check mechanism that operational monitoring systems
+use to verify node availability. By sending this basic command,
+monitoring tools can test end-to-end network connectivity, confirm that
+the daemon process is actively responding to requests, and extract
+runtime metadata without altering or querying actual cached data.</p>
+<h3 id="low-overhead-and-predictable-performance">Low Overhead and
+Predictable Performance</h3>
+<p>Operational monitoring systems require health checks that execute
+rapidly without adding performance penalties to production workloads.
+The <code>version</code> command requires virtually zero CPU overhead
+and minimal memory to process. Unlike data retrieval or storage
+operations that interact with the slab allocator or hash tables, the
+<code>version</code> command merely reads the static version string
+compiled into the Memcached binary and returns it over the established
+connection. This makes it ideal for frequent polling intervals, such as
+every few seconds, even under high traffic conditions.</p>
+<h3 id="complete-l7-application-level-verification">Complete L7
+Application-Level Verification</h3>
+<p>A simple TCP socket ping (Layer 4) can indicate that the port is
+open, but it fails to prove that the Memcached service is healthy or
+capable of processing application traffic. If the Memcached process is
+hung, experiencing thread deadlocks, or exhausted of connection file
+descriptors, a basic TCP check may still succeed.</p>
+<p>Using the <code>version</code> command forces a complete Layer 7
+(application layer) transaction:</p>
+<ol type="1">
+<li>The monitoring system opens a connection to the Memcached port
+(default: 11211).</li>
+<li>It transmits the ASCII string <code>version\r\n</code>.</li>
+<li>The Memcached event loop, network parser, and worker threads process
+the command.</li>
+<li>The server returns <code>VERSION &lt;x.y.z&gt;\r\n</code>.</li>
+</ol>
+<p>Receiving the expected response confirms that the server’s event loop
+is functioning properly and that the application is ready to accept
+client commands.</p>
+<h3 id="safe-and-non-destructive-execution">Safe and Non-Destructive
+Execution</h3>
+<p>Monitoring queries should never risk mutating application state.
+Using read commands like <code>get</code> requires a known, static key
+that might expire or be evicted. Write commands like <code>set</code>
+needlessly consume memory and can trigger slab rebalancing or key
+evictions.</p>
+<p>The <code>version</code> command is entirely non-destructive and
+idempotent. It carries no risk of data pollution, cache invalidation, or
+cache misses, ensuring that operational telemetry remains completely
+isolated from user data.</p>
+<h3 id="version-drift-and-inventory-tracking">Version Drift and
+Inventory Tracking</h3>
+<p>Beyond determining binary "up" or "down" availability, the
+<code>version</code> response allows monitoring systems to track
+software versions across clusters. Operational dashboards can parse the
+returned string to detect configuration drift, verify successful rolling
+updates, or flag outdated, vulnerable Memcached instances that require
+security patches.</p>
+<h3 id="integration-in-monitoring-pipelines">Integration in Monitoring
+Pipelines</h3>
+<p>Monitoring systems—such as Nagios, Datadog, Prometheus exporters, and
+cloud load balancers—implement the <code>version</code> check using
+short timeout windows (typically 500 milliseconds to 2 seconds). If the
+node fails to return the version string within the allotted time, the
+monitoring agent marks the node as degraded or unavailable, triggering
+automated alerts, traffic rerouting, or automated container
+restarts.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-version-command-for-node-availability';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

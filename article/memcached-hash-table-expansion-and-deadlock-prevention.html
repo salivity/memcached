@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Hash Table Expansion and Deadlock Prevention - memcached</title>
+    <meta name="description" content="Memcached maintains high-throughput, low-latency caching by scaling its internal data structures concurrently across multiple threads. During periods of heavy data growth, Memcached automatically expands its primary hash table to prevent excessive hash co">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-hash-table-expansion-and-deadlock-prevention">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Hash Table Expansion and Deadlock Prevention - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-hash-table-expansion-and-deadlock-prevention" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains high-throughput, low-latency caching by scaling its internal data structures concurrently across multiple threads. During periods of heavy data growth, Memcached automatically expands its primary hash table to prevent excessive hash co" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1
+id="memcached-hash-table-expansion-and-deadlock-prevention">Memcached
+Hash Table Expansion and Deadlock Prevention</h1>
+<p>Memcached maintains high-throughput, low-latency caching by scaling
+its internal data structures concurrently across multiple threads.
+During periods of heavy data growth, Memcached automatically expands its
+primary hash table to prevent excessive hash collision chains and
+degraded lookup performance. To execute this resizing without causing
+thread deadlocks or stalling client traffic, Memcached relies on an
+asynchronous maintenance thread, fine-grained lock striping, an
+incremental bucket migration pointer, and strict lock-ordering rules
+that eliminate circular wait dependencies.</p>
+<h3 id="the-challenge-of-hash-table-resizing">The Challenge of Hash
+Table Resizing</h3>
+<p>In a multithreaded key-value store, resizing an active hash table
+poses significant synchronization challenges. If worker threads
+attempting to read, insert, or delete items collide with a thread
+reallocating the underlying bucket arrays, memory corruption or data
+races occur.</p>
+<p>Conversely, acquiring a global lock over the entire table during the
+resizing process eliminates concurrency, degrading throughput and
+potentially causing worker threads to pile up and deadlock if lock
+hierarchies are violated. Memcached avoids this through an incremental,
+lock-striped migration architecture.</p>
+<h3 id="asynchronous-maintenance-thread">Asynchronous Maintenance
+Thread</h3>
+<p>Memcached offloads the resizing process entirely from worker threads
+to a dedicated background thread known as the
+<code>assoc_maintenance_thread</code>.</p>
+<p>When the number of stored items exceeds 1.5 times the capacity of the
+current hash table (a power-of-two bucket count), an expansion flag is
+set, and the maintenance thread is awakened via a condition variable
+(<code>pthread_cond_signal</code>). Worker threads never participate
+directly in reallocating memory or moving items between buckets,
+isolating the expansion mechanics to a single controlling entity.</p>
+<h3
+id="dual-table-state-and-the-incremental-migration-pointer">Dual-Table
+State and the Incremental Migration Pointer</h3>
+<p>When resizing begins, Memcached creates a new hash table that is
+double the size of the previous one. The current table becomes the
+<code>old_hashtable</code>, and the newly allocated memory becomes the
+<code>primary_hashtable</code>.</p>
+<p>To avoid holding locks for long durations, migration occurs
+incrementally:</p>
+<ol type="1">
+<li>A global variable, typically named <code>expand_bucket</code>,
+tracks the index of the bucket currently being moved.</li>
+<li>The maintenance thread moves items bucket by bucket, processing a
+limited batch of buckets per iteration.</li>
+<li>Between batches, the maintenance thread can yield execution,
+allowing worker threads unimpeded access to other areas of the
+cache.</li>
+</ol>
+<h3 id="eliminating-deadlocks-with-lock-striping">Eliminating Deadlocks
+with Lock Striping</h3>
+<p>Memcached avoids global table locking by employing lock striping
+across an array of mutexes (known historically as
+<code>item_locks</code>). Hash values map to specific lock stripes using
+a bitmask.</p>
+<p>Deadlocks typically arise when threads attempt to acquire multiple
+shared resources in differing orders (violating the Coffman condition
+for avoiding circular wait). Memcached prevents this using two primary
+design rules:</p>
+<h4 id="1-single-lock-acquisition-for-worker-threads">1. Single-Lock
+Acquisition for Worker Threads</h4>
+<p>Worker threads never acquire multiple item locks simultaneously. When
+a worker thread needs to look up, insert, or delete an item during an
+active expansion:</p>
+<ul>
+<li>It hashes the key to find the corresponding bucket index.</li>
+<li>It inspects the <code>expand_bucket</code> pointer.</li>
+<li>If the bucket index is less than <code>expand_bucket</code>, the
+worker knows the items in that bucket have already migrated, so it
+routes the query to the <code>primary_hashtable</code>.</li>
+<li>If the bucket index is greater than or equal to
+<code>expand_bucket</code>, the worker accesses the
+<code>old_hashtable</code>.</li>
+<li>The worker then acquires <strong>only the single striped
+mutex</strong> governing that specific bucket in the appropriate table,
+completes the operation, and releases the lock.</li>
+</ul>
+<p>Because worker threads only hold one item lock at any given time,
+they cannot enter a circular wait state with other worker threads.</p>
+<h4 id="2-isolation-of-the-maintenance-thread-lock-scope">2. Isolation
+of the Maintenance Thread Lock Scope</h4>
+<p>During migration, the maintenance thread must read from the old
+bucket and insert into the new bucket. To prevent deadlocks with worker
+threads:</p>
+<ul>
+<li>The maintenance thread locks the specific stripe corresponding to
+the old bucket index being migrated.</li>
+<li>It safely moves the linked-list chain of items from the
+<code>old_hashtable</code> bucket to the appropriate buckets in the
+<code>primary_hashtable</code>.</li>
+<li>It increments the <code>expand_bucket</code> pointer.</li>
+<li>It releases the lock stripe immediately after the batch is
+migrated.</li>
+</ul>
+<p>Because the maintenance thread respects the same lock-striping
+boundaries as the worker threads and only holds the lock for the current
+slice of migration, no thread ever waits indefinitely for another thread
+holding a required secondary lock.</p>
+<h3 id="completion-of-expansion">Completion of Expansion</h3>
+<p>Once <code>expand_bucket</code> reaches the total capacity of the old
+table:</p>
+<ol type="1">
+<li>The maintenance thread acquires the global hash table lock to
+finalize the transition.</li>
+<li>The <code>old_hashtable</code> reference is cleared and its memory
+freed.</li>
+<li>The expansion flag is reset, returning Memcached to single-table
+operation until the next threshold trigger.</li>
+</ol>
+<p>By combining background execution, granular lock striping, and
+single-lock invariants during table lookups, Memcached guarantees
+uninterrupted thread progress and complete deadlock prevention during
+table expansion operations.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-hash-table-expansion-and-deadlock-prevention';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Using Memcached for Session Storage: Key Precautions - memcached</title>
+    <meta name="description" content="Memcached is a high-performance, distributed memory caching system frequently used to accelerate web applications, but using it as a user session store requires deliberate planning and architectural safeguards. Because Memcached is an ephemeral, in-memory">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/using-memcached-for-session-storage-key-precautions">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Using Memcached for Session Storage: Key Precautions - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/using-memcached-for-session-storage-key-precautions" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is a high-performance, distributed memory caching system frequently used to accelerate web applications, but using it as a user session store requires deliberate planning and architectural safeguards. Because Memcached is an ephemeral, in-memory" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="using-memcached-for-session-storage-key-precautions">Using
+Memcached for Session Storage: Key Precautions</h1>
+<p>Memcached is a high-performance, distributed memory caching system
+frequently used to accelerate web applications, but using it as a user
+session store requires deliberate planning and architectural safeguards.
+Because Memcached is an ephemeral, in-memory cache rather than a durable
+database, storing critical state data like session tokens introduces
+risks related to data volatility, cache eviction, and network security.
+This guide outlines the essential precautions you must implement—ranging
+from eviction management and redundancy to encryption and network
+isolation—to ensure user sessions remain reliable, secure, and
+uninterrupted.</p>
+<h3 id="prevent-unexpected-session-eviction">Prevent Unexpected Session
+Eviction</h3>
+<p>Memcached uses a Least Recently Used (LRU) algorithm to free up space
+when memory limits are reached. In an under-provisioned environment,
+Memcached will silently discard active session keys to accommodate new
+writes, abruptly logging users out of your application.</p>
+<ul>
+<li><strong>Size Memory Appropriately:</strong> Dedicate a discrete
+Memcached cluster solely to session data, separate from general
+application caching. General caches fluctuate rapidly and can crowd out
+session keys.</li>
+<li><strong>Disable LRU Evictions for Sessions:</strong> If supported by
+your deployment strategy, run the daemon with the <code>-M</code> flag
+(return out-of-memory errors rather than evicting keys). This allows
+your application to handle capacity errors gracefully rather than
+randomly terminating user sessions.</li>
+<li><strong>Monitor Eviction Metrics:</strong> Continuously monitor the
+<code>evictions</code> and <code>bytes</code> statistics using
+monitoring tools. Any non-zero growth in evictions on a session store
+indicates an immediate need to scale memory.</li>
+</ul>
+<h3 id="address-volatility-and-lack-of-persistence">Address Volatility
+and Lack of Persistence</h3>
+<p>Memcached stores all records exclusively in RAM. A crash, service
+restart, or host reboot will instantly destroy all session data,
+invalidating all active logins.</p>
+<ul>
+<li><strong>Evaluate Tolerance for Mass Logouts:</strong> If your
+application cannot tolerate users being logged out due to an unexpected
+restart, consider using an in-memory store with persistence features
+(such as Redis) or implement a hybrid strategy where sessions are
+written to a persistent database (e.g., PostgreSQL or DynamoDB) and
+cached in Memcached.</li>
+<li><strong>Implement High Availability and Clustering:</strong> While
+standard Memcached does not feature native replication, you should use
+client-side consistent hashing across multiple nodes. This ensures that
+a single node failure only invalidates a fraction of the total sessions
+rather than the entire user base.</li>
+</ul>
+<h3 id="secure-network-access-and-authentication">Secure Network Access
+and Authentication</h3>
+<p>By default, Memcached lacks fine-grained access control and transmits
+data unencrypted over the network, making it vulnerable to interception
+and unauthorized access if exposed.</p>
+<ul>
+<li><strong>Isolate on Private Networks:</strong> Never expose a
+Memcached port (default: 11211) to the public internet. Restrict access
+strictly to application servers using virtual private clouds (VPCs),
+internal subnets, and strict firewall rules or security groups.</li>
+<li><strong>Disable UDP Support:</strong> Memcached's UDP listener has
+historically been targeted for amplification DDoS attacks. Disable UDP
+entirely by passing the <code>-U 0</code> parameter at startup.</li>
+<li><strong>Use SASL and Modern TLS:</strong> Enable Simple
+Authentication and Security Layer (SASL) to require authentication for
+all read and write commands. Where supported, compile and run Memcached
+with TLS enabled to encrypt session data in transit between application
+workers and the cache.</li>
+</ul>
+<h3 id="enforce-application-level-session-security">Enforce
+Application-Level Session Security</h3>
+<p>Relying entirely on the storage backend for session safety is an
+anti-pattern. Session management best practices must be enforced within
+the application logic.</p>
+<ul>
+<li><strong>Encrypt Payload Data:</strong> Encrypt sensitive session
+payloads on the application server prior to writing them to Memcached.
+Even if the cache is compromised or inspected, the raw session contents
+remain unreadable without the application's private master key.</li>
+<li><strong>Synchronize Expiration (TTL):</strong> Ensure that the
+Memcached key Time-To-Live (TTL) strictly matches the session timeout
+enforced by the application. Allowing keys to linger indefinitely wastes
+memory, while premature expiration leads to broken user flows.</li>
+<li><strong>Use Cryptographically Secure Session IDs:</strong> Memcached
+uses key lookups; predictable session IDs allow malicious actors to
+perform key-guessing attacks to hijack active sessions. Generate session
+identifiers using a cryptographically secure pseudorandom number
+generator (CSPRNG) with at least 128 bits of entropy.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/using-memcached-for-session-storage-key-precautions';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

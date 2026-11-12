@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Maximum Key Length Limits - memcached</title>
+    <meta name="description" content="Memcached enforces strict protocol-level limits on key sizes, restricting keys to a standard maximum of 250 bytes. This article examines how Memcached processes incoming keys approaching this boundary, the architectural impact of large keys on slab alloca">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-maximum-key-length-limits">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Maximum Key Length Limits - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-maximum-key-length-limits" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached enforces strict protocol-level limits on key sizes, restricting keys to a standard maximum of 250 bytes. This article examines how Memcached processes incoming keys approaching this boundary, the architectural impact of large keys on slab alloca" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-maximum-key-length-limits">How Memcached
+Handles Maximum Key Length Limits</h1>
+<p>Memcached enforces strict protocol-level limits on key sizes,
+restricting keys to a standard maximum of 250 bytes. This article
+examines how Memcached processes incoming keys approaching this
+boundary, the architectural impact of large keys on slab allocation and
+memory consumption, how the engine handles violations at the protocol
+layer, and recommended practices for mitigating the overhead of long
+keys.</p>
+<h2 id="the-protocol-level-key-limit">The Protocol-Level Key Limit</h2>
+<p>Memcached defines a hard ceiling for key names via the
+<code>KEY_MAX_LENGTH</code> constant in its source code, which is set to
+250 bytes by default. While the binary protocol format uses a 16-bit
+field that theoretically allows key lengths up to 65,535 bytes, the
+underlying engine enforces the 250-byte limit universally across both
+ASCII (text) and binary implementations.</p>
+<p>When a client sends a command containing a key:</p>
+<ul>
+<li><strong>Under or at 250 bytes:</strong> The key is accepted, parsed,
+and routed to the internal storage engine.</li>
+<li><strong>Exceeding 250 bytes:</strong> The command is rejected
+immediately during the request-parsing stage. The text protocol returns
+a <code>CLIENT_ERROR bad command line format</code> or
+<code>CLIENT_ERROR bad key</code>, while the binary protocol returns an
+error response with status code <code>0x0003</code> (EINVAL / Invalid
+Arguments). The engine rejects these items before allocating memory or
+invoking the storage subsystem.</li>
+</ul>
+<h2 id="item-allocation-and-overhead-for-near-limit-keys">Item
+Allocation and Overhead for Near-Limit Keys</h2>
+<p>Memcached does not store keys and values separately; they are packed
+together into contiguous memory blocks called <code>item</code>
+structures. An item’s total memory footprint consists of:</p>
+<ol type="1">
+<li>The internal <code>item</code> header structure (typically 32 to 48
+bytes depending on architecture and compile options).</li>
+<li>The key string itself (up to 250 bytes), plus a null-terminator
+byte.</li>
+<li>Metadata such as flags, CAS (Check-And-Set) identifiers, and the
+length of the data payload.</li>
+<li>The actual value payload.</li>
+</ol>
+<pre><code>+------------------+-------------------+----------------+---------------+
+| Item Header      | Key (1-250 bytes) | Suffix / Meta  | Value Payload |
++------------------+-------------------+----------------+---------------+
+|&lt;-------------------------- Total Item Size --------------------------&gt;|</code></pre>
+<p>When an incoming key approaches the 250-byte limit (for example, 240
+to 250 bytes), it directly increases the baseline size of the item
+before any payload is added. If an application stores a tiny 4-byte
+integer using a 250-byte key, the total item overhead can exceed 300
+bytes.</p>
+<h2 id="slab-class-selection-and-internal-fragmentation">Slab Class
+Selection and Internal Fragmentation</h2>
+<p>Memcached manages memory through a slab allocator, organizing memory
+into pages (typically 1 MB) divided into fixed-size chunks. Slab classes
+grow by a configurable factor (defaulting to 1.25x), starting at a base
+chunk size (often 96 or 128 bytes).</p>
+<p>When a key approaches maximum length:</p>
+<ul>
+<li><strong>Slab Class Escalation:</strong> The combined size of the
+overhead, the large key, and the value pushes the total item size into a
+higher slab class than a smaller key with the identical value would
+require.</li>
+<li><strong>Internal Fragmentation:</strong> If the item size barely
+crosses a chunk boundary—for example, measuring 516 bytes when a slab
+class offers 512-byte and 640-byte chunks—the item is placed in the
+640-byte chunk. This leaves unused slack space within the chunk that
+cannot be reclaimed by other allocations.</li>
+<li><strong>Eviction Pressure:</strong> Larger chunks mean fewer items
+per 1 MB page. By consuming higher slab classes, large keys cause memory
+to exhaust faster within those specific classes, accelerating Least
+Recently Used (LRU) evictions for items of comparable sizes.</li>
+</ul>
+<h2 id="hash-table-operations">Hash Table Operations</h2>
+<p>Keys of any valid length are processed by Memcached’s primary hash
+table using the Jenkins or Murmur3 hashing algorithms. Approaching the
+250-byte limit introduces negligible hashing overhead, as modern CPUs
+compute hashes over 250 bytes in fractions of a microsecond.</p>
+<p>However, during a hash collision lookup, Memcached performs a
+byte-by-byte memory comparison (<code>memcmp</code>) against the
+candidate keys linked in that hash bucket. Longer keys require slightly
+more memory read operations during collision resolution, but this
+performance difference is rarely a bottleneck compared to network
+I/O.</p>
+<h2 id="client-side-mitigations">Client-Side Mitigations</h2>
+<p>When application requirements dictate identifiers that exceed or sit
+dangerously close to the 250-byte boundary (such as long URLs, complex
+query strings, or deeply nested cache tags), standard practice moves the
+length management to the client layer:</p>
+<ul>
+<li><strong>Cryptographic or Fast Non-Cryptographic Hashing:</strong>
+The client hashes the identifier using SHA-256 or Murmur3 before
+querying Memcached. A hex-encoded SHA-256 hash is always 64 bytes,
+staying well below the 250-byte limit and ensuring predictable slab
+class distribution.</li>
+<li><strong>Prefixed Namespace Truncation:</strong> If readability in
+cache dumps is required, clients can store a truncated prefix combined
+with a trailing hash (for example,
+<code>users:settings:&lt;16-char-prefix&gt;:&lt;32-char-hash&gt;</code>).</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-maximum-key-length-limits';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

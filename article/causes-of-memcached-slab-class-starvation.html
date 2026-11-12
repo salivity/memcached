@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Causes of Memcached Slab Class Starvation - memcached</title>
+    <meta name="description" content="Slab class starvation occurs in Memcached when an application with varying payload distributions exhausts memory in specific slab classes while other classes retain underutilized space, resulting in unexpected cache evictions and degraded hit rates. Memca">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/causes-of-memcached-slab-class-starvation">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Causes of Memcached Slab Class Starvation - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/causes-of-memcached-slab-class-starvation" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Slab class starvation occurs in Memcached when an application with varying payload distributions exhausts memory in specific slab classes while other classes retain underutilized space, resulting in unexpected cache evictions and degraded hit rates. Memca" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="causes-of-memcached-slab-class-starvation">Causes of Memcached
+Slab Class Starvation</h1>
+<p>Slab class starvation occurs in Memcached when an application with
+varying payload distributions exhausts memory in specific slab classes
+while other classes retain underutilized space, resulting in unexpected
+cache evictions and degraded hit rates. Memcached’s slab allocation
+model separates memory into rigid, class-specific pools to eliminate
+external memory fragmentation. However, when workload characteristics
+shift or an application writes a diverse mix of object sizes, this rigid
+partitioning causes localized memory pressure. This article details how
+Memcached manages memory, why uneven item sizes trigger slab class
+starvation, and the primary mechanisms responsible for this performance
+bottleneck.</p>
+<h3 id="the-mechanics-of-slab-allocation">The Mechanics of Slab
+Allocation</h3>
+<p>Memcached manages memory by dividing its total allocated pool into
+1MB pages. These pages are assigned to specific "slab classes," where
+each class is configured to store chunks of a specific maximum size
+based on a geometric growth factor (defaulting to 1.25). For example,
+Slab Class 1 might hold items up to 96 bytes, Slab Class 2 holds items
+up to 120 bytes, and so on.</p>
+<p>When a new item arrives, Memcached finds the smallest slab class that
+can accommodate the item's payload and associated metadata. If that slab
+class has no free chunks, Memcached requests a new 1MB page from the
+global memory pool, slices it into chunks of that class's size, and
+stores the object.</p>
+<h3 id="why-varying-payload-distributions-cause-starvation">Why Varying
+Payload Distributions Cause Starvation</h3>
+<p>In an ideal, static workload, memory pages are distributed
+proportionally to the frequency of payload sizes. However, dynamic
+applications with varying payload distributions create severe imbalances
+through the following mechanisms:</p>
+<h4 id="1-permanent-page-allocation-and-inelasticity">1. Permanent Page
+Allocation and Inelasticity</h4>
+<p>Once a 1MB page is assigned to a specific slab class, it historically
+remains tied to that class for the lifetime of the process. If an
+application initially generates a high volume of small payloads (e.g.,
+100-byte session tokens), Memcached allocates most of its 1MB pages to
+the smaller slab classes. If the application's traffic profile shifts
+toward larger payloads (e.g., 4KB serialized objects), the larger slab
+classes quickly consume any remaining free global pages. Once the global
+pool is empty, the larger slab class cannot claim pages from the smaller
+slab classes, even if those smaller classes are idle or contain stale
+data.</p>
+<h4 id="2-class-local-lru-evictions">2. Class-Local LRU Evictions</h4>
+<p>Memcached does not use a single, global Least Recently Used (LRU)
+queue across the entire instance. Instead, each slab class maintains its
+own distinct LRU list. When a slab class exhausts its allocated chunks
+and no free 1MB pages remain in the global pool, Memcached immediately
+triggers an LRU eviction <em>within that specific slab class</em>.</p>
+<p>As a result, an application with fluctuating object sizes will
+experience premature evictions in the starved slab class. Frequently
+accessed items in the stressed class will be discarded while dormant,
+rarely accessed items in over-allocated slab classes sit untouched.</p>
+<h4 id="3-internal-fragmentation-and-chunk-spacing">3. Internal
+Fragmentation and Chunk Spacing</h4>
+<p>The growth factor between slab classes determines the step size
+between chunk capacities. If an application writes items that
+consistently fall just above a slab class boundary, those items are
+forced into the next larger class. For example, an object that is 1 byte
+larger than Slab Class 5's chunk limit will be placed into Slab Class 6,
+leaving a substantial portion of that chunk empty. This internal
+fragmentation accelerates page consumption in larger slab classes,
+hastening starvation when payloads fluctuate around these
+boundaries.</p>
+<h4 id="4-asymmetrical-key-lifetimes">4. Asymmetrical Key Lifetimes</h4>
+<p>Varying payload sizes often correspond to different data types with
+different Time-to-Live (TTL) values. For instance, large bulk-query
+results might have short TTLs, while small configuration strings have
+long TTLs. If short-lived, large items arrive in bursty waves, they can
+trigger rapid page consumption in their respective slab classes. Once
+the global allocation limit is reached, sudden spikes in traffic for
+those larger payloads cause severe eviction loops within those specific
+classes, even though the total memory occupied by expired chunks
+throughout the server could easily accommodate the incoming data.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/causes-of-memcached-slab-class-starvation';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Consistency During Network Partitions - memcached</title>
+    <meta name="description" content="Maintaining consistency across a Memcached cluster during a network partition is fundamentally shaped by its decentralized, shared-nothing architecture. Because native Memcached nodes do not communicate or replicate data among themselves, the responsibili">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-consistency-during-network-partitions">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Consistency During Network Partitions - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-consistency-during-network-partitions" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Maintaining consistency across a Memcached cluster during a network partition is fundamentally shaped by its decentralized, shared-nothing architecture. Because native Memcached nodes do not communicate or replicate data among themselves, the responsibili" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-consistency-during-network-partitions">Memcached
+Consistency During Network Partitions</h1>
+<p>Maintaining consistency across a Memcached cluster during a network
+partition is fundamentally shaped by its decentralized, shared-nothing
+architecture. Because native Memcached nodes do not communicate or
+replicate data among themselves, the responsibility of managing node
+state and data placement falls entirely on client libraries and proxy
+layers. This article explains how client-side hashing, proxy routing,
+and time-to-live (TTL) mechanics work together to handle network
+partitions, along with the operational trade-offs between consistency
+and availability in a partitioned cluster.</p>
+<h2 id="the-shared-nothing-model-and-lack-of-consensus">The
+Shared-Nothing Model and Lack of Consensus</h2>
+<p>Native Memcached uses a shared-nothing design where individual nodes
+operate in complete isolation. Unlike distributed databases such as
+Cassandra or Redis Cluster, Memcached has no internal consensus
+protocols (like Raft or Paxos), no leader election, and no inter-node
+replication.</p>
+<p>Because nodes do not coordinate, a network partition cannot cause a
+split-brain condition between the servers themselves. Instead,
+consistency issues emerge on the client side when network breaks isolate
+subsets of clients from specific nodes, causing disparate views of the
+cache topology.</p>
+<h2 id="consistent-hashing-and-dynamic-rebalancing">Consistent Hashing
+and Dynamic Rebalancing</h2>
+<p>Most Memcached implementations use client-side consistent hashing
+algorithms, such as Ketama, to map cache keys to specific nodes.
+Consistent hashing arranges nodes in a virtual ring to ensure that
+adding or removing a server only affects a minimal number of keys.</p>
+<p>During a network partition, client behavior typically follows one of
+two approaches:</p>
+<ul>
+<li><strong>Dynamic Re-hashing (Failover):</strong> If a client cannot
+reach a node, it removes the node from its local ring and remaps keys to
+the next available server. While this maintains high availability, it
+introduces consistency anomalies:
+<ul>
+<li><strong>Duplicate Writes:</strong> A client partitioned from Node A
+writes a new value for a key to Node B. Another client that can reach
+Node A reads the old value.</li>
+<li><strong>Stale Reads:</strong> Once the partition heals, data on both
+nodes may conflict until expiration occurs.</li>
+</ul></li>
+<li><strong>Static Hashing (Fail-Stop):</strong> The client refuses to
+re-route requests destined for an unreachable node, treating all
+requests to that node as cache misses or network errors. This strategy
+prevents stale duplicate data on alternate nodes, prioritizing
+consistency over availability.</li>
+</ul>
+<h2 id="proxy-based-routing-with-mcrouter">Proxy-Based Routing with
+Mcrouter</h2>
+<p>In larger architectures, organizations deploy proxies like Facebook’s
+Mcrouter to manage clustering logic centrally instead of relying on
+individual application runtimes. Mcrouter handles network partitions via
+configurable route handles:</p>
+<ul>
+<li><strong>AllSync or AllAsync Routes:</strong> Distribute writes to
+multiple pools or data centers. If a partition isolates one pool, the
+proxy can log the failed invalidation or retry asynchronously.</li>
+<li><strong>Failover Routes:</strong> Allow requests to fall back to
+secondary pools only under strict error conditions, reducing
+cross-client state divergence.</li>
+<li><strong>Cold Cache Warmup:</strong> Directs queries away from an
+isolated, newly rejoined node to prevent massive read spikes to the
+backing database.</li>
+</ul>
+<h2 id="invalidation-conflicts-and-cache-eviction">Invalidation
+Conflicts and Cache Eviction</h2>
+<p>Because Memcached is an ephemeral cache rather than a durable
+datastore, maintaining strict consistency across partitions is generally
+deemed unnecessary. Instead, systems use defensive caching patterns to
+resolve eventual divergence:</p>
+<ul>
+<li><strong>Short Time-to-Live (TTL):</strong> Enforcing conservative
+TTL values guarantees that conflicting keys generated during a network
+partition naturally expire, bounding the duration of any
+inconsistency.</li>
+<li><strong>Leases and Gflags:</strong> Advanced clients issue
+short-lived lease tokens on a cache miss. If a partition occurs
+mid-transaction, stale writes are rejected if the lease token no longer
+matches.</li>
+<li><strong>Delete-on-Write (Cache Aside):</strong> Instead of updating
+values during a network disruption, application layers issue
+delete/invalidation commands. If an invalidation fails due to a network
+partition, the application relies on database-level read-through logic
+to reconcile the state once connectivity returns.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-consistency-during-network-partitions';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

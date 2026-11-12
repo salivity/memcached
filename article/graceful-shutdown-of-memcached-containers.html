@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graceful Shutdown of Memcached Containers - memcached</title>
+    <meta name="description" content="Graceful shutdown of running Memcached containers involves coordinating container orchestrators, process signal handling, and client-side routing to terminate instances without dropping active connections or causing cache stampedes. Because Memcached stor">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/graceful-shutdown-of-memcached-containers">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Graceful Shutdown of Memcached Containers - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/graceful-shutdown-of-memcached-containers" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Graceful shutdown of running Memcached containers involves coordinating container orchestrators, process signal handling, and client-side routing to terminate instances without dropping active connections or causing cache stampedes. Because Memcached stor" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="graceful-shutdown-of-memcached-containers">Graceful Shutdown of
+Memcached Containers</h1>
+<p>Graceful shutdown of running Memcached containers involves
+coordinating container orchestrators, process signal handling, and
+client-side routing to terminate instances without dropping active
+connections or causing cache stampedes. Because Memcached stores data in
+volatile memory and focuses on ultra-low latency, orchestrators like
+Docker and Kubernetes rely on phased teardowns—deregistering instances
+from service discovery, waiting for in-flight requests to complete, and
+safely terminating the daemon via operating system signals.</p>
+<h3 id="the-container-termination-sequence">The Container Termination
+Sequence</h3>
+<p>When a container orchestrator initiates the shutdown of a Memcached
+container, it follows a structured lifecycle:</p>
+<ol type="1">
+<li><strong>Endpoint Deregistration:</strong> The orchestrator removes
+the target container's IP address from active service pools, endpoints,
+or DNS records to stop new traffic from reaching the node.</li>
+<li><strong>Signal Dispatch (<code>SIGTERM</code>):</strong> The
+orchestrator sends a <code>SIGTERM</code> signal to PID 1 inside the
+container, notifying the application that shutdown has commenced.</li>
+<li><strong>Grace Period Countdown:</strong> A predefined timer (such as
+Kubernetes' <code>terminationGracePeriodSeconds</code>) begins counting
+down.</li>
+<li><strong>Forced Termination (<code>SIGKILL</code>):</strong> If the
+container does not exit before the grace period expires, the
+orchestrator sends a <code>SIGKILL</code> signal, abruptly terminating
+the process.</li>
+</ol>
+<h3 id="process-handling-and-pid-1-pitfalls">Process Handling and PID 1
+Pitfalls</h3>
+<p>Memcached responds to standard termination signals like
+<code>SIGINT</code> and <code>SIGTERM</code> by breaking its event loop,
+closing active listening sockets, and exiting. However, inside a
+container, process isolation requires that the signal properly reaches
+the binary:</p>
+<ul>
+<li><strong>Signal Forwarding:</strong> If Memcached is launched via a
+shell wrapper script without using <code>exec</code> (e.g.,
+<code>sh -c memcached</code>), the shell runs as PID 1 and may swallow
+incoming <code>SIGTERM</code> signals. To ensure graceful handling, use
+the <code>exec</code> form in the Dockerfile <code>ENTRYPOINT</code> or
+<code>CMD</code>, or use an init system like <code>tini</code> or
+<code>dumb-init</code>.</li>
+<li><strong>Immediate Socket Closure:</strong> By default, Memcached
+terminates rapidly once it receives <code>SIGTERM</code>. It does not
+support extensive connection draining mechanisms natively; it
+immediately stops accepting new connections and exits after current
+event iterations.</li>
+</ul>
+<h3 id="coordinating-with-kubernetes-prestop-hooks">Coordinating with
+Kubernetes PreStop Hooks</h3>
+<p>Because Memcached terminates almost instantly upon receiving
+<code>SIGTERM</code>, an orchestrator may deliver the termination signal
+before networking layers (such as <code>kube-proxy</code>, cloud load
+balancers, or ingress controllers) have completely removed the pod IP
+from routing tables. This race condition leads to client connection
+errors.</p>
+<p>To prevent this, deployments use a <code>preStop</code> lifecycle
+hook:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">lifecycle</span><span class="kw">:</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">preStop</span><span class="kw">:</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">exec</span><span class="kw">:</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">command</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="st">&quot;/bin/sh&quot;</span><span class="kw">,</span><span class="at"> </span><span class="st">&quot;-c&quot;</span><span class="kw">,</span><span class="at"> </span><span class="st">&quot;sleep 5&quot;</span><span class="kw">]</span></span></code></pre></div>
+<p>The <code>preStop</code> hook executes before <code>SIGTERM</code> is
+sent. A short pause (e.g., 5 to 10 seconds) delays the container's
+shutdown, giving network layers, service meshes, and client libraries
+sufficient time to detect node withdrawal and stop routing read/write
+operations to the shutting-down instance.</p>
+<h3 id="handling-client-connections-and-data-volatility">Handling Client
+Connections and Data Volatility</h3>
+<p>Because Memcached is an ephemeral cache rather than a persistent
+database, graceful shutdown focuses on network stability rather than
+flushing state to disk:</p>
+<ul>
+<li><strong>Client-Side Hashing and Ejection:</strong> Memcached clients
+typically employ consistent hashing (such as Ketama). When a container
+shuts down, clients must detect the socket closure or receive updated
+cluster topologies to redirect keys to remaining nodes or degrade
+gracefully to the primary datastore.</li>
+<li><strong>Connection Draining:</strong> Applications using persistent
+connection pools must handle dropped connections gracefully. The delay
+introduced by network deregistration allows clients to complete pending
+<code>get</code> and <code>set</code> commands rather than receiving TCP
+reset (<code>RST</code>) packets during an active transfer.</li>
+<li><strong>Warm-up Strategies:</strong> Shutting down multiple
+Memcached containers simultaneously can trigger a cache stampede against
+downstream databases. Orchestrators should enforce rolling updates with
+a conservative <code>maxUnavailable</code> setting (e.g., terminating
+only one replica at a time) to allow backend databases to absorb the
+temporary drop in cache hit ratio.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/graceful-shutdown-of-memcached-containers';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

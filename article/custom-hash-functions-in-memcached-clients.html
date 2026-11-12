@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Hash Functions in Memcached Clients - memcached</title>
+    <meta name="description" content="This article explores how developers can implement and configure custom hash functions within Memcached client libraries to control key distribution across clusters. It covers the role of client-side hashing in distributed caching, the reasons for overrid">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/custom-hash-functions-in-memcached-clients">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Custom Hash Functions in Memcached Clients - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/custom-hash-functions-in-memcached-clients" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explores how developers can implement and configure custom hash functions within Memcached client libraries to control key distribution across clusters. It covers the role of client-side hashing in distributed caching, the reasons for overrid" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="custom-hash-functions-in-memcached-clients">Custom Hash
+Functions in Memcached Clients</h1>
+<p>This article explores how developers can implement and configure
+custom hash functions within Memcached client libraries to control key
+distribution across clusters. It covers the role of client-side hashing
+in distributed caching, the reasons for overriding default hashing
+logic, and concrete implementation examples across popular programming
+languages such as Java, Python, and C/C++. Finally, it outlines best
+practices for selecting and testing custom hash algorithms to maintain
+uniform distribution and high throughput.</p>
+<h2 id="understanding-client-side-hashing-in-memcached">Understanding
+Client-Side Hashing in Memcached</h2>
+<p>Memcached servers operate independently in a cluster without native
+inter-node communication or built-in sharding. As a result, the
+responsibility of determining which server stores a given key falls
+entirely on the client library.</p>
+<p>The client library performs this operation in two phases:</p>
+<ol type="1">
+<li><strong>Key Hashing:</strong> Computing a 32-bit or 64-bit integer
+from the key using a hashing algorithm (such as CRC32, FNV-1a, or
+MurmurHash).</li>
+<li><strong>Server Mapping:</strong> Mapping the resulting hash to a
+specific server, typically using modulo arithmetic or consistent hashing
+(like the Ketama algorithm).</li>
+</ol>
+<p>Developers often implement custom hash functions to guarantee
+consistent routing across heterogeneous application environments (for
+example, ensuring Java and Go microservices map identical keys to the
+same cache nodes) or to mitigate hotspotting caused by poor default key
+distribution.</p>
+<hr />
+<h2
+id="implementing-custom-hash-functions-across-client-libraries">Implementing
+Custom Hash Functions Across Client Libraries</h2>
+<h3 id="1-java-spymemcached">1. Java (<code>spymemcached</code>)</h3>
+<p>In <code>spymemcached</code>, the hashing mechanism is defined by the
+<code>HashAlgorithm</code> interface. To implement a custom hash
+function:</p>
+<ol type="1">
+<li>Create a class implementing
+<code>net.spy.memcached.HashAlgorithm</code>.</li>
+<li>Override the <code>hash(String k)</code> method to return a
+<code>long</code>.</li>
+<li>Provide the custom implementation to the
+<code>ConnectionFactoryBuilder</code>.</li>
+</ol>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode java"><code class="sourceCode java"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">net</span><span class="op">.</span><span class="im">spy</span><span class="op">.</span><span class="im">memcached</span><span class="op">.</span><span class="im">ConnectionFactoryBuilder</span><span class="op">;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">net</span><span class="op">.</span><span class="im">spy</span><span class="op">.</span><span class="im">memcached</span><span class="op">.</span><span class="im">HashAlgorithm</span><span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">net</span><span class="op">.</span><span class="im">spy</span><span class="op">.</span><span class="im">memcached</span><span class="op">.</span><span class="im">MemcachedClient</span><span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">java</span><span class="op">.</span><span class="im">net</span><span class="op">.</span><span class="im">InetSocketAddress</span><span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="im">java</span><span class="op">.</span><span class="im">util</span><span class="op">.</span><span class="im">Collections</span><span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="kw">public</span> <span class="kw">class</span> CustomMemcachedExample <span class="op">{</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">public</span> <span class="dt">static</span> <span class="dt">void</span> <span class="fu">main</span><span class="op">(</span><span class="bu">String</span><span class="op">[]</span> args<span class="op">)</span> <span class="kw">throws</span> <span class="bu">Exception</span> <span class="op">{</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>        HashAlgorithm customMurmur <span class="op">=</span> <span class="kw">new</span> <span class="fu">HashAlgorithm</span><span class="op">()</span> <span class="op">{</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>            <span class="at">@Override</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>            <span class="kw">public</span> <span class="dt">long</span> <span class="fu">hash</span><span class="op">(</span><span class="dt">final</span> <span class="bu">String</span> k<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>                <span class="co">// Custom 32-bit or 64-bit hash logic</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> <span class="fu">customHashLogic</span><span class="op">(</span>k<span class="op">.</span><span class="fu">getBytes</span><span class="op">());</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>            <span class="kw">private</span> <span class="dt">long</span> <span class="fu">customHashLogic</span><span class="op">(</span><span class="dt">byte</span><span class="op">[]</span> bytes<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>                <span class="dt">long</span> hash <span class="op">=</span> <span class="bn">0xcbf29ce484222325L</span><span class="op">;</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> <span class="op">(</span><span class="dt">byte</span> b <span class="op">:</span> bytes<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>                    hash <span class="op">^=</span> <span class="op">(</span>b <span class="op">&amp;</span> <span class="bn">0xff</span><span class="op">);</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>                    hash <span class="op">*=</span> <span class="bn">0x100000001b3L</span><span class="op">;</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> hash<span class="op">;</span></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>        ConnectionFactoryBuilder builder <span class="op">=</span> <span class="kw">new</span> <span class="fu">ConnectionFactoryBuilder</span><span class="op">();</span></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a>        builder<span class="op">.</span><span class="fu">setHashAlg</span><span class="op">(</span>customMurmur<span class="op">);</span></span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>        builder<span class="op">.</span><span class="fu">setLocatorType</span><span class="op">(</span>ConnectionFactoryBuilder<span class="op">.</span><span class="fu">Locator</span><span class="op">.</span><span class="fu">CONSISTENT</span><span class="op">);</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>        MemcachedClient client <span class="op">=</span> <span class="kw">new</span> <span class="fu">MemcachedClient</span><span class="op">(</span></span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>            builder<span class="op">.</span><span class="fu">build</span><span class="op">(),</span> </span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>            <span class="bu">Collections</span><span class="op">.</span><span class="fu">singletonList</span><span class="op">(</span><span class="kw">new</span> <span class="bu">InetSocketAddress</span><span class="op">(</span><span class="st">&quot;localhost&quot;</span><span class="op">,</span> <span class="dv">11211</span><span class="op">))</span></span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">);</span></span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>        client<span class="op">.</span><span class="fu">set</span><span class="op">(</span><span class="st">&quot;key&quot;</span><span class="op">,</span> <span class="dv">3600</span><span class="op">,</span> <span class="st">&quot;value&quot;</span><span class="op">);</span></span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h3 id="2-python-pymemcache">2. Python (<code>pymemcache</code>)</h3>
+<p><code>pymemcache</code> supports custom key hashing via custom client
+configurations or by wrapping cluster implementations. When using
+<code>pymemcache.client.hash.HashClient</code>, developers can provide a
+custom <code>hasher</code> function:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pymemcache.client.<span class="bu">hash</span> <span class="im">import</span> HashClient</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> custom_hasher(key):</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">&quot;&quot;&quot;Computes a custom 32-bit integer hash for a string key.&quot;&quot;&quot;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">isinstance</span>(key, <span class="bu">str</span>):</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        key <span class="op">=</span> key.encode(<span class="st">&#39;utf-8&#39;</span>)</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Example: Simple FNV-1a 32-bit implementation</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    fnv_prime <span class="op">=</span> <span class="dv">16777619</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    hash_val <span class="op">=</span> <span class="dv">2166136261</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> byte <span class="kw">in</span> key:</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        hash_val <span class="op">^=</span> byte</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        hash_val <span class="op">=</span> (hash_val <span class="op">*</span> fnv_prime) <span class="op">&amp;</span> <span class="bn">0xFFFFFFFF</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> hash_val</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>servers <span class="op">=</span> [(<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">11211</span>), (<span class="st">&#39;127.0.0.1&#39;</span>, <span class="dv">11212</span>)]</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="co"># Pass the custom hasher to the HashClient</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>client <span class="op">=</span> HashClient(</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    servers,</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    hasher<span class="op">=</span>custom_hasher,</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    use_pooling<span class="op">=</span><span class="va">True</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>client.<span class="bu">set</span>(<span class="st">&#39;custom_key&#39;</span>, <span class="st">&#39;stored_value&#39;</span>)</span></code></pre></div>
+<hr />
+<h3 id="3-c--c-libmemcached">3. C / C++ (<code>libmemcached</code>)</h3>
+<p>The <code>libmemcached</code> library provides a native
+behavior-setting API that allows developers to define custom callbacks
+for hashing.</p>
+<ol type="1">
+<li>Implement a function matching the signature
+<code>uint32_t (*memcached_hash_fn)(const char *key, size_t key_length, void *context)</code>.</li>
+<li>Apply the callback using
+<code>memcached_behavior_set_key_hash()</code>.</li>
+</ol>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;libmemcached/memcached.h&gt;</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="dt">uint32_t</span> custom_hash<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>key<span class="op">,</span> <span class="dt">size_t</span> key_length<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>context<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span> hash <span class="op">=</span> <span class="dv">5381</span><span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">size_t</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> key_length<span class="op">;</span> <span class="op">++</span>i<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        hash <span class="op">=</span> <span class="op">((</span>hash <span class="op">&lt;&lt;</span> <span class="dv">5</span><span class="op">)</span> <span class="op">+</span> hash<span class="op">)</span> <span class="op">+</span> key<span class="op">[</span>i<span class="op">];</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> hash<span class="op">;</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    memcached_st <span class="op">*</span>memc <span class="op">=</span> memcached_create<span class="op">(</span>NULL<span class="op">);</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Set custom key hashing function</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    memcached_behavior_set_key_hash<span class="op">(</span>memc<span class="op">,</span> MEMCACHED_HASH_CUSTOM<span class="op">);</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    memcached_set_hash_callback<span class="op">(</span>memc<span class="op">,</span> custom_hash<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Proceed with adding servers and setting keys...</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    memcached_free<span class="op">(</span>memc<span class="op">);</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h3 id="4-go-gomemcache">4. Go (<code>gomemcache</code>)</h3>
+<p>The official <code>bradfitz/gomemcache</code> library uses the
+<code>ServerList</code> struct to implement the
+<code>ServerSelector</code> interface. To provide a custom hash:</p>
+<ol type="1">
+<li>Implement the <code>gomemcache.ServerSelector</code> interface.</li>
+<li>In the <code>PickServer(key string)</code> method, apply the custom
+hash function and map it to an available server address.</li>
+</ol>
+<div class="sourceCode" id="cb4"><pre class="sourceCode go"><code class="sourceCode go"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">package</span> main</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="op">(</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;net&quot;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;sync&quot;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;github.com/bradfitz/gomemcache/memcache&quot;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="op">)</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> CustomSelector <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    mu      sync<span class="op">.</span>RWMutex</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    servers <span class="op">[]</span>net<span class="op">.</span>Addr</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>s <span class="op">*</span>CustomSelector<span class="op">)</span> PickServer<span class="op">(</span>key <span class="dt">string</span><span class="op">)</span> <span class="op">(</span>net<span class="op">.</span>Addr<span class="op">,</span> <span class="dt">error</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    s<span class="op">.</span>mu<span class="op">.</span>RLock<span class="op">()</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">defer</span> s<span class="op">.</span>mu<span class="op">.</span>RUnlock<span class="op">()</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">len</span><span class="op">(</span>s<span class="op">.</span>servers<span class="op">)</span> <span class="op">==</span> <span class="dv">0</span> <span class="op">{</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="ot">nil</span><span class="op">,</span> memcache<span class="op">.</span>ErrNoServers</span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Compute custom hash</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">var</span> hash <span class="dt">uint32</span> <span class="op">=</span> <span class="dv">2166136261</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> i <span class="op">:=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="bu">len</span><span class="op">(</span>key<span class="op">);</span> i<span class="op">++</span> <span class="op">{</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>        hash <span class="op">^=</span> <span class="dt">uint32</span><span class="op">(</span>key<span class="op">[</span>i<span class="op">])</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>        hash <span class="op">*=</span> <span class="dv">16777619</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> s<span class="op">.</span>servers<span class="op">[</span>hash<span class="op">%</span><span class="dt">uint32</span><span class="op">(</span><span class="bu">len</span><span class="op">(</span>s<span class="op">.</span>servers<span class="op">))],</span> <span class="ot">nil</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>s <span class="op">*</span>CustomSelector<span class="op">)</span> Each<span class="op">(</span>f <span class="kw">func</span><span class="op">(</span>net<span class="op">.</span>Addr<span class="op">)</span> <span class="dt">error</span><span class="op">)</span> <span class="dt">error</span> <span class="op">{</span></span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>    s<span class="op">.</span>mu<span class="op">.</span>RLock<span class="op">()</span></span>
+<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>    <span class="cf">defer</span> s<span class="op">.</span>mu<span class="op">.</span>RUnlock<span class="op">()</span></span>
+<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> _<span class="op">,</span> a <span class="op">:=</span> <span class="kw">range</span> s<span class="op">.</span>servers <span class="op">{</span></span>
+<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> err <span class="op">:=</span> f<span class="op">(</span>a<span class="op">);</span> err <span class="op">!=</span> <span class="ot">nil</span> <span class="op">{</span></span>
+<span id="cb4-37"><a href="#cb4-37" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> err</span>
+<span id="cb4-38"><a href="#cb4-38" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="ot">nil</span></span>
+<span id="cb4-41"><a href="#cb4-41" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb4-42"><a href="#cb4-42" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-43"><a href="#cb4-43" aria-hidden="true" tabindex="-1"></a><span class="kw">func</span> <span class="op">(</span>s <span class="op">*</span>CustomSelector<span class="op">)</span> SetServers<span class="op">(</span>servers <span class="op">...</span><span class="dt">string</span><span class="op">)</span> <span class="dt">error</span> <span class="op">{</span></span>
+<span id="cb4-44"><a href="#cb4-44" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Parsing logic for string addresses into net.Addr</span></span>
+<span id="cb4-45"><a href="#cb4-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="ot">nil</span></span>
+<span id="cb4-46"><a href="#cb4-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h2 id="best-practices-for-custom-hash-functions">Best Practices for
+Custom Hash Functions</h2>
+<ul>
+<li><strong>Uniform Distribution:</strong> Select algorithms such as
+MurmurHash3, CityHash, or xxHash that minimize collision rates and
+eliminate clustering across buckets.</li>
+<li><strong>Cross-Platform Compatibility:</strong> When using multiple
+programming languages in the same infrastructure, ensure identical
+character encoding (typically UTF-8), integer widths, and endianness
+handling.</li>
+<li><strong>Consistent Hashing Integration:</strong> Apply the custom
+hash function as the base integer generator within a consistent hashing
+ring (Ketama) rather than using direct modulo arithmetic, preventing
+mass cache invalidation during node scaling.</li>
+<li><strong>Speed and Efficiency:</strong> Key hashing executes
+synchronously on every cache read and write. Choose non-cryptographic
+hashes that process input in <span class="math inline">\(O(N)\)</span>
+time with minimal allocation overhead.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/custom-hash-functions-in-memcached-clients';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

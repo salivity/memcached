@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Expiration During Clock Drift - memcached</title>
+    <meta name="description" content="This article explains how Memcached manages item expiration and the direct impact of host machine clock drift on cached data. Memcached relies on internal time calculations converted into absolute timestamps to determine item validity. When host clocks dr">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-expiration-during-clock-drift">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Expiration During Clock Drift - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-expiration-during-clock-drift" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how Memcached manages item expiration and the direct impact of host machine clock drift on cached data. Memcached relies on internal time calculations converted into absolute timestamps to determine item validity. When host clocks dr" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-expiration-during-clock-drift">How
+Memcached Handles Expiration During Clock Drift</h1>
+<p>This article explains how Memcached manages item expiration and the
+direct impact of host machine clock drift on cached data. Memcached
+relies on internal time calculations converted into absolute timestamps
+to determine item validity. When host clocks drift or suddenly jump due
+to synchronization adjustments, Memcached will either expire items
+prematurely or serve stale data for longer than intended. Understanding
+the mechanisms behind TTL interpretation, internal time loops, and clock
+drift mitigations is essential for maintaining reliable caching
+layers.</p>
+<h3 id="expiration-time-representation-relative-vs-absolute">Expiration
+Time Representation: Relative vs. Absolute</h3>
+<p>Memcached accepts expiration times (Time-To-Live, or TTL) in two
+formats based on a 30-day threshold (2,592,000 seconds):</p>
+<ul>
+<li><strong>Relative Offsets:</strong> If a client provides a TTL of
+2,592,000 seconds or fewer, Memcached treats the value as an offset from
+the current moment.</li>
+<li><strong>Absolute Timestamps:</strong> If the supplied value is
+greater than 2,592,000, Memcached interprets it as a standard Unix epoch
+timestamp (seconds since January 1, 1970).</li>
+</ul>
+<p>Internally, Memcached does not retain relative counters. When an item
+with a relative offset is stored, the daemon calculates an absolute
+expiration time by adding the offset to its current concept of the
+system time. Consequently, all items in memory ultimately hold an
+absolute epoch timestamp representing their moment of expiry.</p>
+<h3 id="internal-time-management">Internal Time Management</h3>
+<p>Calling system-level time functions like <code>gettimeofday()</code>
+or <code>clock_gettime()</code> on every read or write request would
+introduce unnecessary kernel overhead. To maintain high throughput,
+Memcached maintains a global internal clock variable within its event
+loop. A periodic timer updates this cached time approximately once per
+second using the host system’s clock (<code>CLOCK_REALTIME</code>).</p>
+<p>When an item is requested via a <code>get</code> command, Memcached
+compares the item's stored expiration timestamp against this internal
+clock variable. If the current internal time is equal to or greater than
+the item's expiration timestamp, the item is considered expired,
+discarded, and treated as a cache miss.</p>
+<h3 id="the-impact-of-system-clock-drift">The Impact of System Clock
+Drift</h3>
+<p>Because all expirations resolve to absolute timestamps derived from
+the host's real-time clock, any drift or sudden shift in the host
+machine's system time directly alters expiration behavior.</p>
+<h4 id="forward-clock-drift">Forward Clock Drift</h4>
+<p>If the host clock drifts forward—or if an NTP synchronization steps
+the time forward—the internal time variable advances ahead of real-world
+time.</p>
+<ul>
+<li><strong>Premature Expiration:</strong> Items with absolute
+expiration timestamps that should still be valid suddenly appear expired
+when evaluated against the advanced clock.</li>
+<li><strong>Immediate Purging:</strong> Cached values may vanish before
+their intended lifecycle finishes, leading to sudden cache misses and
+unexpected load spikes on backend databases.</li>
+</ul>
+<h4 id="backward-clock-drift">Backward Clock Drift</h4>
+<p>If the host clock drifts backward—or steps backward after correcting
+a previous forward error—the internal time variable rolls back.</p>
+<ul>
+<li><strong>Stale Data Retention:</strong> Items scheduled to expire
+will remain valid longer than intended. Because the current time is now
+lower than the stored expiration timestamp, Memcached continues to serve
+stale records that should have expired.</li>
+<li><strong>Infinite or Broken Expirations:</strong> If an item is
+stored with an absolute timestamp that is now far in the future due to
+an uncorrected backward jump, it may persist until pushed out by memory
+exhaustion.</li>
+</ul>
+<h3 id="passive-expiration-and-memory-reclamation">Passive Expiration
+and Memory Reclamation</h3>
+<p>Memcached primarily utilizes passive (lazy) expiration. It does not
+actively hunt for expired keys across the entire memory space unless the
+LRU (Least Recently Used) crawler is explicitly enabled and running.</p>
+<p>When clock drift alters expiration states:</p>
+<ul>
+<li>If the clock jumps forward, memory is not freed immediately for all
+expired keys; instead, each key is evicted individually upon its next
+access attempt.</li>
+<li>If memory becomes full before expired keys are requested, Memcached
+relies on its LRU eviction policy to overwrite the least recently
+accessed items, regardless of whether clock drift has extended or
+shortened their validity.</li>
+</ul>
+<h3 id="mitigating-clock-drift-issues">Mitigating Clock Drift
+Issues</h3>
+<p>Because Memcached does not independently verify time against external
+sources or use monotonic clocks for Unix-based TTLs, stability depends
+entirely on the host operating system's timekeeping configuration.</p>
+<ol type="1">
+<li><strong>Use Time Slewing Over Stepping:</strong> Configure NTP
+daemons (such as <code>chrony</code> or <code>ntpd</code>) to slew the
+clock smoothly rather than stepping it abruptly. Slewing adjusts clock
+frequency gradually, preventing large, discontinuous time jumps that
+disrupt expiration checks.</li>
+<li><strong>Apply Consistent Client Formats:</strong> Standardize
+whether application clients send relative offsets or absolute Unix
+timestamps. Relative offsets reduce the window of vulnerability to the
+moments surrounding the <code>set</code> operation, whereas mismatched
+system clocks on client machines sending absolute timestamps can
+immediately corrupt cache validity.</li>
+<li><strong>Monitor Host Time Drift:</strong> Implement alerting for
+clock offsets across all cache cluster nodes to detect and correct
+synchronization drift before it causes noticeable cache churn or stale
+read anomalies.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-expiration-during-clock-drift';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

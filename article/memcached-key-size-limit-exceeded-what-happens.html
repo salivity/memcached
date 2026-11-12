@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Key Size Limit Exceeded: What Happens - memcached</title>
+    <meta name="description" content="When an application attempts to write a key that exceeds the Memcached size limit, the operation fails immediately, and the data is not cached. Depending on the client library being used, the request is either intercepted and rejected locally with a runti">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-key-size-limit-exceeded-what-happens">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Key Size Limit Exceeded: What Happens - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-key-size-limit-exceeded-what-happens" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When an application attempts to write a key that exceeds the Memcached size limit, the operation fails immediately, and the data is not cached. Depending on the client library being used, the request is either intercepted and rejected locally with a runti" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-key-size-limit-exceeded-what-happens">Memcached Key
+Size Limit Exceeded: What Happens</h1>
+<p>When an application attempts to write a key that exceeds the
+Memcached size limit, the operation fails immediately, and the data is
+not cached. Depending on the client library being used, the request is
+either intercepted and rejected locally with a runtime exception, or it
+is transmitted to the Memcached server, which responds with a
+client-level error. This article explains the exact technical mechanics,
+the default limits, the errors returned, and how this failure impacts
+your application.</p>
+<h3 id="the-default-key-limit-in-memcached">The Default Key Limit in
+Memcached</h3>
+<p>Memcached enforces a strict default key length limit of <strong>250
+bytes</strong>. This limit is defined at compile time by the constant
+<code>KEY_MAX_LENGTH</code> in the Memcached source code. Unlike the
+maximum item value size (which defaults to 1 MB and can be adjusted
+using the <code>-I</code> runtime flag), the 250-byte key limit is
+hardcoded in standard builds and cannot be changed via startup
+configuration arguments.</p>
+<h3 id="client-side-rejection-vs-server-side-error">Client-Side
+Rejection vs. Server-Side Error</h3>
+<p>When an application issues a write command (such as <code>SET</code>,
+<code>ADD</code>, or <code>REPLACE</code>) with an oversized key, the
+failure happens in one of two places:</p>
+<ol type="1">
+<li><p><strong>Client-Side Validation (Most Common)</strong><br />
+Most modern Memcached client drivers (such as <code>pymemcache</code>
+for Python, <code>Dalli</code> for Ruby, or <code>spymemcached</code>
+for Java) validate key lengths locally before opening a network socket
+or sending the command. If the key exceeds 250 bytes, the library
+immediately raises an exception (such as
+<code>MemcachedKeyLengthError</code> or
+<code>IllegalArgumentException</code>) or returns <code>false</code>.
+This prevents unnecessary network round-trips.</p></li>
+<li><p><strong>Server-Side Rejection</strong><br />
+If the application uses a lightweight client without pre-validation or
+communicates over a raw socket connection, the command reaches the
+Memcached daemon. The server parses the protocol header and identifies
+the invalid key size:</p>
+<ul>
+<li><strong>Text Protocol:</strong> The server immediately aborts
+parsing the command and responds with:<br />
+<code>CLIENT_ERROR bad command line format</code> or
+<code>CLIENT_ERROR key too long</code></li>
+<li><strong>Binary Protocol:</strong> The server returns a non-zero
+response status code indicating invalid arguments (typically
+<code>PROTOCOL_BINARY_RESPONSE_KEY_ENOENT</code> or
+<code>0x0003</code>), accompanied by an error string.</li>
+</ul></li>
+</ol>
+<h3 id="consequences-for-the-application">Consequences for the
+Application</h3>
+<p>When a key is rejected due to size:</p>
+<ul>
+<li><strong>No Data is Written:</strong> Memcached will not truncate the
+key or store the value under a partial key. The cache write operation is
+entirely aborted.</li>
+<li><strong>Cache Miss Cascades:</strong> Subsequent attempts to read
+that key will result in cache misses. If the application continues to
+use the oversized key to query the cache, every request will bypass the
+cache and fall back directly to the primary database or backend service,
+potentially degrading performance.</li>
+<li><strong>Uncaught Exceptions:</strong> If the application code does
+not explicitly catch the client driver's key validation exceptions, the
+thread or HTTP request executing the operation may crash entirely,
+returning an HTTP 500 error to the end user.</li>
+</ul>
+<h3 id="best-practices-to-prevent-key-limit-errors">Best Practices to
+Prevent Key Limit Errors</h3>
+<p>To avoid key limit failures, long or unbounded identifiers should
+never be used directly as cache keys. If your key design includes
+lengthy inputs—such as full URLs, long customer queries, or serialized
+payloads—hash the identifier using an algorithm like SHA-256 or MD5
+before passing it to Memcached (e.g.,
+<code>user:profile:&lt;hash&gt;</code>). This ensures the final key
+remains well below the 250-byte threshold while maintaining consistent,
+predictable lookups.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-key-size-limit-exceeded-what-happens';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

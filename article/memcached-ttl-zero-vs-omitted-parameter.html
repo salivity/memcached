@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached TTL Zero vs Omitted Parameter - memcached</title>
+    <meta name="description" content="In Memcached, setting a Time-To-Live (TTL) of zero instructs the server that the item should never automatically expire, while omitting the TTL parameter depends on whether you are interacting with the raw protocol or a high-level client library. At the s">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-ttl-zero-vs-omitted-parameter">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached TTL Zero vs Omitted Parameter - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-ttl-zero-vs-omitted-parameter" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In Memcached, setting a Time-To-Live (TTL) of zero instructs the server that the item should never automatically expire, while omitting the TTL parameter depends on whether you are interacting with the raw protocol or a high-level client library. At the s" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-ttl-zero-vs-omitted-parameter">Memcached TTL Zero vs
+Omitted Parameter</h1>
+<p>In Memcached, setting a Time-To-Live (TTL) of zero instructs the
+server that the item should never automatically expire, while omitting
+the TTL parameter depends on whether you are interacting with the raw
+protocol or a high-level client library. At the server protocol level,
+an expiration time is strictly mandatory and cannot be omitted. In
+client libraries, however, omitting the parameter typically defaults to
+zero—resulting in identical "never expire" behavior—unless the client
+has been configured with an alternative global default expiration.</p>
+<h3 id="the-memcached-protocol-requirement">The Memcached Protocol
+Requirement</h3>
+<p>At the raw network protocol level (both ASCII and binary), Memcached
+does not support an omitted expiration parameter. In the standard ASCII
+command format:</p>
+<pre class="text"><code>set &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n</code></pre>
+<p>The <code>&lt;exptime&gt;</code> field is a required argument.
+Attempting to send a storage command without specifying
+<code>&lt;exptime&gt;</code> results in a client error or protocol
+syntax error. Therefore, any concept of "omitting" the TTL exists
+exclusively within the abstraction layer of your application's client
+library.</p>
+<h3 id="what-setting-ttl-to-zero-means">What Setting TTL to Zero
+Means</h3>
+<p>When <code>&lt;exptime&gt;</code> is explicitly set to
+<code>0</code>:</p>
+<ul>
+<li><strong>No Time-Based Expiration:</strong> The item will not expire
+automatically based on time.</li>
+<li><strong>Eviction Eligibility:</strong> The item remains in memory
+until it is explicitly deleted, replaced, or flushed. However, it is not
+guaranteed to stay in memory forever; if the cache runs out of allocated
+memory, Memcached will still evict the item to free space according to
+its Least Recently Used (LRU) algorithm.</li>
+</ul>
+<h3 id="what-omitting-the-parameter-in-client-libraries-means">What
+Omitting the Parameter in Client Libraries Means</h3>
+<p>Most client libraries (such as those for Python, PHP, Node.js, and
+Go) provide convenience wrappers where the expiration argument is
+optional. How the client handles an omitted parameter generally falls
+into two categories:</p>
+<ol type="1">
+<li><strong>Defaulting to Zero:</strong> The majority of libraries use
+<code>0</code> as the default value for the expiration parameter. In
+these libraries, calling <code>set("key", "value")</code> generates the
+exact same network command as <code>set("key", "value", 0)</code>.</li>
+<li><strong>Client-Level Default Overrides:</strong> Some client
+configurations allow developers to define a global default TTL (such as
+3600 seconds) for all cache operations. In this scenario, omitting the
+TTL parameter causes the client to send the configured default duration,
+whereas explicitly passing <code>0</code> overrides the global default
+to force the item to never expire.</li>
+</ol>
+<h3 id="key-differences-summary">Key Differences Summary</h3>
+<ul>
+<li><strong>Protocol Level:</strong> Setting <code>0</code> is valid;
+omitting the parameter is impossible because
+<code>&lt;exptime&gt;</code> is required.</li>
+<li><strong>Standard Client Behavior:</strong> Both actions typically
+result in the exact same command (<code>exptime = 0</code>), meaning the
+item never expires.</li>
+<li><strong>Configured Client Behavior:</strong> Omitting the parameter
+applies any globally configured client TTL, while explicitly passing
+<code>0</code> guarantees the item has no time limit.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-ttl-zero-vs-omitted-parameter';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

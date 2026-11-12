@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preventing Memcached Slab Class Memory Starvation - memcached</title>
+    <meta name="description" content="In high-throughput environments, Memcached instances can experience memory starvation in small slab classes due to slab calcification, where memory pages permanently lock into larger classes and starve smaller, high-churn keys of space. This article explo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/preventing-memcached-slab-class-memory-starvation">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Preventing Memcached Slab Class Memory Starvation - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/preventing-memcached-slab-class-memory-starvation" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In high-throughput environments, Memcached instances can experience memory starvation in small slab classes due to slab calcification, where memory pages permanently lock into larger classes and starve smaller, high-churn keys of space. This article explo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="preventing-memcached-slab-class-memory-starvation">Preventing
+Memcached Slab Class Memory Starvation</h1>
+<p>In high-throughput environments, Memcached instances can experience
+memory starvation in small slab classes due to slab calcification, where
+memory pages permanently lock into larger classes and starve smaller,
+high-churn keys of space. This article explores the root causes of slab
+imbalance and provides concrete technical solutions—including automatic
+slab rebalancing, growth factor optimization, modern LRU thread
+management, and application-level payload strategies—to maintain
+consistent throughput and eliminate premature evictions.</p>
+<h3 id="enable-automated-slab-rebalancing-slab_automove">Enable
+Automated Slab Rebalancing (<code>slab_automove</code>)</h3>
+<p>Memcached allocates memory in 1MB pages assigned permanently to
+specific slab classes upon initialization. Under shifting workloads,
+earlier traffic patterns may consume available pages for larger objects,
+leaving small slab classes unable to claim new pages.</p>
+<p>To resolve this dynamically, enable the built-in slab automover:</p>
+<ul>
+<li><strong>Mode 1 (<code>slab_automove=1</code>):</strong> A
+conservative algorithm that monitors memory usage and moves an
+unallocated or idle page to a starved class if the target class
+experiences three consecutive evictions while another class has unused
+pages.</li>
+<li><strong>Mode 2 (<code>slab_automove=2</code>):</strong> A more
+aggressive, windowed algorithm introduced in modern versions that
+continuously balances memory based on the highest eviction rate over
+time, shifting pages toward slabs with the highest ratio of evictions to
+hits.</li>
+</ul>
+<p>Configure this at startup using <code>-o slab_automove=2</code> or at
+runtime via the administrative interface:</p>
+<pre class="text"><code>set slab_automove 2</code></pre>
+<h3 id="manual-slab-reassignment">Manual Slab Reassignment</h3>
+<p>When automated rebalancing is disabled or too slow to respond to an
+emergency spike, operators can intervene manually through the Memcached
+management console.</p>
+<p>First, query slab metrics to find donor and recipient classes:</p>
+<pre class="text"><code>stats slabs</code></pre>
+<p>Look for classes with high <code>evictions</code> and low
+<code>free_chunks</code> (recipients), and classes with high
+<code>free_chunks</code> or zero recent writes (donors). Manually
+reassign a page using the administrative command:</p>
+<pre class="text"><code>slabs reassign &lt;source_slab_id&gt; &lt;destination_slab_id&gt;</code></pre>
+<h3 id="optimize-the-slab-growth-factor--f">Optimize the Slab Growth
+Factor (<code>-f</code>)</h3>
+<p>The slab growth factor controls the size multiplier between
+consecutive slab classes (defaulting to 1.25). A high growth factor
+leaves wide gaps between item sizes, which causes excessive internal
+fragmentation and accelerates slab consumption.</p>
+<p>For small, uniform keys:</p>
+<ul>
+<li>Reduce the growth factor using <code>-f 1.05</code> to
+<code>-f 1.15</code>.</li>
+<li>This creates narrower boundaries between slab sizes, packing small
+payloads more tightly and generating more usable chunks per 1MB
+page.</li>
+<li>Pair this with <code>-n &lt;bytes&gt;</code> to lower the minimum
+chunk size if stored keys and metadata are exceptionally small (e.g.,
+<code>-n 48</code>).</li>
+</ul>
+<h3 id="enable-modern-segmented-lru-and-the-maintainer-thread">Enable
+Modern Segmented LRU and the Maintainer Thread</h3>
+<p>Traditional Memcached implementations use a single LRU queue per slab
+class, making small items vulnerable to immediate eviction during burst
+writes. Modern Memcached mitigates this by segmenting the LRU into three
+distinct queues: <code>HOT</code>, <code>WARM</code>, and
+<code>COLD</code>.</p>
+<p>Enable the modern storage engine with:</p>
+<pre class="text"><code>-o modern</code></pre>
+<p>This flag activates:</p>
+<ul>
+<li><strong><code>lru_maintainer</code>:</strong> A background thread
+that moves active items between queues and assists
+<code>slab_automove</code> in identifying truly idle memory.</li>
+<li><strong><code>lru_crawler</code>:</strong> A background worker that
+proactively scans slabs and frees expired items, returning chunks back
+to the small slab pools before an eviction is triggered.</li>
+</ul>
+<h3
+id="application-side-padding-and-cluster-partitioning">Application-Side
+Padding and Cluster Partitioning</h3>
+<p>When architectural configurations within Memcached reach their
+limits, application-level designs prevent starvation from taking
+place:</p>
+<ul>
+<li><strong>Payload Normalization:</strong> Pad variable-length small
+keys to fit into a predictable set of slab classes, preventing erratic
+slab page distribution across dozens of intermediate classes.</li>
+<li><strong>Instance Isolation:</strong> Separate caching tiers based on
+object lifecycle and payload size. Route high-volume, small items (such
+as session tokens or counters) to a dedicated Memcached cluster tuned
+specifically for sub-kilobyte payloads, completely isolated from large
+cached objects.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/preventing-memcached-slab-class-memory-starvation';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

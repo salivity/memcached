@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tuning Memcached with Huge Pages on Linux - memcached</title>
+    <meta name="description" content="High-memory Memcached deployments frequently suffer from CPU bottlenecks and latency jitter caused by virtual memory overhead. Enabling Linux huge pages reduces the size of the operating system&#39;s page tables and drastically minimizes Translation Lookaside">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/tuning-memcached-with-huge-pages-on-linux">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Tuning Memcached with Huge Pages on Linux - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/tuning-memcached-with-huge-pages-on-linux" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="High-memory Memcached deployments frequently suffer from CPU bottlenecks and latency jitter caused by virtual memory overhead. Enabling Linux huge pages reduces the size of the operating system&#39;s page tables and drastically minimizes Translation Lookaside" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="tuning-memcached-with-huge-pages-on-linux">Tuning Memcached with
+Huge Pages on Linux</h1>
+<p>High-memory Memcached deployments frequently suffer from CPU
+bottlenecks and latency jitter caused by virtual memory overhead.
+Enabling Linux huge pages reduces the size of the operating system's
+page tables and drastically minimizes Translation Lookaside Buffer (TLB)
+misses. This article explains how huge pages optimize high-memory
+Memcached instances, why static huge pages are preferred over
+Transparent Huge Pages (THP), and the fundamental mechanics of
+configuring this feature for sustained low-latency key-value
+operations.</p>
+<h3 id="the-virtual-memory-challenge-at-scale">The Virtual Memory
+Challenge at Scale</h3>
+<p>Linux natively manages memory in 4KB chunks. In a high-memory
+Memcached instance caching 64GB to 512GB of key-value data, the kernel
+must manage tens or hundreds of millions of 4KB pages. For example, a
+128GB instance requires roughly 33.5 million page table entries just to
+map physical memory to virtual memory.</p>
+<p>This vast number of mappings creates two major performance
+penalties:</p>
+<ol type="1">
+<li><strong>Memory Overhead:</strong> The page tables themselves consume
+gigabytes of system RAM simply to track allocations.</li>
+<li><strong>TLB Thrashing:</strong> The Translation Lookaside Buffer
+(TLB) is a hardware cache on modern CPUs that stores recent
+virtual-to-physical address mappings. Because Memcached accesses memory
+randomly based on hashing algorithms, a small 4KB page size ensures the
+working set vastly exceeds the TLB's capacity. This leads to frequent
+TLB misses, forcing the CPU to perform expensive multi-step page table
+walks across system memory, which increases latency.</li>
+</ol>
+<h3 id="how-huge-pages-mitigate-tlb-pressure">How Huge Pages Mitigate
+TLB Pressure</h3>
+<p>Huge pages allow the Linux kernel to allocate memory in much larger
+increments—typically 2MB or 1GB on x86_64 architectures.</p>
+<p>Switching a 128GB Memcached instance from 4KB pages to 2MB pages
+reduces the total number of page entries from over 33 million to just
+65,536. This magnitude of reduction allows a much higher percentage of
+the active mapping space to reside directly within the CPU's L1 and L2
+TLB entries. By preventing TLB cache misses, the CPU spends fewer cycles
+resolving addresses and more cycles processing <code>GET</code> and
+<code>SET</code> commands, leading to improved throughput and lower tail
+latency (p99/p999).</p>
+<h3 id="static-huge-pages-vs-transparent-huge-pages-thp">Static Huge
+Pages vs. Transparent Huge Pages (THP)</h3>
+<p>Linux provides two approaches to large memory pages: Transparent Huge
+Pages (THP) and static huge pages (via <code>hugetlbfs</code>).</p>
+<p>For Memcached, <strong>Transparent Huge Pages should generally be
+avoided or disabled</strong>. THP attempts to allocate and defragment
+huge pages dynamically in the background. In high-throughput,
+latency-sensitive caching layers, the kernel's background compaction
+threads (<code>khugepaged</code>) can introduce latency spikes, memory
+bloat, and transient application stalls when attempting to coalesce
+fragmented 4KB pages.</p>
+<p>Instead, administrators should use static huge pages. With static
+allocation, dedicated memory blocks are reserved at system boot or
+initialization. Memcached then binds its primary slab allocation
+directly into these pre-allocated blocks, completely bypassing dynamic
+compaction and allocation overhead.</p>
+<h3 id="implementing-static-huge-pages-in-memcached">Implementing Static
+Huge Pages in Memcached</h3>
+<p>To utilize huge pages, the host operating system must allocate them,
+and Memcached must be explicitly instructed to consume them.</p>
+<ol type="1">
+<li><p><strong>Allocate Huge Pages in the Kernel:</strong> Reserve
+memory by setting the pool size in <code>/etc/sysctl.conf</code>:</p>
+<pre class="text"><code>vm.nr_hugepages = 32768</code></pre>
+<p>On a system with 2MB default huge pages, this reserves 64GB of
+dedicated memory.</p></li>
+<li><p><strong>Verify Memory Locking Permissions:</strong> Memcached
+must be allowed to lock memory into RAM without being swapped out. Set
+the <code>memlock</code> limit in <code>/etc/security/limits.conf</code>
+to <code>unlimited</code> for the user running Memcached.</p></li>
+<li><p><strong>Enable Huge Pages in Memcached:</strong> Launch the
+Memcached daemon with the <code>-L</code> (or
+<code>--enable-largepages</code>) flag, along with the designated memory
+limit:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-L</span> <span class="at">-m</span> 65536 <span class="at">-u</span> memcached</span></code></pre></div>
+<p>If sufficient huge pages are pre-allocated, Memcached pins its
+internal slab memory to these pages. If memory cannot be secured, the
+process alerts the operator and fails to start, preventing silent
+fallbacks to standard 4KB pages.</p></li>
+</ol>
+<p>Adopting static huge pages is a critical optimization step for
+high-density caching nodes. It eliminates a hidden architectural
+bottleneck, transforming high-memory Linux hosts into deterministic,
+high-throughput Memcached engines.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/tuning-memcached-with-huge-pages-on-linux';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

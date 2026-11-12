@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Append Modifies Cached Values - memcached</title>
+    <meta name="description" content="The append command in Memcached allows developers to add data to an existing cached item without needing to fetch, modify, and re-upload the entire value from the client application. By delegating the modification process directly to the Memcached server,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-append-modifies-cached-values">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Append Modifies Cached Values - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-append-modifies-cached-values" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The append command in Memcached allows developers to add data to an existing cached item without needing to fetch, modify, and re-upload the entire value from the client application. By delegating the modification process directly to the Memcached server," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-append-modifies-cached-values">How Memcached
+Append Modifies Cached Values</h1>
+<p>The <code>append</code> command in Memcached allows developers to add
+data to an existing cached item without needing to fetch, modify, and
+re-upload the entire value from the client application. By delegating
+the modification process directly to the Memcached server, this command
+eliminates network round trips, prevents race conditions caused by
+concurrent writes, and optimizes write performance. This article
+explains the internal mechanics of how Memcached processes the
+<code>append</code> command, manages memory reallocation, and ensures
+atomic updates without full data replacement on the client side.</p>
+<h3 id="the-inefficiency-of-client-side-updates">The Inefficiency of
+Client-Side Updates</h3>
+<p>Under standard operations, updating a cached string requires a
+"read-modify-write" cycle:</p>
+<ol type="1">
+<li>The client issues a <code>get</code> command to fetch the current
+value.</li>
+<li>The client concatenates the new data onto the existing payload in
+local application memory.</li>
+<li>The client issues a <code>set</code> command to replace the old
+value in Memcached.</li>
+</ol>
+<p>This workflow introduces substantial network latency and creates
+concurrency hazards. If two client threads attempt to update the same
+key simultaneously, one client's update will overwrite the other's,
+leading to data loss.</p>
+<h3 id="how-the-append-command-works">How the <code>append</code>
+Command Works</h3>
+<p>The <code>append</code> command streamlines this process by executing
+the concatenation directly within Memcached's memory space. The syntax
+for the command is:</p>
+<pre class="text"><code>append &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt;\r\n
+&lt;data&gt;\r\n</code></pre>
+<p>When this command is received, Memcached executes the following
+steps:</p>
+<ol type="1">
+<li><strong>Existence Verification:</strong> Memcached checks whether
+the target key currently exists in its hash table. Unlike the
+<code>set</code> command, <code>append</code> requires an existing
+target. If the key does not exist or has expired, Memcached returns
+<code>NOT_STORED</code> and aborts the operation.</li>
+<li><strong>Metadata Retention:</strong> Although the command protocol
+requires <code>&lt;flags&gt;</code> and <code>&lt;exptime&gt;</code>
+parameters for structural consistency, Memcached ignores these values
+during an <code>append</code> operation. The item's existing expiration
+time and flag settings remain unchanged.</li>
+<li><strong>Atomic Execution:</strong> The operation is locked at the
+item level. This ensures that no other reading or writing thread can
+access the key until the append operation is finished, providing full
+atomicity.</li>
+</ol>
+<h3 id="memory-reallocation-under-the-slab-allocator">Memory
+Reallocation Under the Slab Allocator</h3>
+<p>Because Memcached uses a slab allocator system, items are stored in
+fixed-size memory chunks. Modifying the size of an existing value cannot
+be done by simply expanding the memory segment in place. Instead,
+Memcached handles the modification internally as follows:</p>
+<ul>
+<li><strong>New Item Allocation:</strong> Memcached calculates the new
+payload size (<code>existing_bytes + append_bytes</code>). It then
+requests a new memory chunk from the appropriate slab class capable of
+holding the combined size.</li>
+<li><strong>Data Transfer:</strong> Memcached copies the original data
+into the beginning of the newly allocated buffer, immediately followed
+by the new bytes provided in the <code>append</code> command.</li>
+<li><strong>Pointer Swapping:</strong> The server updates its internal
+hash table to point the key to the newly created memory address.</li>
+<li><strong>Garbage Reclamation:</strong> The previous memory chunk
+containing the original data is freed and returned to the slab pool for
+reuse.</li>
+</ul>
+<h3 id="limitations-and-operational-considerations">Limitations and
+Operational Considerations</h3>
+<p>While <code>append</code> prevents full round-trip replacement, it
+has operational boundaries:</p>
+<ul>
+<li><strong>Maximum Item Size:</strong> The resulting concatenated
+string must not exceed the maximum allowed item size (default is 1 MB).
+If the combined data exceeds this threshold, the command fails.</li>
+<li><strong>Plaintext and Raw Byte Operations:</strong> Memcached treats
+the payload as an opaque byte array. If cached objects are serialized
+(e.g., JSON, Protocol Buffers, or language-specific objects), appending
+raw bytes will corrupt the serialized structure. As a result,
+<code>append</code> is best suited for raw strings, log streams, or
+delimited buffers.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-append-modifies-cached-values';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

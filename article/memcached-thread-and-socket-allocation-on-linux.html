@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Thread and Socket Allocation on Linux - memcached</title>
+    <meta name="description" content="Memcached maximizes throughput and scalability on Linux systems by pairing a multi-threaded event-driven model with the libevent library. In standard operation, a single master dispatcher thread handles initial connection intake across network sockets and">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-thread-and-socket-allocation-on-linux">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Thread and Socket Allocation on Linux - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-thread-and-socket-allocation-on-linux" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maximizes throughput and scalability on Linux systems by pairing a multi-threaded event-driven model with the libevent library. In standard operation, a single master dispatcher thread handles initial connection intake across network sockets and" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-thread-and-socket-allocation-on-linux">Memcached
+Thread and Socket Allocation on Linux</h1>
+<p>Memcached maximizes throughput and scalability on Linux systems by
+pairing a multi-threaded event-driven model with the
+<code>libevent</code> library. In standard operation, a single master
+dispatcher thread handles initial connection intake across network
+sockets and distributes them via round-robin to a pool of dedicated
+worker threads. Each worker thread runs its own isolated event loop to
+monitor and process assigned client sockets, avoiding lock contention
+and fully utilizing multi-core hardware.</p>
+<h2 id="the-master-worker-architecture">The Master-Worker
+Architecture</h2>
+<p>Memcached separates network connection acceptance from request
+processing using a classic dispatcher-worker architecture. When
+initialized with the <code>-t</code> flag, Memcached creates a
+configurable number of worker threads alongside a primary dispatcher
+(main) thread.</p>
+<p>The architecture functions through three core elements:</p>
+<ul>
+<li><strong>Dispatcher Thread:</strong> Manages the listening socket,
+accepts incoming connections, and assigns them to worker threads.</li>
+<li><strong>Worker Threads:</strong> Handle all data reads, protocol
+parsing, cache lookups, cache mutations, and response writes for
+assigned connections.</li>
+<li><strong>Connection Queues and Pipes:</strong> Facilitate thread
+communication between the dispatcher and the workers.</li>
+</ul>
+<h2 id="the-connection-handshake-flow">The Connection Handshake
+Flow</h2>
+<p>On Linux systems, the process of receiving a client socket and
+routing it to a worker thread follows a strict sequence:</p>
+<ol type="1">
+<li><strong>Listening and Accepting:</strong> The dispatcher thread
+binds to the specified port and registers the listening socket with its
+local <code>libevent</code> instance, which interfaces directly with the
+Linux <code>epoll</code> system call. When a client initiates a TCP
+handshake, <code>epoll_wait</code> flags the listening socket as
+readable. The dispatcher calls <code>accept()</code> (or
+<code>accept4()</code> to set non-blocking flags immediately) to
+generate a new connected socket file descriptor (<code>fd</code>).</li>
+<li><strong>Round-Robin Selection:</strong> The dispatcher selects a
+target worker thread using a round-robin algorithm. This ensures an even
+distribution of client sockets across the thread pool without complex
+load-balancing calculations.</li>
+<li><strong>Queue Enqueueing:</strong> The dispatcher packages the new
+file descriptor and its initial state into a connection queue item
+(<code>CQ_ITEM</code>) and pushes it onto the chosen worker thread’s
+private thread-safe connection queue.</li>
+<li><strong>Worker Notification:</strong> Because the worker thread is
+typically blocked waiting for network events inside its own
+<code>epoll_wait</code> call, the dispatcher must wake it up. It does
+this by writing a single byte to the write-end of an inter-process pipe
+(or an <code>eventfd</code>) established specifically between the
+dispatcher and that worker.</li>
+<li><strong>Registration to the Worker Loop:</strong> The worker’s event
+loop detects incoming data on the pipe. The worker wakes up, reads the
+byte to clear the notification, pops the <code>CQ_ITEM</code> from its
+queue, and registers the client socket <code>fd</code> with its own
+<code>libevent</code> (<code>epoll</code>) instance.</li>
+<li><strong>Subsequent Processing:</strong> From this point forward, the
+dispatcher has no involvement with the connection. The worker thread
+directly handles all subsequent network I/O, cache queries, and socket
+termination.</li>
+</ol>
+<h2 id="multi-queue-optimization-and-so_reuseport">Multi-Queue
+Optimization and SO_REUSEPORT</h2>
+<p>While the traditional single-dispatcher model prevents multi-threaded
+synchronization issues on the listening socket, the dispatcher thread
+itself can become an intake bottleneck on modern high-bandwidth networks
+exceeding tens of gigabits per second.</p>
+<p>To address this, modern Linux kernels support the
+<code>SO_REUSEPORT</code> socket option. When configured with this
+capability, Memcached allows multiple threads (or multiple worker
+instances) to bind directly to the same IP address and port. Instead of
+user-space round-robin distribution by a single dispatcher:</p>
+<ul>
+<li>The Linux kernel itself creates multiple receive queues for the
+listening port.</li>
+<li>Incoming TCP <code>SYN</code> packets are hashed across the bound
+sockets by the kernel (typically using a 4-tuple or 5-tuple hash of
+source and destination IPs and ports).</li>
+<li>Each worker thread accepts connections directly from its own
+listening socket, entirely bypassing the single-dispatcher bottleneck
+and eliminating inter-thread pipe notifications.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-thread-and-socket-allocation-on-linux';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

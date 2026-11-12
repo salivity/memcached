@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Hash Table Resizing Impacts Latency - memcached</title>
+    <meta name="description" content="Memcached dynamically expands its internal hash table to maintain $O(1)$ lookup efficiency as the number of cached keys grows. Although this automatic resizing prevents severe hash collisions, the underlying migration process introduces concurrent locking">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-hash-table-resizing-impacts-latency">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Hash Table Resizing Impacts Latency - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-hash-table-resizing-impacts-latency" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached dynamically expands its internal hash table to maintain $O(1)$ lookup efficiency as the number of cached keys grows. Although this automatic resizing prevents severe hash collisions, the underlying migration process introduces concurrent locking" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-hash-table-resizing-impacts-latency">How Memcached
+Hash Table Resizing Impacts Latency</h1>
+<p>Memcached dynamically expands its internal hash table to maintain
+<span class="math inline">\(O(1)\)</span> lookup efficiency as the
+number of cached keys grows. Although this automatic resizing prevents
+severe hash collisions, the underlying migration process introduces
+concurrent locking operations, dual-table lookups, and memory overhead
+that can cause noticeable query latency spikes. This article examines
+the internal mechanics of Memcached hash table expansion, how the
+incremental rehashing mechanism functions, and the exact sources of
+latency degradation during the migration phase.</p>
+<hr />
+<h3 id="the-hash-table-resizing-mechanism">The Hash Table Resizing
+Mechanism</h3>
+<p>Memcached relies on a primary hash table to associate keys with their
+corresponding slab-allocated data structures. The size of this hash
+table is determined by a power of two, known internally as
+<code>hashpower</code>.</p>
+<p>When the number of stored items exceeds 1.5 times the current
+capacity of the hash table (<span class="math inline">\(1.5 \times
+2^{\text{hashpower}}\)</span>), Memcached initiates a resize operation
+to prevent bucket chains from growing too long. Rather than executing a
+stop-the-world reallocation, Memcached doubles the table size
+(incrementing <code>hashpower</code> by 1) and migrates items
+incrementally using a dedicated background thread: the association
+maintenance thread (<code>assoc_maintenance_thread</code>).</p>
+<h3 id="why-latency-spikes-occur-during-resizing">Why Latency Spikes
+Occur During Resizing</h3>
+<p>While the background maintenance thread is designed to minimize
+disruptions, it cannot eliminate performance overhead entirely. Query
+latency—particularly 99th and 99.9th percentile tail latency—is affected
+through three primary mechanisms:</p>
+<h4 id="1-bucket-and-item-lock-contention">1. Bucket and Item Lock
+Contention</h4>
+<p>Memcached employs fine-grained bucket-level locks to maintain thread
+safety across its worker threads. During rehashing:</p>
+<ul>
+<li>The maintenance thread moves items in chunks (controlled by
+<code>hash_bulk_move</code>, typically 1 to 256 buckets at a time).</li>
+<li>To move a bucket, the maintenance thread must acquire the
+corresponding locks for both the old bucket and the new bucket.</li>
+<li>If a client request (such as a <code>GET</code>, <code>SET</code>,
+or <code>DELETE</code>) targets an item located within the chunk
+currently being moved, the worker thread handling that connection must
+block until the maintenance thread releases the locks.</li>
+<li>In high-concurrency environments, multiple worker threads may queue
+up waiting for locked buckets, leading to head-of-line blocking and
+immediate latency spikes.</li>
+</ul>
+<h4 id="2-dual-table-lookup-overhead">2. Dual-Table Lookup Overhead</h4>
+<p>While a rehash is in progress, the hash table exists in a split
+state:</p>
+<ul>
+<li>Any key whose old bucket has already been processed resides in the
+new, expanded table.</li>
+<li>Any key whose bucket has not yet been processed remains in the old
+table.</li>
+<li>For read operations targeting keys that have not yet moved, worker
+threads must perform address resolution against the old table while
+consulting state flags to determine migration progress. This adds branch
+prediction penalties and extra memory lookups per request.</li>
+</ul>
+<h4 id="3-cpu-cache-invalidation-and-memory-bandwidth">3. CPU Cache
+Invalidation and Memory Bandwidth</h4>
+<p>Rehashing involves reading pointers from the old table and writing
+them to the newly allocated memory space. This continuous memory
+traversal generates substantial traffic on the memory bus and evicts hot
+data from the CPU's L1/L2/L3 caches. Consequently, worker threads
+processing unrelated read operations experience higher hardware
+cache-miss rates, marginally slowing down overall query processing
+speeds across the entire instance.</p>
+<h3 id="minimizing-resizing-latency-in-production">Minimizing Resizing
+Latency in Production</h3>
+<p>To prevent unexpected latency degradation in high-throughput
+workloads, administrators can manage hash table growth proactively:</p>
+<ul>
+<li><strong>Pre-allocate Hashpower:</strong> Use the
+<code>-o hashpower=N</code> startup flag to set the initial hash table
+size based on expected peak key counts. For example, setting
+<code>hashpower=20</code> pre-allocates an array with <span
+class="math inline">\(2^{20}\)</span> (1,048,576) buckets, avoiding
+resizing events altogether if the dataset stays within bounds.</li>
+<li><strong>Monitor Rehash Status:</strong> Track the
+<code>hash_is_expanding</code>, <code>hash_power_level</code>, and
+<code>hash_bytes</code> metrics via the <code>stats</code> command to
+detect active expansions and evaluate whether memory growth correlates
+with observed latency spikes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-hash-table-resizing-impacts-latency';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

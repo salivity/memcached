@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Decrement on Non-Numeric Values - memcached</title>
+    <meta name="description" content="In Memcached, atomic decrement operations (decr) require existing stored data to be an ASCII decimal representation of a 64-bit unsigned integer. When a client issues a decrement command against a key containing non-numeric data, Memcached does not conver">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-decrement-on-non-numeric-values">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Decrement on Non-Numeric Values - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-decrement-on-non-numeric-values" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In Memcached, atomic decrement operations (decr) require existing stored data to be an ASCII decimal representation of a 64-bit unsigned integer. When a client issues a decrement command against a key containing non-numeric data, Memcached does not conver" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-decrement-on-non-numeric-values">Memcached Decrement
+on Non-Numeric Values</h1>
+<p>In Memcached, atomic decrement operations (<code>decr</code>) require
+existing stored data to be an ASCII decimal representation of a 64-bit
+unsigned integer. When a client issues a decrement command against a key
+containing non-numeric data, Memcached does not convert, overwrite, or
+zero out the value. Instead, the server immediately aborts the
+operation, preserves the original data intact, and returns a client
+error signaling that the operation cannot be performed on non-numeric
+content.</p>
+<h3 id="internal-validation-process">Internal Validation Process</h3>
+<p>Memcached stores all cached data payloads as opaque byte arrays
+alongside metadata such as flags and expiration times. It does not
+possess a native, distinct integer data type. To process an atomic
+<code>decr</code> command, the engine reads the byte array of the
+targeted item and parses it as a decimal string using internal
+validation routines (such as <code>strtoull</code> logic).</p>
+<p>For the decrement to succeed, the payload must consist entirely of
+decimal digits (<code>0</code>–<code>9</code>) representing an unsigned
+64-bit integer (ranging from <code>0</code> to
+<code>18,446,744,073,709,551,615</code>). If the payload contains any
+non-digit bytes, the parser fails:</p>
+<ul>
+<li><strong>Alphabetic and Binary Data:</strong> Strings like
+<code>"user_session"</code> or serialized objects fail validation
+immediately.</li>
+<li><strong>Floating-Point Numbers:</strong> Characters such as
+<code>.</code> (e.g., <code>"12.5"</code>) or scientific notation
+(<code>"1e6"</code>) are considered invalid characters.</li>
+<li><strong>Negative Numbers and Signs:</strong> Prefixes such as
+<code>-</code> or <code>+</code> (e.g., <code>"-5"</code>) are rejected
+because the operation strictly handles unsigned integers.</li>
+<li><strong>Whitespace:</strong> Leading, trailing, or embedded spaces
+cause validation to fail.</li>
+</ul>
+<h3 id="protocol-error-responses">Protocol Error Responses</h3>
+<p>Because the server treats non-numeric data as an invalid state for
+mathematical operations, the command fails at the protocol level without
+mutating the stored item:</p>
+<ul>
+<li><strong>Text Protocol:</strong> The server responds with:<br />
+<code>CLIENT_ERROR cannot increment or decrement non-numeric value</code></li>
+<li><strong>Binary Protocol:</strong> The server returns an error
+response packet with a non-zero status code (typically
+<code>0x0006</code> for <code>MEMCACHED_UNKNOWN_READ_FAILURE</code> or
+<code>ENGINE_EINVAL</code> depending on the underlying storage engine
+and version).</li>
+</ul>
+<p>In both protocols, the item's original byte string, time-to-live
+(TTL), and CAS (Check-And-Set) identifier remain completely
+unchanged.</p>
+<h3 id="non-existent-keys-vs-non-numeric-keys">Non-Existent Keys vs.
+Non-Numeric Keys</h3>
+<p>The failure mode for non-numeric keys is distinct from that of
+non-existent keys. If a key does not exist at all, the text protocol
+returns <code>NOT_FOUND</code>. Under the binary protocol, an atomic
+decrement command allows an initial value and expiration offset to be
+specified, auto-creating the key with the initial integer if it is
+absent. However, this automatic initialization applies only to missing
+keys; if the key already exists with non-numeric data, the
+initialization argument is ignored, and the command returns an
+error.</p>
+<h3 id="underflow-behavior">Underflow Behavior</h3>
+<p>When a key does hold a valid numeric string, Memcached enforces an
+lower bound of zero. If a valid decrement would result in a number less
+than zero, the value is set to <code>0</code>. This underflow protection
+only applies to valid numeric values; non-numeric values never reach
+this stage of computation.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-decrement-on-non-numeric-values';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

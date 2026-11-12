@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Clients Handle Consistent Hashing - memcached</title>
+    <meta name="description" content="When scaling a Memcached cluster horizontally, adding or removing servers risks triggering a catastrophic cache stampede if key distribution is not managed properly. To solve this, modern Memcached client libraries implement consistent hashing algorithms—">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-clients-handle-consistent-hashing">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Clients Handle Consistent Hashing - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-clients-handle-consistent-hashing" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When scaling a Memcached cluster horizontally, adding or removing servers risks triggering a catastrophic cache stampede if key distribution is not managed properly. To solve this, modern Memcached client libraries implement consistent hashing algorithms—" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-clients-handle-consistent-hashing">How Memcached
+Clients Handle Consistent Hashing</h1>
+<p>When scaling a Memcached cluster horizontally, adding or removing
+servers risks triggering a catastrophic cache stampede if key
+distribution is not managed properly. To solve this, modern Memcached
+client libraries implement consistent hashing algorithms—most notably
+libketama—which distribute keys across a logical continuum rather than
+relying on the total server count. This overview explores how
+client-side hashing rings, virtual nodes, and minimal key remapping
+ensure that altering cluster capacity invalidates only a tiny fraction
+of cached data, preserving database integrity and application
+performance.</p>
+<h3 id="the-limitation-of-modulo-hashing">The Limitation of Modulo
+Hashing</h3>
+<p>Traditional server selection uses a simple modulo operation:
+<code>hash(key) % N</code>, where <code>N</code> is the number of
+servers in the cluster. While simple and fast, this approach fails
+dynamically. When a single server is added or removed, <code>N</code>
+changes, causing almost every key in the cache to resolve to a
+completely different server index. This invalidates roughly
+<code>N / (N + 1)</code> of all cached keys, suddenly exposing the
+underlying primary database to massive, unthrottled traffic.</p>
+<h3 id="the-consistent-hash-ring">The Consistent Hash Ring</h3>
+<p>Because Memcached follows a shared-nothing architecture, servers do
+not communicate with each other; routing is handled entirely on the
+client side. Client libraries solve the modulo problem by using
+consistent hashing, typically mapped onto an abstract circular keyspace
+ranging from <span class="math inline">\(0\)</span> to <span
+class="math inline">\(2^{32}-1\)</span> (a 32-bit integer range).</p>
+<ol type="1">
+<li><strong>Mapping Servers:</strong> The client hashes the identifier
+(such as IP address and port) of each configured server onto points
+along this 360-degree ring.</li>
+<li><strong>Mapping Keys:</strong> When performing a read or write
+operation, the client hashes the cache key using algorithms like MD5 or
+MurmurHash to place it on the exact same ring.</li>
+<li><strong>Resolving Targets:</strong> The client moves clockwise from
+the key's position until it encounters the first server point. That
+server becomes the designated target for storing or retrieving the
+value.</li>
+</ol>
+<h3 id="virtual-nodes-weighting-and-uniformity">Virtual Nodes (Weighting
+and Uniformity)</h3>
+<p>A basic hash ring can lead to non-uniform distribution (hot spots),
+where one server handles significantly more keys than others. To prevent
+this, client libraries implement "virtual nodes" (vnodes).</p>
+<p>Instead of placing a server on the ring once, the library hashes each
+server multiple times (often 100 to 160 tokens per physical machine)
+using modified strings like <code>server_ip:port-0</code>,
+<code>server_ip:port-1</code>, and so on. These virtual nodes are
+interspersed randomly throughout the ring. This balances the
+distribution of keys evenly across all available hardware and allows
+administrators to allocate higher weights to servers with larger RAM
+allocations by assigning them more virtual nodes.</p>
+<h3 id="adding-a-server">Adding a Server</h3>
+<p>When a new server is introduced to the cluster configuration, the
+client adds its corresponding virtual nodes to the hash ring. Only the
+keys located immediately counter-clockwise from the new server's virtual
+nodes are affected.</p>
+<p>Because these keys now encounter the newly added server first when
+moving clockwise, they map to the new instance. The rest of the keys
+continue resolving to their existing servers uninterrupted.
+Statistically, adding a node only remaps <span class="math inline">\(K /
+(N + 1)\)</span> keys (where <span class="math inline">\(K\)</span> is
+the total key count and <span class="math inline">\(N\)</span> is the
+original number of servers), eliminating cluster-wide cache
+invalidation.</p>
+<h3 id="removing-or-losing-a-server">Removing or Losing a Server</h3>
+<p>When a server is decommissioned or fails, the client library removes
+its virtual nodes from the ring. Keys that previously mapped to the
+removed server simply continue moving clockwise along the ring until
+they encounter the next operational virtual node.</p>
+<p>The keys previously assigned to the dead node will register as cache
+misses on the newly designated node and must be refetched from the
+database. However, the data stored on all other unaffected nodes remains
+valid, localized, and instantly accessible, maintaining cluster
+stability.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-clients-handle-consistent-hashing';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

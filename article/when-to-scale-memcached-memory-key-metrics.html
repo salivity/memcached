@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>When to Scale Memcached Memory: Key Metrics - memcached</title>
+    <meta name="description" content="Determining whether a Memcached node requires vertical memory scaling involves analyzing key performance indicators to ensure your working dataset fits adequately within the allocated RAM. Scaling up memory is crucial when premature data eviction harms ca">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/when-to-scale-memcached-memory-key-metrics">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="When to Scale Memcached Memory: Key Metrics - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/when-to-scale-memcached-memory-key-metrics" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Determining whether a Memcached node requires vertical memory scaling involves analyzing key performance indicators to ensure your working dataset fits adequately within the allocated RAM. Scaling up memory is crucial when premature data eviction harms ca" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="when-to-scale-memcached-memory-key-metrics">When to Scale
+Memcached Memory: Key Metrics</h1>
+<p>Determining whether a Memcached node requires vertical memory scaling
+involves analyzing key performance indicators to ensure your working
+dataset fits adequately within the allocated RAM. Scaling up memory is
+crucial when premature data eviction harms cache efficiency and
+downstream database performance. This article outlines the essential
+Memcached metrics—including evictions, hit ratios, slab utilization, and
+byte limits—that indicate it is time to allocate more memory to your
+node.</p>
+<h3 id="1-evictions-evictions">1. Evictions
+(<code>evictions</code>)</h3>
+<p>The eviction count is the most critical metric for identifying memory
+exhaustion. When Memcached reaches its configured memory limit
+(<code>limit_maxbytes</code>), it uses a Least Recently Used (LRU)
+algorithm to remove valid, non-expired keys to make room for new
+writes.</p>
+<ul>
+<li><strong>What to look for:</strong> A continuously rising eviction
+rate or sharp spikes during peak traffic.</li>
+<li><strong>Action threshold:</strong> If items are being evicted before
+their natural time-to-live (TTL) expires and this leads to degraded
+performance, the node is running out of capacity for its active working
+set.</li>
+</ul>
+<h3 id="2-cache-hit-ratio">2. Cache Hit Ratio</h3>
+<p>The cache hit ratio reflects how effectively Memcached serves
+requests directly from memory versus letting queries fall through to the
+primary database. It is calculated as:</p>
+<p><span class="math display">\[\text{Hit Ratio} =
+\frac{\text{get\_hits}}{\text{get\_hits} +
+\text{get\_misses}}\]</span></p>
+<ul>
+<li><strong>What to look for:</strong> A declining hit ratio that
+correlates directly with an increase in evictions.</li>
+<li><strong>Action threshold:</strong> While acceptable hit ratios vary
+by application, a downward trend accompanied by high miss rates
+generally means valid cached data is being purged too early due to
+memory constraints.</li>
+</ul>
+<h3 id="3-total-memory-utilization-bytes-vs-limit_maxbytes">3. Total
+Memory Utilization (<code>bytes</code> vs.
+<code>limit_maxbytes</code>)</h3>
+<p>Memcached reports the total bytes currently used by active data via
+the <code>bytes</code> metric, alongside the maximum memory permitted
+via <code>limit_maxbytes</code>.</p>
+<ul>
+<li><strong>What to look for:</strong> Sustained usage hovering at or
+near 100% of <code>limit_maxbytes</code>.</li>
+<li><strong>Action threshold:</strong> High memory usage alone is normal
+because Memcached is designed to stay full. However, if utilization
+reaches maximum capacity and triggers constant evictions, the instance
+requires vertical memory expansion.</li>
+</ul>
+<h3 id="4-per-slab-evictions-and-slab-class-saturation">4. Per-Slab
+Evictions and Slab Class Saturation</h3>
+<p>Memcached allocates memory in chunks organized into distinct slab
+classes based on item size. Memory pressure can occur within specific
+slab classes even if the global instance appears to have headroom.</p>
+<ul>
+<li><strong>What to look for:</strong> Run <code>stats items</code> to
+inspect the <code>evicted</code> and <code>evicted_nonzero</code>
+metrics per slab class.</li>
+<li><strong>Action threshold:</strong> High eviction numbers
+concentrated in specific slab classes indicate that the memory
+distribution cannot accommodate your application's item size profile. If
+modern Memcached features like slab automove
+(<code>slab_automove=1</code> or <code>2</code>) fail to balance the
+slabs adequately, increasing the overall instance memory is
+required.</li>
+</ul>
+<h3 id="5-out-of-memory-errors-oom">5. Out of Memory Errors (OOM)</h3>
+<p>By default, Memcached evicts old items when full. However, if the
+daemon is launched with the <code>-M</code> flag (which disables
+automatic evictions), the server will return an out-of-memory error when
+memory is exhausted.</p>
+<ul>
+<li><strong>What to look for:</strong> Application-level errors
+indicating cache write failures, or an increase in unfulfilled store
+commands.</li>
+<li><strong>Action threshold:</strong> Any non-zero count of OOM
+conditions under the <code>-M</code> configuration requires an immediate
+vertical memory scale-up to restore write operations.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/when-to-scale-memcached-memory-key-metrics';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Prevent Memcached DDoS Attacks - memcached</title>
+    <meta name="description" content="Memcached amplification attacks exploit publicly exposed, misconfigured Memcached servers to launch high-volume Distributed Denial of Service (DDoS) attacks using spoofed UDP traffic. This article outlines the essential security measures required to secur">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-prevent-memcached-d-do-s-attacks">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Prevent Memcached DDoS Attacks - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-prevent-memcached-d-do-s-attacks" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached amplification attacks exploit publicly exposed, misconfigured Memcached servers to launch high-volume Distributed Denial of Service (DDoS) attacks using spoofed UDP traffic. This article outlines the essential security measures required to secur" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-prevent-memcached-ddos-attacks">How to Prevent Memcached
+DDoS Attacks</h1>
+<p>Memcached amplification attacks exploit publicly exposed,
+misconfigured Memcached servers to launch high-volume Distributed Denial
+of Service (DDoS) attacks using spoofed UDP traffic. This article
+outlines the essential security measures required to secure your
+Memcached instances, including disabling UDP support, binding the
+service strictly to local or private network interfaces, enforcing
+firewall rules, enabling authentication, and maintaining up-to-date
+software to prevent servers from being weaponized.</p>
+<h3 id="1-disable-udp-support">1. Disable UDP Support</h3>
+<p>The primary vector for Memcached DDoS amplification is the User
+Datagram Protocol (UDP), which allows attackers to spoof source IP
+addresses and amplify traffic volume by factors over 50,000. Memcached
+instances should have UDP disabled unless it is strictly required.</p>
+<p>To disable UDP, add the <code>-U 0</code> parameter to your Memcached
+configuration file (typically located at
+<code>/etc/memcached.conf</code> on Debian/Ubuntu or
+<code>/etc/sysconfig/memcached</code> on RHEL/CentOS):</p>
+<pre class="text"><code>-U 0</code></pre>
+<p>After updating the configuration, restart the Memcached service:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl restart memcached</span></code></pre></div>
+<h3 id="2-bind-to-localhost-or-private-interfaces">2. Bind to Localhost
+or Private Interfaces</h3>
+<p>Memcached was never designed to face the public internet. By default,
+it should only listen on <code>localhost</code> (127.0.0.1) or an
+isolated internal network interface accessible only by your application
+servers.</p>
+<p>Ensure the listening interface is set to <code>127.0.0.1</code> in
+the configuration file:</p>
+<pre class="text"><code>-l 127.0.0.1</code></pre>
+<p>If multiple application servers must access the instance, bind it
+strictly to a private, non-routable VPC subnet IP (e.g.,
+<code>10.x.x.x</code> or <code>192.168.x.x</code>) rather than
+<code>0.0.0.0</code>.</p>
+<h3 id="3-implement-strict-firewall-rules">3. Implement Strict Firewall
+Rules</h3>
+<p>Configure host-based firewalls (such as <code>ufw</code> or
+<code>iptables</code>) and cloud security groups to drop all inbound
+traffic to Memcached’s default port (11211) from unauthorized
+sources.</p>
+<p>To block public access while allowing access only from a specific
+application server using <code>ufw</code>:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ufw deny 11211</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ufw allow from <span class="op">&lt;</span>APPLICATION_SERVER_IP<span class="op">&gt;</span> to any port 11211 proto tcp</span></code></pre></div>
+<p>Always ensure that UDP port 11211 is completely blocked from the
+internet.</p>
+<h3 id="4-enable-sasl-authentication">4. Enable SASL Authentication</h3>
+<p>If your deployment requires network access across multiple hosts,
+enable Simple Authentication and Security Layer (SASL) support to
+mandate client authentication.</p>
+<ol type="1">
+<li>Install the necessary SASL packages (<code>sasl2-bin</code> or
+<code>cyrus-sasl</code>).</li>
+<li>Add the <code>-S</code> flag to <code>/etc/memcached.conf</code> to
+enforce SASL.</li>
+<li>Create authorized credentials using <code>saslpasswd2</code>.</li>
+</ol>
+<p>This prevents unauthorized actors from executing arbitrary commands
+or manipulating cache data.</p>
+<h3 id="5-keep-memcached-updated">5. Keep Memcached Updated</h3>
+<p>Ensure your server runs modern versions of Memcached. Since version
+1.5.6, UDP is disabled by default out of the box. Regularly applying
+operating system and package updates ensures critical security patches
+are active.</p>
+<h3 id="6-audit-and-verify-exposure">6. Audit and Verify Exposure</h3>
+<p>After applying configurations, verify that your server does not
+expose port 11211 to the outside world. Test from an external machine
+using Nmap or Netcat:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">nc</span> <span class="at">-v</span> <span class="at">-u</span> <span class="at">-z</span> <span class="op">&lt;</span>YOUR_SERVER_IP<span class="op">&gt;</span> 11211</span></code></pre></div>
+<p>If the port is unreachable or connection is refused, the instance is
+successfully protected from participating in amplification attacks.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-prevent-memcached-d-do-s-attacks';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

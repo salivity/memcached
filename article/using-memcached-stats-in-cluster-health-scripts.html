@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Using Memcached Stats in Cluster Health Scripts - memcached</title>
+    <meta name="description" content="The stats command in Memcached serves as the primary data extraction mechanism for automated monitoring scripts, providing raw telemetry on node availability, memory utilization, throughput, and operational efficiency. By periodically querying this comman">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/using-memcached-stats-in-cluster-health-scripts">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Using Memcached Stats in Cluster Health Scripts - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/using-memcached-stats-in-cluster-health-scripts" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The stats command in Memcached serves as the primary data extraction mechanism for automated monitoring scripts, providing raw telemetry on node availability, memory utilization, throughput, and operational efficiency. By periodically querying this comman" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="using-memcached-stats-in-cluster-health-scripts">Using Memcached
+Stats in Cluster Health Scripts</h1>
+<p>The <code>stats</code> command in Memcached serves as the primary
+data extraction mechanism for automated monitoring scripts, providing
+raw telemetry on node availability, memory utilization, throughput, and
+operational efficiency. By periodically querying this command via TCP
+sockets or management clients, monitoring automation can parse key-value
+diagnostic pairs to detect performance bottlenecks, trigger alerts, and
+execute self-healing actions across a distributed Memcached cluster.</p>
+<h3 id="instant-availability-and-health-verification">Instant
+Availability and Health Verification</h3>
+<p>At the most basic level of cluster automation, issuing a
+<code>stats</code> command acts as a functional liveness check. Unlike a
+simple TCP port check, which only confirms that the network port is
+open, sending <code>stats\r\n</code> and expecting a trailing
+<code>END\r\n</code> response proves that the Memcached thread pool is
+actively processing commands. If an automated script encounters a
+timeout, connection drop, or malformed response, it can immediately flag
+the node as unhealthy, temporarily remove it from the client hashing
+ring, or restart the container or systemd service.</p>
+<h3 id="monitoring-memory-saturation-and-evictions">Monitoring Memory
+Saturation and Evictions</h3>
+<p>Memcached stores data entirely in-memory, making capacity tracking
+crucial. Scripts parse the following metrics from the <code>stats</code>
+output:</p>
+<ul>
+<li><strong><code>bytes</code> and <code>limit_maxbytes</code>:</strong>
+By dividing <code>bytes</code> (current allocated memory) by
+<code>limit_maxbytes</code> (maximum configured memory), scripts compute
+real-time memory saturation.</li>
+<li><strong><code>evictions</code>:</strong> When memory is full,
+Memcached purges old data based on an LRU (Least Recently Used) policy
+to store new items. An increasing <code>evictions</code> counter
+indicates that the cache is undersized for its working set, alerting
+administrators to provision additional nodes or increase RAM limits
+before cache churn impacts database backends.</li>
+<li><strong><code>reclaimed</code>:</strong> Shows how often expired
+keys were overwritten, providing insight into TTL (Time-To-Live)
+efficiency.</li>
+</ul>
+<h3 id="evaluating-cache-hit-ratio-and-efficiency">Evaluating Cache Hit
+Ratio and Efficiency</h3>
+<p>A distributed cache must maintain a high hit ratio to protect backend
+databases from request storms. Automated scripts calculate the hit ratio
+by extracting the following counters:</p>
+<p><span class="math display">\[\text{Hit Ratio} =
+\frac{\text{get\_hits}}{\text{get\_hits} +
+\text{get\_misses}}\]</span></p>
+<p>If a node's hit ratio drops below an acceptable baseline (e.g.,
+85–90%), the monitoring system can automatically alert engineers to
+cache-stampede issues, broken key-generation logic, or widespread key
+invalidation in client applications.</p>
+<h3 id="tracking-connection-health-and-saturation">Tracking Connection
+Health and Saturation</h3>
+<p>Memcached uses an event-driven model to handle thousands of
+concurrent connections. Monitoring scripts use connection counters to
+detect connection leaks or impending connection limits:</p>
+<ul>
+<li><strong><code>curr_connections</code>:</strong> Tracks active client
+connections to balance network loads across the cluster.</li>
+<li><strong><code>total_connections</code>:</strong> Monitors cumulative
+client connections over time to identify rapid connect/disconnect churn
+that should be replaced with connection pooling.</li>
+<li><strong><code>listen_disabled_num</code>:</strong> A non-zero or
+rising value indicates that Memcached has hit its <code>maxconns</code>
+limit and is rejecting new incoming connections, serving as an immediate
+critical alert trigger in automated systems.</li>
+</ul>
+<h3 id="driving-dynamic-auto-scaling-and-fleet-orchestration">Driving
+Dynamic Auto-Scaling and Fleet Orchestration</h3>
+<p>In cloud environments managed by Kubernetes or autoscaling groups,
+metric collection scripts (such as Prometheus exporters or custom daemon
+sets) pipe <code>stats</code> data into horizontal pod autoscalers
+(HPA). When cluster-wide aggregations of <code>bytes</code>, network
+throughput (<code>bytes_read</code>, <code>bytes_written</code>), or CPU
+usage counters (<code>rusage_user</code>, <code>rusage_system</code>)
+exceed safe operational watermarks, the autoscaler automatically spins
+up new Memcached instances and updates cluster discovery services.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/using-memcached-stats-in-cluster-health-scripts';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

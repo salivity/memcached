@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached stats items age Field Explained - memcached</title>
+    <meta name="description" content="Monitoring cache health is critical for preventing performance degradation in web applications, and Memcached exposes internal performance metrics through various diagnostic commands. This article explores the age field found within the stats items output">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-items-age-field-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached stats items age Field Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-items-age-field-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Monitoring cache health is critical for preventing performance degradation in web applications, and Memcached exposes internal performance metrics through various diagnostic commands. This article explores the age field found within the stats items output" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-stats-items-age-field-explained">Memcached stats items
+age Field Explained</h1>
+<p>Monitoring cache health is critical for preventing performance
+degradation in web applications, and Memcached exposes internal
+performance metrics through various diagnostic commands. This article
+explores the <code>age</code> field found within the
+<code>stats items</code> output, explaining what this metric represents,
+how it is calculated, and how engineers can use it to diagnose memory
+exhaustion, slab imbalances, and aggressive cache evictions.</p>
+<h3 id="what-is-the-age-field-in-stats-items">What is the
+<code>age</code> Field in <code>stats items</code>?</h3>
+<p>When executing the <code>stats items</code> command in Memcached, the
+daemon returns key statistics broken down by slab class ID (e.g.,
+<code>STAT items:1:age 1240</code>). The <code>age</code> metric
+represents the age, in seconds, of the oldest item (specifically, the
+least recently used or LRU item) residing within that specific slab
+class.</p>
+<p>Because Memcached uses a slab allocation mechanism to partition
+memory into chunks suited for different object sizes, items are grouped
+into distinct classes. The <code>age</code> value indicates how long the
+oldest item in a given class has survived without being evicted or
+expired.</p>
+<h3 id="assessing-memory-pressure-and-eviction-rates">Assessing Memory
+Pressure and Eviction Rates</h3>
+<p>The primary utility of the <code>age</code> field is determining the
+presence and severity of memory pressure within individual slab
+classes.</p>
+<ul>
+<li><strong>Rapid Evictions and Low Age:</strong> If a slab class shows
+an active eviction count alongside a very low <code>age</code> (ranging
+from a few seconds to a few minutes), items are being forced out almost
+immediately after insertion to make room for newer data. This behavior
+typically leads to cache churn, lower hit rates, and increased latency
+on downstream databases.</li>
+<li><strong>Stable Age with Low or Zero Evictions:</strong> A
+consistently high <code>age</code>—often reaching hours or
+days—indicates that items are allowed to survive up to their natural
+Time-To-Live (TTL). In this scenario, the assigned slab class has
+sufficient memory capacity to serve its workload effectively.</li>
+</ul>
+<h3 id="identifying-slab-class-imbalance">Identifying Slab Class
+Imbalance</h3>
+<p>Global memory metrics can obscure localized bottlenecks because
+Memcached manages memory on a per-slab basis rather than globally. A
+cluster might appear to have free memory overall while specific slab
+classes suffer from extreme eviction rates.</p>
+<p>By comparing the <code>age</code> values across different slab
+classes:</p>
+<ul>
+<li>Large discrepancies between classes (for example, class 5 having an
+<code>age</code> of 30 seconds while class 12 has an <code>age</code> of
+86,400 seconds) highlight uneven distribution.</li>
+<li>This discrepancy alerts administrators to optimize object sizes,
+review serialization formats, or enable automated slab reassignment
+features (such as <code>slab_reassign</code> and
+<code>slab_automove</code>) so memory can migrate dynamically to the
+classes under pressure.</li>
+</ul>
+<h3 id="diagnosing-short-ttls-vs-cache-eviction">Diagnosing Short TTLs
+vs. Cache Eviction</h3>
+<p>A low <code>age</code> does not always indicate memory starvation. If
+an application explicitly stores items with short expiration limits (for
+example, 10 or 30 seconds), the maximum possible <code>age</code> of any
+item in that class will naturally stay below that threshold.</p>
+<p>To determine actual health, correlate the <code>age</code> field with
+the <code>evicted</code> and <code>evicted_time</code> fields in the
+same <code>stats items</code> block:</p>
+<ul>
+<li>If <code>age</code> is low and <code>evicted</code> is zero, the
+cache is healthy and the low age simply mirrors the application's short
+TTL design or a recently initialized cache.</li>
+<li>If <code>age</code> is low and <code>evicted</code> is continuously
+incrementing, the slab class is under-provisioned, and data is actively
+being dropped prematurely.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-items-age-field-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

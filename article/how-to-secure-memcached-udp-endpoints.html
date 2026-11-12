@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Secure Memcached UDP Endpoints - memcached</title>
+    <meta name="description" content="Exposing Memcached UDP endpoints to the public internet presents significant security risks, most notably leaving servers vulnerable to being weaponized in high-volume distributed denial-of-service (DDoS) amplification attacks. Because UDP is a connection">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-secure-memcached-udp-endpoints">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Secure Memcached UDP Endpoints - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-secure-memcached-udp-endpoints" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Exposing Memcached UDP endpoints to the public internet presents significant security risks, most notably leaving servers vulnerable to being weaponized in high-volume distributed denial-of-service (DDoS) amplification attacks. Because UDP is a connection" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-secure-memcached-udp-endpoints">How to Secure Memcached
+UDP Endpoints</h1>
+<p>Exposing Memcached UDP endpoints to the public internet presents
+significant security risks, most notably leaving servers vulnerable to
+being weaponized in high-volume distributed denial-of-service (DDoS)
+amplification attacks. Because UDP is a connectionless protocol that
+does not validate source IP addresses, unauthenticated requests with
+spoofed IPs can trigger massive responses directed at targeted victims.
+This guide outlines the essential steps administrators must take to
+eliminate unauthenticated access to Memcached via UDP, including
+disabling UDP entirely, binding services to trusted local interfaces,
+implementing firewall restrictions, and verifying service isolation.</p>
+<h3 id="1-disable-udp-support-entirely">1. Disable UDP Support
+Entirely</h3>
+<p>Unless your infrastructure strictly requires UDP for Memcached
+traffic, the most effective mitigation is to disable UDP support
+altogether. In versions 1.5.6 and newer, UDP is disabled by default, but
+it may remain enabled on older deployments or due to legacy
+configuration templates.</p>
+<p>To disable UDP:</p>
+<ul>
+<li><p><strong>Debian/Ubuntu
+(<code>/etc/memcached.conf</code>):</strong><br />
+Add the <code>-U 0</code> parameter to the configuration file:</p>
+<pre class="text"><code>-U 0</code></pre></li>
+<li><p><strong>RHEL/CentOS/Rocky Linux
+(<code>/etc/sysconfig/memcached</code>):</strong><br />
+Append <code>-U 0</code> to the <code>OPTIONS</code> directive:</p>
+<pre class="text"><code>OPTIONS=&quot;-U 0 -l 127.0.0.1&quot;</code></pre></li>
+</ul>
+<p>After updating the configuration, restart the service to apply the
+changes:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl restart memcached</span></code></pre></div>
+<h3 id="2-bind-memcached-to-localhost-or-private-networks">2. Bind
+Memcached to Localhost or Private Networks</h3>
+<p>Memcached does not require exposure to the public internet. If the
+service must be accessed by application servers across a network, bind
+it exclusively to a private internal IP address or the loopback
+interface (<code>127.0.0.1</code>).</p>
+<ul>
+<li><p>In <code>/etc/memcached.conf</code>, set the listen address:</p>
+<pre class="text"><code>-l 127.0.0.1</code></pre>
+<p>Or specify your internal interface IP:</p>
+<pre class="text"><code>-l 10.0.0.10</code></pre></li>
+</ul>
+<p>Restart the service to ensure it ceases listening on
+<code>0.0.0.0</code> (all interfaces).</p>
+<h3 id="3-implement-firewall-rules">3. Implement Firewall Rules</h3>
+<p>Network-level access control provides an essential layer of defense
+against accidental misconfigurations. Configure host-based firewalls to
+drop unauthorized inbound traffic on port 11211.</p>
+<ul>
+<li><p><strong>Using <code>iptables</code>:</strong></p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Drop all incoming UDP traffic on port 11211</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> iptables <span class="at">-A</span> INPUT <span class="at">-p</span> udp <span class="at">--dport</span> 11211 <span class="at">-j</span> DROP</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Allow TCP traffic only from a trusted application server IP</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> iptables <span class="at">-A</span> INPUT <span class="at">-p</span> tcp <span class="at">-s</span> 10.0.0.5 <span class="at">--dport</span> 11211 <span class="at">-j</span> ACCEPT</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> iptables <span class="at">-A</span> INPUT <span class="at">-p</span> tcp <span class="at">--dport</span> 11211 <span class="at">-j</span> DROP</span></code></pre></div></li>
+<li><p><strong>Using <code>ufw</code> (Ubuntu):</strong></p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ufw deny proto udp to any port 11211</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ufw allow proto tcp from 10.0.0.5 to any port 11211</span></code></pre></div></li>
+<li><p><strong>Using <code>firewalld</code> (RHEL-based
+distributions):</strong></p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> firewall-cmd <span class="at">--permanent</span> <span class="at">--remove-port</span><span class="op">=</span>11211/udp</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> firewall-cmd <span class="at">--permanent</span> <span class="at">--zone</span><span class="op">=</span>trusted <span class="at">--add-source</span><span class="op">=</span>10.0.0.5/32</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> firewall-cmd <span class="at">--reload</span></span></code></pre></div></li>
+</ul>
+<h3 id="4-enable-sasl-authentication-for-tcp">4. Enable SASL
+Authentication (For TCP)</h3>
+<p>Memcached supports Simple Authentication and Security Layer (SASL) to
+mandate credentials before processing commands. While SASL is designed
+for TCP and cannot natively secure unauthenticated stateless UDP
+packets, enabling it enforces authentication for your legitimate cached
+data access once UDP is disabled.</p>
+<p>To enable SASL:</p>
+<ol type="1">
+<li>Ensure the <code>cyrus-sasl</code> and <code>cyrus-sasl-plain</code>
+packages are installed.</li>
+<li>Add the <code>-S</code> flag to your Memcached configuration
+file.</li>
+<li>Configure your SASL credentials in
+<code>/etc/sasl2/memcached.conf</code>.</li>
+</ol>
+<h3 id="5-verify-configuration-and-port-status">5. Verify Configuration
+and Port Status</h3>
+<p>Confirm that the UDP port is closed and that Memcached is only
+listening on the intended interfaces.</p>
+<p>Check listening UDP ports using <code>ss</code>:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ss <span class="at">-ulpn</span> <span class="kw">|</span> <span class="fu">grep</span> 11211</span></code></pre></div>
+<p>If UDP has been disabled properly, this command should return no
+results.</p>
+<p>To verify overall network exposure, inspect the listening
+sockets:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> ss <span class="at">-tlpn</span> <span class="kw">|</span> <span class="fu">grep</span> 11211</span></code></pre></div>
+<p>Ensure the output displays <code>127.0.0.1:11211</code> or your
+designated private IP, rather than <code>0.0.0.0:11211</code> or
+<code>:::11211</code>.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-secure-memcached-udp-endpoints';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

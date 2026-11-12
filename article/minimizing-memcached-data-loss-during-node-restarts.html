@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimizing Memcached Data Loss During Node Restarts - memcached</title>
+    <meta name="description" content="Planned maintenance restarts on Memcached nodes inevitably risk flushing volatile in-memory data, potentially exposing underlying databases to catastrophic thundering herd problems and severe latency spikes. This article outlines key architectural and ope">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/minimizing-memcached-data-loss-during-node-restarts">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Minimizing Memcached Data Loss During Node Restarts - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/minimizing-memcached-data-loss-during-node-restarts" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Planned maintenance restarts on Memcached nodes inevitably risk flushing volatile in-memory data, potentially exposing underlying databases to catastrophic thundering herd problems and severe latency spikes. This article outlines key architectural and ope" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="minimizing-memcached-data-loss-during-node-restarts">Minimizing
+Memcached Data Loss During Node Restarts</h1>
+<p>Planned maintenance restarts on Memcached nodes inevitably risk
+flushing volatile in-memory data, potentially exposing underlying
+databases to catastrophic thundering herd problems and severe latency
+spikes. This article outlines key architectural and operational
+strategies—including proxy-based cache warming, rolling restarts paired
+with consistent hashing, active-passive cluster switching, and critical
+key pre-warming—designed to preserve cache hit ratios and minimize data
+loss during scheduled maintenance windows.</p>
+<h3 id="rolling-restarts-with-consistent-hashing">Rolling Restarts with
+Consistent Hashing</h3>
+<p>A standard best practice for multi-node deployments is executing
+rolling restarts combined with client-side consistent hashing (such as
+the Ketama algorithm). Instead of restarting multiple nodes
+simultaneously, restart a single node at a time.</p>
+<p>Consistent hashing ensures that when one node is temporarily removed,
+only a fraction of the total keyspace (<span
+class="math inline">\(1/N\)</span>, where <span
+class="math inline">\(N\)</span> is the number of nodes) is invalidated
+or remapped to alternative servers. Once the node returns, the hash ring
+stabilizes. To further soften the blow, gracefully drain read traffic
+off the target node before termination to prevent abrupt connection
+terminations.</p>
+<h3 id="cold-cache-warmup-via-mcrouter">Cold Cache Warmup via
+mcrouter</h3>
+<p>Using a specialized Memcached proxy such as Facebook's
+<code>mcrouter</code> provides automated cold-cache mitigation through
+its <code>WarmUpRoute</code> routing prefix.</p>
+<p>In this configuration, when a newly restarted "cold" node receives a
+cache miss for a requested key, <code>mcrouter</code> automatically
+queries a secondary "warm" cluster or a standby node to retrieve the
+data. Once retrieved, <code>mcrouter</code> asynchronously writes the
+key back into the cold node before serving the client. This offloads the
+burden from the primary persistent datastore and rapidly repopulates the
+freshly booted instance with high-priority keys.</p>
+<h3 id="bluegreen-active-passive-cluster-rotation">Blue/Green
+(Active-Passive) Cluster Rotation</h3>
+<p>For environments where zero downtime and zero data loss are
+non-negotiable, a blue/green cluster rotation strategy eliminates the
+risks of restarting nodes in-place.</p>
+<ol type="1">
+<li><strong>Deploy parallel clusters:</strong> Maintain two identical
+Memcached clusters (Blue and Green).</li>
+<li><strong>Implement dual writes:</strong> Route all application write
+and update operations to both clusters simultaneously.</li>
+<li><strong>Switch read traffic:</strong> Once the secondary cluster's
+cache mirrors the production state, shift read traffic from Blue to
+Green at the proxy or application layer.</li>
+<li><strong>Perform maintenance:</strong> Safely reboot and patch nodes
+in the isolated Blue cluster without affecting live requests.</li>
+</ol>
+<h3 id="key-pre-warming-scripts">Key Pre-Warming Scripts</h3>
+<p>Because access patterns typically follow a Pareto distribution (where
+20% of the keys account for 80% of the traffic), you do not need to
+restore an entire cache to prevent downstream database saturation.</p>
+<p>Before re-introducing a restarted node into the active pool:</p>
+<ul>
+<li>Query an analytics log or an access tracking table to fetch the top
+tier of frequently accessed keys.</li>
+<li>Run an asynchronous background warm-up script that queries the
+primary database and repopulates the empty Memcached node with this
+critical working set.</li>
+<li>Reconnect the node to the production pool only after the pre-warming
+script confirms the presence of these hot keys.</li>
+</ul>
+<h3
+id="rate-limiting-cache-population-throttling-backend-fallback">Rate-Limiting
+Cache Population (Throttling Backend Fallback)</h3>
+<p>When an empty node is returned to service, a sudden influx of
+concurrent requests for identical missing keys will cause a cache
+stampede against the database.</p>
+<p>Mitigate this by applying mutex locks or probabilistic early
+expiration (such as the XFetch algorithm) within your application logic.
+A distributed lock (using a flag or coordination service) ensures that
+only one application worker executes the expensive backend query and
+populates the freshly restarted Memcached node, while other concurrent
+requests wait or temporarily serve stale data.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/minimizing-memcached-data-loss-during-node-restarts';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

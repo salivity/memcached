@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Max Connection Backlog Parameter - memcached</title>
+    <meta name="description" content="This article explains the specific configuration parameter used to control the maximum pending network connection backlog in Memcached. It details how the setting works, how to configure it on your server, and the operating system limitations that directl">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-max-connection-backlog-parameter">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Max Connection Backlog Parameter - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-max-connection-backlog-parameter" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains the specific configuration parameter used to control the maximum pending network connection backlog in Memcached. It details how the setting works, how to configure it on your server, and the operating system limitations that directl" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-max-connection-backlog-parameter">Memcached Max
+Connection Backlog Parameter</h1>
+<p>This article explains the specific configuration parameter used to
+control the maximum pending network connection backlog in Memcached. It
+details how the setting works, how to configure it on your server, and
+the operating system limitations that directly impact its effectiveness
+during periods of high traffic.</p>
+<h2 id="the-connection-backlog-parameter--b">The Connection Backlog
+Parameter: <code>-b</code></h2>
+<p>In Memcached, the configuration parameter that controls the maximum
+backlog of pending network connections is <code>-b</code> (or
+<code>backlog</code>).</p>
+<p>When clients attempt to establish a TCP connection with Memcached,
+the connections sit in a queue waiting to be processed by the server's
+listener thread. The <code>-b</code> flag sets the size of this queue
+via the underlying system <code>listen()</code> call.</p>
+<p>By default, Memcached sets the backlog limit to <strong>1024</strong>
+connections.</p>
+<h2 id="how-to-configure-the-backlog">How to Configure the Backlog</h2>
+<p>You can adjust this parameter either directly via the command-line
+interface when starting the daemon or within the Memcached configuration
+file.</p>
+<h3 id="command-line-usage">Command-Line Usage</h3>
+<p>To start Memcached with a custom backlog limit, pass the
+<code>-b</code> flag followed by the desired integer value:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-b</span> 2048 <span class="at">-u</span> memcached <span class="at">-m</span> 1024 <span class="at">-p</span> 11211</span></code></pre></div>
+<h3 id="configuration-file-usage">Configuration File Usage</h3>
+<p>On Linux distributions using a configuration file (such as
+<code>/etc/memcached.conf</code> on Debian/Ubuntu or
+<code>/etc/sysconfig/memcached</code> on RHEL/CentOS), you can append
+the option.</p>
+<p>For Debian/Ubuntu (<code>/etc/memcached.conf</code>):</p>
+<pre class="text"><code>-b 2048</code></pre>
+<p>For RHEL/CentOS (<code>/etc/sysconfig/memcached</code>):</p>
+<pre class="text"><code>OPTIONS=&quot;-b 2048&quot;</code></pre>
+<p>Restart the Memcached service after making changes to the
+configuration file for them to take effect.</p>
+<h2 id="operating-system-level-dependencies">Operating System Level
+Dependencies</h2>
+<p>Configuring the <code>-b</code> parameter in Memcached does not
+guarantee that the operating system will honor the requested backlog
+size. The Linux kernel enforces its own global limit on socket listen
+backlogs via the <code>net.core.somaxconn</code> sysctl parameter.</p>
+<p>If the value set with <code>-b</code> exceeds the kernel's
+<code>somaxconn</code> limit, the operating system will silently
+truncate the backlog to the <code>somaxconn</code> value.</p>
+<h3 id="checking-and-updating-somaxconn">Checking and Updating
+<code>somaxconn</code></h3>
+<p>To check your current system limit:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">sysctl</span> net.core.somaxconn</span></code></pre></div>
+<p>To increase this limit to match or exceed your Memcached
+configuration, update it dynamically:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> sysctl <span class="at">-w</span> net.core.somaxconn=2048</span></code></pre></div>
+<p>To make the change persistent across server reboots, add the
+following line to <code>/etc/sysctl.conf</code>:</p>
+<pre class="text"><code>net.core.somaxconn = 2048</code></pre>
+<h2 id="when-to-adjust-the-backlog">When to Adjust the Backlog</h2>
+<p>Increasing the connection backlog is beneficial in high-throughput
+environments where clients experience connection timeouts, "connection
+refused" errors, or sudden bursts of new TCP connections. By expanding
+both the <code>-b</code> parameter and the kernel's
+<code>somaxconn</code>, Memcached can queue brief bursts of incoming
+requests without dropping packets.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-max-connection-backlog-parameter';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

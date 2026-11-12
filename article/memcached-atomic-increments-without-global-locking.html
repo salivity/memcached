@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Atomic Increments Without Global Locking - memcached</title>
+    <meta name="description" content="Memcached performs atomic counter increments and decrements rapidly by avoiding a monolithic, global lock on the entire cache. Instead, it utilizes fine-grained item locking tied to its primary hash table, allowing multiple worker threads to execute arith">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-atomic-increments-without-global-locking">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Atomic Increments Without Global Locking - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-atomic-increments-without-global-locking" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached performs atomic counter increments and decrements rapidly by avoiding a monolithic, global lock on the entire cache. Instead, it utilizes fine-grained item locking tied to its primary hash table, allowing multiple worker threads to execute arith" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-atomic-increments-without-global-locking">Memcached
+Atomic Increments Without Global Locking</h1>
+<p>Memcached performs atomic counter increments and decrements rapidly
+by avoiding a monolithic, global lock on the entire cache. Instead, it
+utilizes fine-grained item locking tied to its primary hash table,
+allowing multiple worker threads to execute arithmetic operations
+concurrently. This architecture ensures that updating a counter only
+serializes operations on that specific key—or a small subset of keys
+sharing a lock partition—while the rest of the memory store handles read
+and write operations without interruption.</p>
+<h3 id="thread-model-and-granular-item-locks">Thread Model and Granular
+Item Locks</h3>
+<p>Memcached runs a multi-threaded architecture using a master thread to
+accept incoming connections and multiple worker threads to process
+commands. Early versions of Memcached utilized a global cache lock that
+caused severe thread contention during high write volumes. Modern
+Memcached replaces this model with partitioned locks known as item locks
+(<code>item_lock</code>).</p>
+<p>The cache maintains an array of mutexes dedicated to item
+synchronization. When an <code>incr</code> command is received,
+Memcached hashes the target key to produce a 32-bit hash value. This
+hash serves two purposes: identifying the bucket in the primary hash
+table and mapping directly to a specific mutex index in the item lock
+array via a modulo operation:</p>
+<pre><code>lock_index = hash_value &amp; (item_lock_count - 1)</code></pre>
+<p>By decoupling synchronization from the global state, threads
+operating on keys with different lock indexes execute simultaneously
+across CPU cores.</p>
+<h3 id="execution-path-of-the-incr-command">Execution Path of the
+<code>incr</code> Command</h3>
+<p>When a worker thread processes an increment operation, it executes a
+deterministic, localized sequence:</p>
+<ol type="1">
+<li><strong>Lock Acquisition:</strong> The thread calculates the key’s
+hash and claims the corresponding granular item lock.</li>
+<li><strong>Item Lookup:</strong> Under the protection of the item lock,
+the thread searches the internal hash table for the key's memory
+address.</li>
+<li><strong>Data Validation:</strong> The stored value must be a textual
+representation of a 64-bit unsigned integer. If the item does not exist
+or contains non-numeric byte sequences, the operation fails, the lock is
+released, and an error returns to the client.</li>
+<li><strong>Arithmetic Operation:</strong> Memcached converts the ASCII
+string to an unsigned 64-bit integer (<code>uint64_t</code>), adds the
+requested delta, and handles overflows according to standard 64-bit
+wrapping semantics.</li>
+<li><strong>Memory Updating:</strong>
+<ul>
+<li><strong>In-Place Update:</strong> If the new number has the same
+string length as the old value (for example, incrementing
+<code>100</code> to <code>101</code>), the bytes are updated directly
+within the existing slab memory chunk.</li>
+<li><strong>Reallocation:</strong> If the digit count increases (for
+example, incrementing <code>999</code> to <code>1000</code>), the thread
+must obtain a new, larger memory chunk from the slab allocator, format
+the new text value, update hash table pointers, and free the old
+chunk.</li>
+</ul></li>
+<li><strong>Lock Release:</strong> Once the memory pointers and CAS
+(Check-And-Set) values are updated, the thread releases the item
+lock.</li>
+</ol>
+<h3 id="collision-management-and-concurrency">Collision Management and
+Concurrency</h3>
+<p>Because the number of hash table buckets exceeds the number of
+allocated item locks, multiple distinct keys can occasionally map to the
+same mutex. However, Memcached sets the lock table size high enough
+(typically thousands of discrete locks) that lock collision probability
+across active threads remains extremely low.</p>
+<p>By restricting mutual exclusion strictly to the lifespan of the
+pointer read and string conversion, Memcached achieves atomicity at
+CPU-bound speeds without stalling the broader key-value storage
+engine.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-atomic-increments-without-global-locking';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

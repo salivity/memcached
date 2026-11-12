@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Binary Protocol Packet Header Layout - memcached</title>
+    <meta name="description" content="The Memcached binary protocol optimizes communication between clients and the caching server by using a compact, framed structure that reduces parsing overhead compared to the older text-based protocol. At the core of every binary packet is a fixed-size,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-binary-protocol-packet-header-layout">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Binary Protocol Packet Header Layout - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-binary-protocol-packet-header-layout" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The Memcached binary protocol optimizes communication between clients and the caching server by using a compact, framed structure that reduces parsing overhead compared to the older text-based protocol. At the core of every binary packet is a fixed-size," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-binary-protocol-packet-header-layout">Memcached Binary
+Protocol Packet Header Layout</h1>
+<p>The Memcached binary protocol optimizes communication between clients
+and the caching server by using a compact, framed structure that reduces
+parsing overhead compared to the older text-based protocol. At the core
+of every binary packet is a fixed-size, 24-byte header that precedes any
+dynamic data such as command extras, keys, or values. This article
+breaks down the exact 24-byte structural layout of both request and
+response packet headers, detailing each field's offset, size, and
+purpose.</p>
+<h2 id="header-structure-overview">Header Structure Overview</h2>
+<p>Every binary protocol packet begins with an identical 24-byte layout
+transmitted in network byte order (big-endian). The general 32-bit word
+alignment of the header is structured as follows:</p>
+<pre><code>  Byte/     0       |       1       |       2       |       3       |
+     /              |               |               |               |
+    |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+    +---------------+---------------+---------------+---------------+
+ 00 | Magic byte    | Opcode        | Key length                    |
+    +---------------+---------------+---------------+---------------+
+ 04 | Extra length  | Data type     | vBucket ID / Status           |
+    +---------------+---------------+---------------+---------------+
+ 08 | Total body length                                             |
+    +---------------+---------------+---------------+---------------+
+ 12 | Opaque                                                        |
+    +---------------+---------------+---------------+---------------+
+ 16 | CAS (Bytes 0-3)                                               |
+    +---------------+---------------+---------------+---------------+
+ 20 | CAS (Bytes 4-7)                                               |
+    +---------------+---------------+---------------+---------------+</code></pre>
+<h2 id="detailed-field-descriptions">Detailed Field Descriptions</h2>
+<h3 id="1-magic-byte-byte-0-8-bits">1. Magic Byte (Byte 0, 8 bits)</h3>
+<p>Identifies the direction of the packet:</p>
+<ul>
+<li><code>0x80</code>: Request packet (Client to Server)</li>
+<li><code>0x81</code>: Response packet (Server to Client)</li>
+</ul>
+<h3 id="2-opcode-byte-1-8-bits">2. Opcode (Byte 1, 8 bits)</h3>
+<p>Specifies the command being executed. Common opcodes include:</p>
+<ul>
+<li><code>0x00</code>: Get</li>
+<li><code>0x01</code>: Set</li>
+<li><code>0x02</code>: Add</li>
+<li><code>0x03</code>: Replace</li>
+<li><code>0x04</code>: Delete</li>
+<li><code>0x05</code>: Increment</li>
+<li><code>0x06</code>: Decrement</li>
+<li><code>0x07</code>: Quit</li>
+<li><code>0x08</code>: Flush</li>
+<li><code>0x09</code>: GetQ (Get Quietly)</li>
+<li><code>0x0A</code>: No-op</li>
+<li><code>0x0C</code>: Version</li>
+</ul>
+<h3 id="3-key-length-bytes-23-16-bits">3. Key Length (Bytes 2–3, 16
+bits)</h3>
+<p>An unsigned integer indicating the length in bytes of the text key
+included in the body. If the command does not include a key, this value
+is <code>0x0000</code>.</p>
+<h3 id="4-extra-length-byte-4-8-bits">4. Extra Length (Byte 4, 8
+bits)</h3>
+<p>An unsigned integer representing the byte length of command-specific
+metadata (extras) positioned immediately after the 24-byte header. For
+example, a <code>Set</code> command uses extras for flags and expiration
+time.</p>
+<h3 id="5-data-type-byte-5-8-bits">5. Data Type (Byte 5, 8 bits)</h3>
+<p>Reserved for defining the payload representation. In standard
+Memcached, this is set to <code>0x00</code> (raw bytes).</p>
+<h3 id="6-vbucket-id--status-bytes-67-16-bits">6. vBucket ID / Status
+(Bytes 6–7, 16 bits)</h3>
+<p>The purpose of this field changes depending on whether the packet is
+a request or a response:</p>
+<ul>
+<li><strong>Request (vBucket ID):</strong> Specifies the virtual bucket
+target for cluster routing (commonly used in systems like Couchbase).
+Set to <code>0x0000</code> in standard Memcached standalone
+servers.</li>
+<li><strong>Response (Status):</strong> A 16-bit status code indicating
+the outcome of the command:
+<ul>
+<li><code>0x0000</code>: No error / Success</li>
+<li><code>0x0001</code>: Key not found</li>
+<li><code>0x0002</code>: Key exists</li>
+<li><code>0x0003</code>: Value too large</li>
+<li><code>0x0004</code>: Invalid arguments</li>
+<li><code>0x0005</code>: Item not stored</li>
+<li><code>0x0006</code>: Non-numeric value</li>
+<li><code>0x0081</code>: Unknown command</li>
+<li><code>0x0082</code>: Out of memory</li>
+</ul></li>
+</ul>
+<h3 id="7-total-body-length-bytes-811-32-bits">7. Total Body Length
+(Bytes 8–11, 32 bits)</h3>
+<p>An unsigned 32-bit integer specifying the total length of the payload
+following the 24-byte header. The total body length must equal:</p>
+<p><span class="math display">\[\text{Total Body Length} = \text{Extra
+Length} + \text{Key Length} + \text{Value Length}\]</span></p>
+<p>The receiving end calculates the length of the dynamic value payload
+by subtracting the extra length and key length from this value.</p>
+<h3 id="8-opaque-bytes-1215-32-bits">8. Opaque (Bytes 12–15, 32
+bits)</h3>
+<p>A client-generated identifier echoed directly back by the server in
+its response. This field allows asynchronous clients to map incoming
+responses back to their corresponding pipelined requests.</p>
+<h3 id="9-cas---compare-and-swap-bytes-1623-64-bits">9. CAS - Compare
+and Swap (Bytes 16–23, 64 bits)</h3>
+<p>A 64-bit integer providing data versioning. In a request, it provides
+optimistic locking checks; the command only succeeds if the provided CAS
+matches the item's current token on the server. In a response, it
+returns the newly assigned CAS identifier for the item.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-binary-protocol-packet-header-layout';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

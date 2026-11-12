@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Evicts Items With Same Expiration - memcached</title>
+    <meta name="description" content="When multiple items in Memcached share the identical expiration time, the system resolves eviction conflicts using its Least Recently Used (LRU) mechanism rather than the expiration timestamp itself. Memcached decouples expiration logic from memory manage">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-evicts-items-with-same-expiration">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Evicts Items With Same Expiration - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-evicts-items-with-same-expiration" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When multiple items in Memcached share the identical expiration time, the system resolves eviction conflicts using its Least Recently Used (LRU) mechanism rather than the expiration timestamp itself. Memcached decouples expiration logic from memory manage" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-evicts-items-with-same-expiration">How Memcached
+Evicts Items With Same Expiration</h1>
+<p>When multiple items in Memcached share the identical expiration time,
+the system resolves eviction conflicts using its Least Recently Used
+(LRU) mechanism rather than the expiration timestamp itself. Memcached
+decouples expiration logic from memory management, meaning identical
+time-to-live (TTL) values have no bearing on eviction priority. Instead,
+Memcached inspects access patterns within the relevant memory slab and
+evicts the item that has gone the longest without being requested.</p>
+<h3 id="the-separation-of-expiration-and-eviction">The Separation of
+Expiration and Eviction</h3>
+<p>To understand how ties are broken, it is essential to distinguish
+between how Memcached handles item expiration and how it handles
+eviction:</p>
+<ul>
+<li><strong>Expiration (TTL):</strong> Memcached uses lazy expiration
+combined with an optional background crawler. An item is not
+automatically removed the exact second it expires; instead, it is
+checked and discarded when a client requests it, or when an asynchronous
+crawler thread encounters it.</li>
+<li><strong>Eviction:</strong> Eviction occurs only when Memcached runs
+out of allocated memory in a specific slab class and needs to store a
+new item.</li>
+</ul>
+<p>Because expiration time is merely a metadata check during item
+retrieval, Memcached does not organize its eviction queues by TTL.
+Having identical expiration times does not create a conflict inside the
+eviction engine.</p>
+<h3 id="how-the-lru-resolves-identical-expiration-times">How the LRU
+Resolves Identical Expiration Times</h3>
+<p>Memcached structures its memory into slab classes based on item size.
+Each slab class maintains its own LRU queue, structured internally as a
+doubly linked list.</p>
+<p>Every time a key-value pair is written or read, Memcached updates its
+position, moving the item to the head of the list. When an item sits
+untouched, it gradually drifts toward the tail as newer or more
+frequently queried items take the front.</p>
+<p>If memory in a slab is full and a new entry arrives:</p>
+<ol type="1">
+<li>Memcached searches the tail of the LRU list for that specific slab
+class.</li>
+<li>If an item at the tail is already expired, Memcached reclaims its
+memory immediately.</li>
+<li>If all candidate items are still valid—even if dozens share the
+exact same future expiration timestamp—Memcached simply evicts the item
+located at the very tail of the queue.</li>
+</ol>
+<p>The decisive factor is the item's last-access timestamp. The item
+that was queried least recently is pruned first, regardless of whether
+its expiration date matches other stored entries.</p>
+<h3 id="segmented-lru-considerations">Segmented LRU Considerations</h3>
+<p>Modern versions of Memcached implement a Segmented LRU architecture,
+splitting each slab class into four sub-queues: <code>TEMP</code>,
+<code>HOT</code>, <code>WARM</code>, and <code>COLD</code>.</p>
+<p>Even within this architecture, identical expiration times are
+irrelevant to eviction ordering:</p>
+<ul>
+<li>New items with TTLs longer than a few seconds enter the
+<code>HOT</code> queue.</li>
+<li>As memory fills, items migrate from <code>HOT</code> to
+<code>WARM</code> or directly to <code>COLD</code>.</li>
+<li>Evictions are drawn strictly from the tail of the <code>COLD</code>
+queue.</li>
+</ul>
+<p>If two or more items share the same expiration timestamp, their
+survival depends entirely on access frequency. An item that receives
+continuous <code>GET</code> commands is periodically moved to the front
+of the queue, while the untouched item drifts to the end of the
+<code>COLD</code> list and is evicted first.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-evicts-items-with-same-expiration';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

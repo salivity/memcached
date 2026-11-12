@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prevent Memcached Cache Pollution in Batch Jobs - memcached</title>
+    <meta name="description" content="Batch processing queries frequently touch vast amounts of data that are accessed only once, posing a severe threat to Memcached&#39;s Least Recently Used (LRU) eviction algorithm. When batch operations populate the cache with transient, large-volume datasets,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/prevent-memcached-cache-pollution-in-batch-jobs">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Prevent Memcached Cache Pollution in Batch Jobs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/prevent-memcached-cache-pollution-in-batch-jobs" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Batch processing queries frequently touch vast amounts of data that are accessed only once, posing a severe threat to Memcached&#39;s Least Recently Used (LRU) eviction algorithm. When batch operations populate the cache with transient, large-volume datasets," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="prevent-memcached-cache-pollution-in-batch-jobs">Prevent
+Memcached Cache Pollution in Batch Jobs</h1>
+<p>Batch processing queries frequently touch vast amounts of data that
+are accessed only once, posing a severe threat to Memcached's Least
+Recently Used (LRU) eviction algorithm. When batch operations populate
+the cache with transient, large-volume datasets, they inadvertently
+evict hot, frequently accessed application data, degrading overall
+system performance. This article outlines key architectural and
+operational strategies—including cache bypassing, instance isolation,
+aggressive TTL management, and read-only access patterns—to effectively
+shield Memcached from batch-induced cache pollution.</p>
+<h3 id="bypass-cache-for-batch-workloads">Bypass Cache for Batch
+Workloads</h3>
+<p>The most definitive way to prevent cache pollution is to avoid
+interacting with Memcached during batch tasks. Batch processes generally
+require high-throughput streaming reads rather than low-latency random
+reads. By configuring batch workers to query the persistent database
+directly—often targeting read replicas or analytical stores—you
+completely bypass the cache layer. This ensures that massive sequential
+table scans never overwrite valuable, high-frequency keys in memory.</p>
+<h3 id="isolate-workloads-using-dedicated-clusters">Isolate Workloads
+Using Dedicated Clusters</h3>
+<p>If batch processes must use a cache to avoid overwhelming the primary
+database, segregate your infrastructure. Maintain a dedicated Memcached
+pool exclusively for background jobs, analytical tasks, and scheduled
+batch jobs, while keeping a separate cluster for user-facing,
+low-latency traffic. Because Memcached does not natively offer
+multi-tenancy or key-level eviction prioritization, physical or virtual
+cluster separation guarantees that aggressive batch writes cannot
+trigger evictions in the production user cache.</p>
+<h3 id="enforce-low-time-to-live-ttl-values">Enforce Low Time-To-Live
+(TTL) Values</h3>
+<p>When batch queries must write results back to the shared cache,
+assign these keys an aggressively short Time-To-Live (TTL). Setting a
+short expiration window (e.g., several seconds to a few minutes) ensures
+that transient data does not linger in memory. While this does not
+prevent immediate LRU displacement during an active write burst, it
+allows the memory to be reclaimed quickly once the batch job completes,
+enabling active user keys to stabilize faster.</p>
+<h3 id="implement-read-only-cache-modes-for-workers">Implement Read-Only
+Cache Modes for Workers</h3>
+<p>Batch routines often need to read data that may already exist in the
+cache, but they rarely need to write their results back for general
+application use. Implement an access policy where batch workers are
+permitted to perform <code>get</code> operations, but are strictly
+prohibited from issuing <code>set</code>, <code>add</code>, or
+<code>replace</code> commands. This allows the batch job to benefit from
+existing cached data without introducing new, cold records that dilute
+the working set.</p>
+<h3 id="route-by-slab-class">Route by Slab Class</h3>
+<p>Memcached organizes memory into slab classes based on item size. If
+batch jobs read and write payloads of distinctly different sizes
+compared to typical application queries, they will allocate memory
+chunks from different slab classes. By deliberately sizing batch
+payloads—or structuring them so they fit into specific, non-critical
+slab classes—you minimize direct eviction competition with smaller,
+critical session or metadata keys, keeping core application lookups
+intact.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/prevent-memcached-cache-pollution-in-batch-jobs';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Variable Length Key Lookup Explained - memcached</title>
+    <meta name="description" content="Memcached delivers sub-millisecond data retrieval by combining a fast hashing algorithm with an associative hash table designed to handle variable-length keys. This article explains the internal mechanics of how Memcached hashes arbitrary-length string ke">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-variable-length-key-lookup-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Variable Length Key Lookup Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-variable-length-key-lookup-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached delivers sub-millisecond data retrieval by combining a fast hashing algorithm with an associative hash table designed to handle variable-length keys. This article explains the internal mechanics of how Memcached hashes arbitrary-length string ke" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-variable-length-key-lookup-explained">Memcached
+Variable Length Key Lookup Explained</h1>
+<p>Memcached delivers sub-millisecond data retrieval by combining a fast
+hashing algorithm with an associative hash table designed to handle
+variable-length keys. This article explains the internal mechanics of
+how Memcached hashes arbitrary-length string keys, maps them to hash
+table buckets, resolves collisions, and verifies exact matches to
+achieve an average lookup complexity of <span
+class="math inline">\(O(1)\)</span>.</p>
+<h3 id="protocol-limits-and-key-ingestion">Protocol Limits and Key
+Ingestion</h3>
+<p>Client applications can send keys of varying lengths up to a default
+limit of 250 bytes. When a command such as <code>get &lt;key&gt;</code>
+arrives, the Memcached worker thread receives the key as a raw byte
+sequence along with its length. Because memory management in Memcached
+requires deterministic behavior, the 250-byte limit ensures that key
+metadata fits cleanly into internal memory allocation units known as
+slabs.</p>
+<h3 id="fixed-size-hashing">Fixed-Size Hashing</h3>
+<p>Variable-length keys cannot be directly indexed into an array, so
+Memcached transforms the variable-length byte array into a fixed-size
+32-bit integer.</p>
+<p>Modern versions of Memcached use Murmur3 hash by default (or
+historically, Bob Jenkins' lookup3 hash). These non-cryptographic hash
+functions process the key in blocks of bytes, outputting a uniform
+32-bit integer hash. This step ensures that regardless of whether a key
+is 3 characters or 200 characters long, it yields a uniform,
+fixed-length identifier.</p>
+<h3 id="bucket-determination">Bucket Determination</h3>
+<p>Memcached maintains a primary hash table whose size is always a power
+of two (<span class="math inline">\(2^n\)</span>), managed by an
+internal variable called <code>hashpower</code>. To map the 32-bit hash
+value to an index in the table, Memcached avoids expensive division
+operations and instead uses a bitwise AND mask:</p>
+<p><span class="math display">\[\text{bucket\_index} = \text{hash} \
+\&amp; \ \text{hashmask}(\text{hashpower})\]</span></p>
+<p>Where <code>hashmask(hashpower)</code> is equal to <span
+class="math inline">\((2^n - 1)\)</span>. This bitwise operation
+immediately directs the lookup process to a specific bucket slot in the
+hash table.</p>
+<h3 id="bucket-traversal-and-match-verification">Bucket Traversal and
+Match Verification</h3>
+<p>Because different keys can hash to the same bucket index (hash
+collisions), each bucket slot contains a pointer to the head of a singly
+linked list of <code>item</code> structures.</p>
+<p>Memcached traverses this linked list to find the target item using a
+two-step verification process to maintain high performance:</p>
+<ol type="1">
+<li><strong>Length Comparison (<code>nkey</code> check):</strong> Each
+<code>item</code> structure in memory stores an internal
+<code>nkey</code> field representing the exact length of the stored key.
+Before evaluating string contents, Memcached checks whether the search
+key's length equals <code>it-&gt;nkey</code>. If the lengths do not
+match, the entry is immediately skipped without reading the key
+payload.</li>
+<li><strong>Byte-Level Comparison (<code>memcmp</code>):</strong> If the
+length matches, Memcached invokes <code>memcmp</code> to compare the raw
+bytes of the query key with the key stored inside the <code>item</code>
+structure. If every byte matches, the correct item is found, its access
+time is updated for the Least Recently Used (LRU) cache policy, and the
+item pointer is returned to the client handler.</li>
+</ol>
+<h3 id="maintaining-o1-performance-with-rehashing">Maintaining <span
+class="math inline">\(O(1)\)</span> Performance with Rehashing</h3>
+<p>If the number of stored items significantly exceeds the number of
+available hash table buckets, the linked lists inside each bucket grow
+longer, degrading lookup speed from <span
+class="math inline">\(O(1)\)</span> to <span
+class="math inline">\(O(n)\)</span>.</p>
+<p>To prevent this, Memcached monitors its load factor. When the number
+of stored items exceeds 1.5 times the table capacity, a dedicated
+background maintenance thread triggers rehashing. This thread allocates
+a new hash table with double the buckets (<span
+class="math inline">\(2^{n+1}\)</span>) and incrementally migrates
+linked list nodes from the old table to the new table. During migration,
+lookups seamlessly check both tables based on the migration progress,
+ensuring that key lookup latency remains consistently constant
+regardless of variable key lengths.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-variable-length-key-lookup-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prevent Memcached Thundering Herd on Hot Key Expiry - memcached</title>
+    <meta name="description" content="In high-concurrency systems, the simultaneous expiration of heavily requested &quot;hot keys&quot; in Memcached can trigger a thundering herd—also known as a cache stampede—where thousands of concurrent requests bypass the cache and overwhelm the underlying databas">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/prevent-memcached-thundering-herd-on-hot-key-expiry">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Prevent Memcached Thundering Herd on Hot Key Expiry - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/prevent-memcached-thundering-herd-on-hot-key-expiry" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In high-concurrency systems, the simultaneous expiration of heavily requested &quot;hot keys&quot; in Memcached can trigger a thundering herd—also known as a cache stampede—where thousands of concurrent requests bypass the cache and overwhelm the underlying databas" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="prevent-memcached-thundering-herd-on-hot-key-expiry">Prevent
+Memcached Thundering Herd on Hot Key Expiry</h1>
+<p>In high-concurrency systems, the simultaneous expiration of heavily
+requested "hot keys" in Memcached can trigger a thundering herd—also
+known as a cache stampede—where thousands of concurrent requests bypass
+the cache and overwhelm the underlying database. This article outlines
+the primary engineering strategies used to mitigate this risk, detailing
+implementation patterns such as distributed locks, probabilistic early
+expiration, background cache warming, and soft expiration
+mechanisms.</p>
+<h3 id="distributed-mutex-locking-dogpile-lock">Distributed Mutex
+Locking (Dogpile Lock)</h3>
+<p>The distributed mutex pattern ensures that only one worker queries
+the database to recompute an expired key, while all other incoming
+requests either wait or return a fallback response.</p>
+<p>In Memcached, this is typically implemented using the atomic
+<code>ADD</code> command:</p>
+<ol type="1">
+<li>A process detects that a key is missing.</li>
+<li>The process attempts an <code>ADD lock:key_name 1 [TTL]</code>.</li>
+<li>If <code>ADD</code> succeeds, this worker owns the lock, fetches the
+data from the primary datastore, updates Memcached, and deletes the
+lock.</li>
+<li>If <code>ADD</code> fails (indicating another worker is already
+refreshing the data), the worker briefly sleeps and retries reading the
+cache, or returns a degraded response.</li>
+</ol>
+<p>The lock key must always include an aggressive TTL (e.g., 5 to 10
+seconds) to prevent permanent deadlocks if the acquiring worker crashes
+mid-refresh.</p>
+<h3 id="probabilistic-early-expiration-xfetch">Probabilistic Early
+Expiration (XFetch)</h3>
+<p>Instead of waiting for a key to strictly expire, probabilistic early
+expiration recalculates the cached value before it expires. The
+likelihood of a worker triggering an early background recalculation
+increases as the key approaches its expiration time.</p>
+<p>The most widely adopted model is the XFetch algorithm:</p>
+<p><span class="math display">\[\Delta \cdot \beta \cdot
+\ln(\text{rand}()) &gt; \text{TTL} - (\text{currentTime} -
+\text{writtenTime})\]</span></p>
+<ul>
+<li><span class="math inline">\(\Delta\)</span> (delta) is the compute
+time required to regenerate the cache.</li>
+<li><span class="math inline">\(\beta\)</span> (beta) is an
+aggressiveness factor (usually set to <span
+class="math inline">\(1.0\)</span>).</li>
+<li><span class="math inline">\(\text{rand}()\)</span> generates a
+uniform random value between <span class="math inline">\(0\)</span> and
+<span class="math inline">\(1\)</span>.</li>
+</ul>
+<p>As the remaining TTL shrinks, the probabilistic threshold dynamically
+adapts to traffic volume. High-traffic keys automatically recompute
+earlier because the sheer volume of reads increases the statistical
+probability that a single request triggers the background recalculation
+before the data actually expires.</p>
+<h3 id="soft-expiration-stale-while-revalidate">Soft Expiration
+(Stale-While-Revalidate)</h3>
+<p>Soft expiration separates the logical lifespan of data from its
+physical existence in Memcached.</p>
+<ol type="1">
+<li><strong>Payload Structure:</strong> Store the data wrapped in
+metadata containing a logical expiration timestamp:
+<code>{ "data": ..., "expires_at": 1718000000 }</code>.</li>
+<li><strong>Physical Expiration:</strong> Set Memcached's actual
+eviction TTL significantly longer than <code>expires_at</code> (e.g.,
+adding an extra 30 minutes).</li>
+<li><strong>Execution:</strong> When a read occurs, the application
+checks <code>expires_at</code>. If the logical timestamp has passed, the
+application immediately serves the stale data to the user and
+asynchronously dispatches a background job (or acquires a mutex) to
+update both the database and the cache.</li>
+</ol>
+<p>This pattern eliminates user-facing latency spikes and guarantees
+that the database is never hit synchronously by hundreds of concurrent
+processes.</p>
+<h3 id="ttl-jittering">TTL Jittering</h3>
+<p>When multiple hot keys are generated or updated at the same time
+(such as bulk data updates or batch cache invalidations), setting
+identical TTLs creates synchronized expiration windows.</p>
+<p>Adding random variation (jitter) desynchronizes key evictions:</p>
+<p><span class="math display">\[\text{Actual TTL} = \text{Base TTL} +
+\text{random}(-\text{jitter}, +\text{jitter})\]</span></p>
+<p>While jitter does not prevent a herd on a <em>single</em> ultra-hot
+key, it prevents compounding stampedes caused by multiple related keys
+expiring simultaneously across the cluster.</p>
+<h3 id="proactive-background-refreshing">Proactive Background
+Refreshing</h3>
+<p>For predictable hot keys—such as top-ten lists, site banners, or
+aggregated counters—the application layer should decouple cache
+population entirely from user reads.</p>
+<p>A dedicated background daemon, cron worker, or event-driven consumer
+updates the key in Memcached on a fixed schedule before it expires.
+Under this pattern, user-facing requests only read from the cache and
+are never allowed to execute database queries for that specific key.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/prevent-memcached-thundering-herd-on-hot-key-expiry';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

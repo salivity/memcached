@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Limit Memcached Slab Class Memory - memcached</title>
+    <meta name="description" content="Memcached utilizes a slab allocation mechanism to manage memory, partitioning its overall memory pool into distinct slab classes tailored to specific item sizes. While Memcached does not provide a direct static configuration flag to assign hard byte limit">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-limit-memcached-slab-class-memory">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Limit Memcached Slab Class Memory - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-limit-memcached-slab-class-memory" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached utilizes a slab allocation mechanism to manage memory, partitioning its overall memory pool into distinct slab classes tailored to specific item sizes. While Memcached does not provide a direct static configuration flag to assign hard byte limit" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-limit-memcached-slab-class-memory">How to Limit Memcached
+Slab Class Memory</h1>
+<p>Memcached utilizes a slab allocation mechanism to manage memory,
+partitioning its overall memory pool into distinct slab classes tailored
+to specific item sizes. While Memcached does not provide a direct static
+configuration flag to assign hard byte limits to individual slab
+classes, operators can control, restrict, and balance slab class memory
+consumption through slab reassignment, chunk size tuning, and modern LRU
+maintenance tools. This guide outlines the operational strategies
+required to prevent individual slab classes from monopolizing system
+memory.</p>
+<h3 id="understand-the-slab-allocation-model">Understand the Slab
+Allocation Model</h3>
+<p>Memcached pre-allocates memory in chunks grouped into slab classes,
+typically inside 1 MB pages. Once a page is assigned to a specific slab
+class, it remains dedicated to that class by default. If a workload
+pattern changes or one item size experiences high write volume, that
+particular class can claim a disproportionate number of total pages—a
+condition known as slab calcification. Because Memcached lacks a
+directive like <code>--max-slab-memory</code>, managing per-class
+consumption relies on tuning allocation mechanics and enabling dynamic
+page redistribution.</p>
+<h3 id="enable-dynamic-page-reassignment-slab-automove">Enable Dynamic
+Page Reassignment (Slab Automove)</h3>
+<p>The most effective way to restrict a slab class from indefinitely
+locking up memory is to enable the dynamic reassignment engine. This
+allows Memcached to take unused or lower-priority pages from one slab
+class and reallocate them to another class experiencing higher
+demand.</p>
+<p>To enable this feature at startup, launch Memcached with:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-o</span> slab_reassign,slab_automove=1</span></code></pre></div>
+<p>Memcached offers different <code>slab_automove</code> algorithms:</p>
+<ul>
+<li><strong><code>slab_automove=1</code> (Standard):</strong> Evaluates
+slab activity over a moving window. If a slab class has three
+consecutive pages with no evictions and other classes are actively
+evicting items, Memcached reassigns pages away from the idle slab
+class.</li>
+<li><strong><code>slab_automove=2</code> (Aggressive/Tail LRU):</strong>
+Highly responsive. It continuously tracks eviction rates and moves pages
+specifically from classes with low eviction pressures to the classes
+undergoing heavy LRU churn.</li>
+</ul>
+<p>Operators can adjust the reassignment algorithm dynamically over the
+Memcached administrative interface:</p>
+<pre class="text"><code>set slab_automove 2</code></pre>
+<h3 id="manually-reassign-slab-pages">Manually Reassign Slab Pages</h3>
+<p>When an operator identifies that a specific slab class has
+accumulated excessive memory, pages can be manually moved using
+administrative socket commands.</p>
+<ol type="1">
+<li>Query slab distribution using the <code>stats slabs</code> command.
+Identify the source slab class ID consuming too much memory and the
+destination slab class ID that requires capacity.</li>
+<li>Issue the manual reallocation command:</li>
+</ol>
+<pre class="text"><code>slabs reassign &lt;source_class_id&gt; &lt;destination_class_id&gt;</code></pre>
+<p>This returns <code>OK</code> if the reassignment process has started.
+Memcached slowly clears the targeted 1 MB page and assigns it to the
+destination class without dropping existing connections.</p>
+<h3 id="shape-memory-boundaries-via-chunk-sizing-flags">Shape Memory
+Boundaries via Chunk Sizing Flags</h3>
+<p>Operators can restrict how memory spreads across slab classes by
+controlling chunk sizing parameters at startup:</p>
+<ul>
+<li><strong>Growth Factor (<code>-f</code>):</strong> Controls the scale
+factor between consecutive slab classes (default is <code>1.25</code>).
+Increasing this value creates larger size intervals, reducing the total
+number of distinct slab classes generated and concentrating allocations
+into fewer, more predictable buckets.</li>
+<li><strong>Minimum Item Size (<code>-n</code>):</strong> Defines the
+space allocated for the smallest slab class (default is 48 bytes).
+Raising this value prevents micro-allocations from spawning low-capacity
+slab classes.</li>
+<li><strong>Maximum Item Size (<code>-I</code>):</strong> Sets the hard
+ceiling for the largest allocatable object (default is 1 MB). Lowering
+this parameter entirely caps the memory footprint of higher-end slab
+classes by disallowing large allocations.</li>
+</ul>
+<h3 id="implement-segmented-lru-lru_maintainer">Implement Segmented LRU
+(<code>lru_maintainer</code>)</h3>
+<p>To prevent specific slabs from consuming memory indefinitely without
+freeing space, ensure the modernized segmented LRU is active. Starting
+in version 1.5+, this is enabled by default. It partitions memory inside
+each slab class into four queues (HOT, WARM, COLD, and TEMP):</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-o</span> modern</span></code></pre></div>
+<p>The LRU crawler and maintainer background threads continuously evict
+expired items and prevent inactive data from bloating a slab class,
+ensuring that the effective memory used by that slab class stays
+tethered strictly to active, frequently requested data.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-limit-memcached-slab-class-memory';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Simulate Memcached Server Failure Modes - memcached</title>
+    <meta name="description" content="Testing how applications handle Memcached outages is essential for building resilient caching layers. This article covers practical methods for simulating common Memcached failure modes—such as network partitions, high latency, out-of-memory errors, and s">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-simulate-memcached-server-failure-modes">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Simulate Memcached Server Failure Modes - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-simulate-memcached-server-failure-modes" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Testing how applications handle Memcached outages is essential for building resilient caching layers. This article covers practical methods for simulating common Memcached failure modes—such as network partitions, high latency, out-of-memory errors, and s" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-simulate-memcached-server-failure-modes">How to Simulate
+Memcached Server Failure Modes</h1>
+<p>Testing how applications handle Memcached outages is essential for
+building resilient caching layers. This article covers practical methods
+for simulating common Memcached failure modes—such as network
+partitions, high latency, out-of-memory errors, and sudden
+crashes—during integration testing. By using tools like network proxies,
+container controls, and configuration limits, developers can verify
+fallback behaviors and avoid cascading failures in production.</p>
+<h2 id="1-network-proxy-manipulation-toxiproxy">1. Network Proxy
+Manipulation (Toxiproxy)</h2>
+<p>The most effective way to test network-level failures without
+modifying Memcached itself is to place a TCP proxy between your
+application and the cache instance.</p>
+<p>Shopify's <strong>Toxiproxy</strong> is built specifically for
+integration test environments. It allows you to inject "toxics" via an
+API during test execution to simulate:</p>
+<ul>
+<li><strong>Latency and Jitter:</strong> Add artificial delay to verify
+that client-side read/write timeouts trigger expected fallbacks to the
+primary database.</li>
+<li><strong>TCP Resets and Dropped Packets:</strong> Simulate sudden
+connection severing to ensure the client driver reconnects gracefully
+without crashing the application thread.</li>
+<li><strong>Bandwidth Limitations:</strong> Throttle data transfer rates
+to observe how serialization of large objects behaves under degraded
+network conditions.</li>
+</ul>
+<p>In a test suite, you configure your Memcached client to connect to
+the Toxiproxy port rather than the raw Memcached port, enabling you to
+toggle failures mid-test and restore connectivity afterward.</p>
+<h2 id="2-container-lifecycle-automation-testcontainers--docker">2.
+Container Lifecycle Automation (Testcontainers / Docker)</h2>
+<p>If you use Docker or libraries like <strong>Testcontainers</strong>,
+you can manipulate the lifecycle of the Memcached process directly from
+your test code.</p>
+<ul>
+<li><strong>Hard Crashes (SIGKILL):</strong> Use container commands to
+abruptly kill the Memcached container (<code>docker kill</code>). This
+ensures your application handles immediate connection refusals
+(<code>ECONNREFUSED</code>) properly.</li>
+<li><strong>Temporary Freezes (SIGSTOP / SIGCONT):</strong> Pausing the
+container (<code>docker pause</code>) stops the process from
+acknowledging packets, forcing your client to hit socket read timeouts
+rather than receiving a fast failure. Unpausing
+(<code>docker unpause</code>) verifies automatic recovery.</li>
+<li><strong>Network Disconnection:</strong> Disconnect the container
+from the bridge network dynamically to simulate an abrupt network
+partition.</li>
+</ul>
+<h2 id="3-simulating-out-of-memory-oom-and-evictions">3. Simulating Out
+of Memory (OOM) and Evictions</h2>
+<p>Memcached behaves differently when it exhausts available RAM, either
+evicting keys via Least Recently Used (LRU) algorithms or returning
+errors if evictions are disabled.</p>
+<p>To test this behavior deterministically:</p>
+<ul>
+<li><strong>Constrain Server Memory:</strong> Start Memcached with the
+<code>-m</code> flag set to a very low value (e.g., <code>-m 1</code>
+for 1 megabyte).</li>
+<li><strong>Disable Evictions:</strong> Pass the <code>-M</code> flag to
+return an error when memory is exhausted rather than evicting items.
+This helps test how your code handles write failures when the cache is
+saturated.</li>
+<li><strong>Observe Cache Stampedes:</strong> Test scenarios where
+critical keys are evicted under memory pressure, verifying that your
+application does not overwhelm the primary database with concurrent
+cache-regeneration requests.</li>
+</ul>
+<h2 id="4-host-level-packet-filtering">4. Host-Level Packet
+Filtering</h2>
+<p>For integration tests running in native Linux environments or CI
+virtual machines, you can apply packet manipulation directly:</p>
+<ul>
+<li><strong><code>iptables</code> Rules:</strong> Drop outgoing or
+incoming packets on port 11211 to simulate silent drops where the client
+waits for the full TCP timeout duration.</li>
+<li><strong>Traffic Control (<code>tc</code>):</strong> Inject packet
+loss or packet corruption to test the error-handling boundaries of your
+Memcached client library.</li>
+</ul>
+<h2 id="verification-checklist">Verification Checklist</h2>
+<p>When simulating these failures, ensure your test assertions validate
+the following:</p>
+<ol type="1">
+<li><strong>Graceful Degradation:</strong> The application falls back to
+querying the source of truth (e.g., database) without returning 500
+errors to the user.</li>
+<li><strong>Timeout Enforcement:</strong> Client timeouts fail fast
+enough to prevent application thread pools from becoming exhausted.</li>
+<li><strong>Circuit Breaking:</strong> Repeated failures trigger circuit
+breakers to prevent continuously hammering an unresponsive cache
+node.</li>
+<li><strong>Self-Healing:</strong> Once the simulated failure is
+removed, the client automatically restores connections and resumes
+normal caching behavior.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-simulate-memcached-server-failure-modes';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

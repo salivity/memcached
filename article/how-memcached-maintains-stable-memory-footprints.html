@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Maintains Stable Memory Footprints - memcached</title>
+    <meta name="description" content="Memcached achieves predictable, long-term memory stability in high-throughput production environments through an architecture designed to prevent memory fragmentation and leaks. Rather than allocating and freeing memory dynamically via standard system cal">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-maintains-stable-memory-footprints">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Maintains Stable Memory Footprints - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-maintains-stable-memory-footprints" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached achieves predictable, long-term memory stability in high-throughput production environments through an architecture designed to prevent memory fragmentation and leaks. Rather than allocating and freeing memory dynamically via standard system cal" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-maintains-stable-memory-footprints">How Memcached
+Maintains Stable Memory Footprints</h1>
+<p>Memcached achieves predictable, long-term memory stability in
+high-throughput production environments through an architecture designed
+to prevent memory fragmentation and leaks. Rather than allocating and
+freeing memory dynamically via standard system calls, Memcached relies
+on a pre-allocated slab allocation system, a strict memory ceiling,
+categorized Least Recently Used (LRU) eviction algorithms, and dynamic
+page rebalancing. Together, these mechanisms ensure that Memcached
+maintains a flat, deterministic memory footprint over months or years of
+continuous operation.</p>
+<h3 id="the-slab-allocation-engine">The Slab Allocation Engine</h3>
+<p>The primary reason Memcached avoids memory growth over time is its
+slab allocator. Standard operating system memory management using
+<code>malloc</code> and <code>free</code> often leads to severe external
+fragmentation when handling millions of variable-sized keys, causing
+process memory to balloon even when the actual stored data size remains
+constant.</p>
+<p>To eliminate this, Memcached allocates its entire configured memory
+space upfront in a single, large pool during startup. This pool is
+subdivided into 1MB pages, which are then assigned to specific "slab
+classes." Each slab class is responsible for storing items within a
+defined size range, divided into uniform chunks (e.g., class 1 for items
+up to 96 bytes, class 2 for items up to 120 bytes, scaling by a default
+growth factor of 1.25). When an item is stored, Memcached places it into
+the smallest slab class that can accommodate it. Because chunks are
+reused in place without releasing memory back to the OS kernel, external
+memory fragmentation is practically eliminated.</p>
+<h3 id="segmented-lru-eviction">Segmented LRU Eviction</h3>
+<p>When the pre-allocated memory pool fills up, Memcached does not
+request additional RAM from the host operating system. Instead, it
+maintains a strict ceiling by evicting stale data using an optimized
+Least Recently Used (LRU) mechanism.</p>
+<p>Modern Memcached architectures employ a Segmented LRU (also known as
+the crawler/segmented LRU) to prevent memory churn and transient cache
+storms from flushing out valuable hot data. Memory within each slab
+class is split into distinct queues:</p>
+<ul>
+<li><strong>HOT:</strong> Holds newly inserted items; items are not
+updated here.</li>
+<li><strong>WARM:</strong> Holds items that have been accessed more than
+once, shielding long-lived cache data from one-hit wonders.</li>
+<li><strong>COLD:</strong> Holds inactive items that flow down from HOT
+and WARM queues.</li>
+</ul>
+<p>Evictions only occur from the tail of the COLD queue when a specific
+slab class runs out of available chunks and cannot claim new pages. By
+constraining evictions to specific slab classes, Memcached guarantees
+that memory reclamation is continuous and predictable without causing
+execution pauses.</p>
+<h3 id="slab-rebalancing-and-automove">Slab Rebalancing and
+Automove</h3>
+<p>A historical weakness of slab allocation was "slab calcification"—a
+scenario where an application's data size profiles shift over time,
+leaving unused memory trapped in certain slab classes while other
+classes suffer frequent evictions.</p>
+<p>Memcached resolves this through an internal background thread called
+the slab rebalancer. When configured with slab automove, the engine
+monitors eviction rates and free chunk counts across all classes. If it
+detects that one class is starved of memory while another has unused
+pages, it safely unlinks a 1MB page from the donor class, clears the
+memory, and assigns it to the starved class. This background migration
+allows Memcached to adapt dynamically to changing workloads without
+restarting or inflating its resident set size (RSS).</p>
+<h3 id="zero-allocation-hot-paths">Zero-Allocation Hot Paths</h3>
+<p>During normal request handling, Memcached operates on zero-allocation
+principles for key-value operations. Buffers for incoming network
+requests and outgoing responses are reused, and item metadata is tracked
+with fixed-overhead headers. Because execution threads cycle through
+existing pointers rather than creating new OS-level allocations, heap
+growth remains effectively flat, securing rock-solid memory stability
+under prolonged production workloads.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-maintains-stable-memory-footprints';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

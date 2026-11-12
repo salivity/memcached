@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached TCP vs UDP: Client Communication Trade-Offs - memcached</title>
+    <meta name="description" content="When integrating Memcached into an application stack, choosing between Transmission Control Protocol (TCP) and User Datagram Protocol (UDP) for client-server communication fundamentally shapes performance, network overhead, and system reliability. While U">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-tcp-vs-udp-client-communication-trade-offs">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached TCP vs UDP: Client Communication Trade-Offs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-tcp-vs-udp-client-communication-trade-offs" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When integrating Memcached into an application stack, choosing between Transmission Control Protocol (TCP) and User Datagram Protocol (UDP) for client-server communication fundamentally shapes performance, network overhead, and system reliability. While U" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-tcp-vs-udp-client-communication-trade-offs">Memcached
+TCP vs UDP: Client Communication Trade-Offs</h1>
+<p>When integrating Memcached into an application stack, choosing
+between Transmission Control Protocol (TCP) and User Datagram Protocol
+(UDP) for client-server communication fundamentally shapes performance,
+network overhead, and system reliability. While UDP offers theoretically
+lower latency and reduced connection overhead for simple read requests,
+TCP provides the reliability, connection tracking, and security required
+for modern production systems. This article breaks down the key
+trade-offs between both protocols when used with Memcached.</p>
+<h3 id="latency-and-connection-overhead">Latency and Connection
+Overhead</h3>
+<p>TCP requires a three-way handshake to establish a connection, which
+introduces initial latency and consumes memory on the Memcached host to
+maintain connection states. For architectures with thousands of
+ephemeral client connections, this overhead can become a significant
+bottleneck unless persistent connection pooling is implemented.</p>
+<p>In contrast, UDP is stateless and connectionless. Clients can
+immediately dispatch requests without handshaking, which minimizes
+latency for single-packet read operations (<code>get</code> requests).
+Because the server does not maintain connection states for UDP, it can
+theoretically handle higher request spikes from fragmented or
+distributed sources without exhausting file descriptors or memory
+associated with socket buffers.</p>
+<h3 id="reliability-and-data-integrity">Reliability and Data
+Integrity</h3>
+<p>TCP guarantees ordered delivery, packet retransmission, and error
+detection. In a caching layer, this means every command sent—whether a
+read, write, or eviction—will arrive intact and in sequence, or fail
+explicitly with an actionable error.</p>
+<p>UDP provides no delivery guarantees, ordering, or flow control. In
+high-traffic scenarios or congested networks:</p>
+<ul>
+<li>Packets may drop silently, resulting in client-side timeouts.</li>
+<li>Out-of-order execution can cause consistency issues.</li>
+<li>The client application must implement its own timeout and retry
+mechanisms to handle missing responses, effectively shifting the
+complexity of network reliability from the transport layer into
+application code.</li>
+</ul>
+<p>Because of this lack of delivery guarantees, Memcached’s UDP
+implementation historically restricted write operations (like
+<code>set</code> or <code>delete</code>) to mitigate the risk of
+corrupting cache states due to dropped or reordered packets.</p>
+<h3 id="security-and-amplification-vulnerabilities">Security and
+Amplification Vulnerabilities</h3>
+<p>Security is the most critical differentiator. Memcached over UDP is
+historically vulnerable to UDP reflection and amplification Distributed
+Denial of Service (DDoS) attacks. Because UDP allows IP address spoofing
+and Memcached responses can be significantly larger than the initial
+query, malicious actors can send small requests with a spoofed target
+IP, causing the Memcached instance to flood the victim with massive
+responses.</p>
+<p>Due to large-scale attacks leveraging this vector, modern
+distributions of Memcached have disabled UDP listening by default.
+Running Memcached over UDP requires strict network-level isolation,
+private network access controls, and firewall restrictions to prevent
+public exploitation.</p>
+<p>TCP, on the other hand, requires a mutual handshake, preventing IP
+address spoofing and making amplification attacks virtually
+impossible.</p>
+<h3 id="payload-sizing-and-fragmentation">Payload Sizing and
+Fragmentation</h3>
+<p>TCP seamlessly manages large objects by streaming data across
+multiple segments, handled transparently by the operating system’s
+network stack.</p>
+<p>UDP is constrained by the Maximum Transmission Unit (MTU) of the
+network, typically 1,500 bytes. When a cached item exceeds the MTU, the
+payload must be fragmented into multiple UDP datagrams. If even a single
+fragment is dropped in transit, the entire response is lost, severely
+degrading performance for large payloads.</p>
+<h3 id="conclusion">Conclusion</h3>
+<p>For almost all modern production environments, TCP is the standard
+choice for Memcached client communication. While UDP offers marginal
+latency gains for lightweight, loss-tolerant reads, it introduces severe
+security risks, operational complexity, and packet fragmentation
+limitations. TCP ensures predictable, secure, and reliable
+communication, with its latency trade-offs easily mitigated by using
+persistent client connection pools.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-tcp-vs-udp-client-communication-trade-offs';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

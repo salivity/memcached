@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Multi-Get: Optimizing Network Latency - memcached</title>
+    <meta name="description" content="Memcached’s multi-get operation allows applications to retrieve values for multiple keys in a single operation rather than issuing discrete queries sequentially. This article explains how multi-get mitigates network latency by reducing round-trip times (R">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-multi-get-optimizing-network-latency">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Multi-Get: Optimizing Network Latency - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-multi-get-optimizing-network-latency" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached’s multi-get operation allows applications to retrieve values for multiple keys in a single operation rather than issuing discrete queries sequentially. This article explains how multi-get mitigates network latency by reducing round-trip times (R" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-multi-get-optimizing-network-latency">Memcached
+Multi-Get: Optimizing Network Latency</h1>
+<p>Memcached’s multi-get operation allows applications to retrieve
+values for multiple keys in a single operation rather than issuing
+discrete queries sequentially. This article explains how multi-get
+mitigates network latency by reducing round-trip times (RTT), optimizing
+socket utilization through protocol-level batching, routing requests
+efficiently across distributed clusters, and streaming server
+responses.</p>
+<h3 id="eliminating-round-trip-time-overhead">Eliminating Round-Trip
+Time Overhead</h3>
+<p>The primary source of latency in distributed cache access is the
+network round-trip time (RTT), not the in-memory lookup. When querying
+<span class="math inline">\(N\)</span> keys individually, a traditional
+approach incurs <span class="math inline">\(N \times \text{RTT}\)</span>
+in synchronous execution. Even with connection pooling or threading,
+issuing discrete requests increases TCP packet overhead, operating
+system context switching, and network queueing.</p>
+<p>Memcached resolves this by grouping multiple keys into a single
+command. By requesting a batch of keys at once, the client reduces the
+network cost from <span class="math inline">\(N \times
+\text{RTT}\)</span> down to essentially a single RTT per involved cache
+node.</p>
+<h3 id="client-side-grouping-and-parallel-dispatch">Client-Side Grouping
+and Parallel Dispatch</h3>
+<p>Because Memcached operates as a shared-nothing distributed
+architecture, individual keys are distributed across different nodes
+using consistent hashing. The Memcached server itself does not
+coordinate with other nodes. Consequently, the multi-get optimization
+begins entirely on the client side:</p>
+<ol type="1">
+<li><strong>Key Hashing:</strong> The client library hashes each
+requested key to identify which target server holds it.</li>
+<li><strong>Batch Segmentation:</strong> The client groups the keys into
+separate batches, one for each relevant server.</li>
+<li><strong>Concurrent Execution:</strong> The client dispatches these
+batch requests across multiple server connections in parallel using
+non-blocking, asynchronous I/O (such as <code>epoll</code> or event
+loops).</li>
+</ol>
+<p>This ensures that network latency is bound only by the slowest
+responding server node rather than the cumulative response times of all
+servers.</p>
+<h3 id="protocol-optimization-text-vs-binary">Protocol Optimization:
+Text vs. Binary</h3>
+<p>Memcached optimizes packet transmission differently depending on the
+protocol version used:</p>
+<ul>
+<li><strong>Text Protocol:</strong> The client sends a single command
+line containing all keys separated by spaces:
+<code>get key1 key2 key3 ...\r\n</code>. The server processes this line,
+writes matching <code>VALUE</code> responses sequentially, and appends
+an <code>END\r\n</code> marker.</li>
+<li><strong>Binary Protocol (GetKQ):</strong> The binary protocol offers
+an even higher level of optimization using the "Get Quiet"
+(<code>GetKQ</code>) command. Instead of sending a miss response for
+every missing key, the server only responds to cache hits. The client
+appends a standard, non-quiet command (such as a dummy
+<code>No-op</code> or a standard <code>GetK</code>) at the end of the
+batch. When the client receives the response to the terminal command, it
+knows the batch is complete and that any unreturned keys were cache
+misses. This eliminates the transmission of empty or error responses,
+significantly conserving bandwidth.</li>
+</ul>
+<h3 id="socket-buffering-and-kernel-level-efficiency">Socket Buffering
+and Kernel-Level Efficiency</h3>
+<p>Multi-get maximizes Ethernet frame utilization. Sending keys
+individually produces many small TCP packets that may fall victim to
+Nagle's algorithm or incur significant overhead from TCP/IP headers
+(typically 40 to 60 bytes per packet).</p>
+<p>With multi-get, both the request and response payloads are aggregated
+into the socket buffer. The operating system packs as many keys and
+values as possible up to the Maximum Transmission Unit (MTU)—typically
+1,500 bytes—before transmitting a packet. On the server side, Memcached
+looks up the keys in memory and streams the data back into the network
+buffer in bulk, minimizing system calls (<code>read</code> and
+<code>write</code>) on both ends of the connection.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-multi-get-optimizing-network-latency';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Handling Empty Strings in Memcached Set Operations - memcached</title>
+    <meta name="description" content="Memcached fully supports zero-length values and empty strings during set operations, treating them as valid cache entries rather than null values or errors. This article explains how the Memcached protocol processes empty values, how the internal memory a">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/handling-empty-strings-in-memcached-set-operations">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Handling Empty Strings in Memcached Set Operations - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/handling-empty-strings-in-memcached-set-operations" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached fully supports zero-length values and empty strings during set operations, treating them as valid cache entries rather than null values or errors. This article explains how the Memcached protocol processes empty values, how the internal memory a" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="handling-empty-strings-in-memcached-set-operations">Handling
+Empty Strings in Memcached Set Operations</h1>
+<p>Memcached fully supports zero-length values and empty strings during
+<code>set</code> operations, treating them as valid cache entries rather
+than null values or errors. This article explains how the Memcached
+protocol processes empty values, how the internal memory allocation
+engine handles zero-byte payloads, and the operational implications of
+storing empty strings.</p>
+<h3 id="protocol-level-behavior">Protocol Level Behavior</h3>
+<p>In the Memcached text protocol, a storage command follows the
+format:</p>
+<pre class="text"><code>set &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n&lt;data&gt;\r\n</code></pre>
+<p>When storing an empty string or zero-length value, the
+<code>&lt;bytes&gt;</code> parameter is set to <code>0</code>. The
+client then sends the terminating carriage return and line feed
+(<code>\r\n</code>) immediately without any preceding data payload.</p>
+<p>Example command:</p>
+<pre class="text"><code>set user:100:active 0 3600 0\r\n
+\r\n</code></pre>
+<p>Upon receiving this request, Memcached writes the entry and
+returns:</p>
+<pre class="text"><code>STORED\r\n</code></pre>
+<p>When retrieving the item using <code>get user:100:active</code>,
+Memcached returns a header indicating a length of zero, followed by the
+empty data block and the standard <code>END</code> marker:</p>
+<pre class="text"><code>VALUE user:100:active 0 0\r\n
+\r\n
+END\r\n</code></pre>
+<p>The binary protocol behaves identically: the body length field in the
+request header matches the key length, resulting in a value length of
+zero. The server processes the command successfully and returns a
+successful response status (<code>0x0000</code>).</p>
+<h3 id="memory-allocation-and-overhead">Memory Allocation and
+Overhead</h3>
+<p>Setting a value of zero bytes does not consume zero memory. Memcached
+uses a slab allocator that assigns memory in fixed-size chunks.</p>
+<p>Every cached entry requires an internal <code>item</code> metadata
+header, which includes:</p>
+<ul>
+<li>Key string and key length</li>
+<li>Flags (32-bit integer)</li>
+<li>Expiration time</li>
+<li>Memory management and LRU pointers</li>
+<li>CAS (Check-And-Set) identifier (if enabled)</li>
+</ul>
+<p>Because of this metadata and the key itself, an item with a 0-byte
+value will be placed in the smallest available slab class (typically 96
+or 104 bytes by default, depending on key length and architecture).
+Storing an empty string consumes the memory allocated for that entire
+minimum chunk size.</p>
+<h3 id="lifecycle-and-operations">Lifecycle and Operations</h3>
+<p>A zero-length item is treated like any standard item in the
+cache:</p>
+<ul>
+<li><strong>Expiration (TTL):</strong> Time-to-live settings function
+normally. Once the expiration time passes, the key becomes inaccessible
+and is freed.</li>
+<li><strong>LRU Eviction:</strong> If memory limits are reached,
+zero-length entries are evaluated and evicted based on standard Least
+Recently Used (LRU) rules.</li>
+<li><strong>Conditional Operations:</strong> Operations such as
+<code>add</code>, <code>replace</code>, and <code>cas</code> apply the
+same logic. For example, <code>add key 0 0 0</code> will fail if the key
+already exists, regardless of the value length.</li>
+<li><strong>Append and Prepend:</strong> Running <code>append</code> or
+<code>prepend</code> on an existing zero-length item appends data to the
+empty buffer, successfully expanding the value.</li>
+</ul>
+<h3 id="common-use-cases">Common Use Cases</h3>
+<p>Storing zero-length values is a common optimization pattern in
+Memcached for:</p>
+<ul>
+<li><strong>Existence Tracking:</strong> Indicating that an ID or record
+exists (e.g., membership sets) using keys alone, eliminating payload
+transmission overhead.</li>
+<li><strong>Negative Caching:</strong> Storing a flag to indicate that a
+queried database record does not exist, preventing repeated database
+lookups for missing records.</li>
+<li><strong>Distributed Mutexes:</strong> Using <code>add</code> with a
+zero-length payload to acquire lightweight locks with minimal network
+overhead.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/handling-empty-strings-in-memcached-set-operations';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

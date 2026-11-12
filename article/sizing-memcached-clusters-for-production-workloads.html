@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sizing Memcached Clusters for Production Workloads - memcached</title>
+    <meta name="description" content="Sizing a Memcached cluster for production requires balancing active dataset requirements, internal memory overhead, network throughput, and redundancy. This guide outlines the essential best practices for determining memory capacity, CPU allocation, netwo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/sizing-memcached-clusters-for-production-workloads">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Sizing Memcached Clusters for Production Workloads - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/sizing-memcached-clusters-for-production-workloads" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Sizing a Memcached cluster for production requires balancing active dataset requirements, internal memory overhead, network throughput, and redundancy. This guide outlines the essential best practices for determining memory capacity, CPU allocation, netwo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="sizing-memcached-clusters-for-production-workloads">Sizing
+Memcached Clusters for Production Workloads</h1>
+<p>Sizing a Memcached cluster for production requires balancing active
+dataset requirements, internal memory overhead, network throughput, and
+redundancy. This guide outlines the essential best practices for
+determining memory capacity, CPU allocation, network limits, and node
+counts to ensure high availability and prevent cache thrashing under
+heavy production workloads.</p>
+<h3 id="1-calculate-the-true-working-set-size">1. Calculate the True
+Working Set Size</h3>
+<p>Sizing begins with calculating the raw data footprint and accounting
+for Memcached’s internal data structures:</p>
+<ul>
+<li><strong>Raw Data Formula:</strong>
+<code>(Average Key Size + Average Value Size) × Expected Item Count</code></li>
+<li><strong>Internal Metadata Overhead:</strong> Memcached adds internal
+overhead (typically 48 to 56 bytes) to every cached item for pointers,
+flags, and expiration times. Factor this into your per-item
+calculation.</li>
+<li><strong>Target Eviction Rate:</strong> Memcached operates as a Least
+Recently Used (LRU) cache. Size your memory so that cold data is evicted
+naturally, while the primary working set stays in memory. If your hit
+ratio drops or eviction rates spike, the memory allocation is
+insufficient.</li>
+</ul>
+<h3 id="2-account-for-slab-allocation-and-fragmentation">2. Account for
+Slab Allocation and Fragmentation</h3>
+<p>Memcached does not allocate arbitrary byte sizes; it uses a slab
+allocator to avoid OS-level memory fragmentation:</p>
+<ul>
+<li><strong>Chunk Waste:</strong> Memory is pre-divided into slab
+classes containing fixed-size chunks. An item is placed in the smallest
+chunk that can accommodate it. For example, a 150-byte item placed in a
+200-byte chunk leaves 50 bytes of unused padding.</li>
+<li><strong>Growth Factor Tuning:</strong> The default growth factor
+(<code>-f 1.25</code>) scales chunk sizes by 25% between slab classes.
+Tuning this factor according to your actual payload distribution reduces
+internal fragmentation.</li>
+<li><strong>Safety Buffer:</strong> Always add a 15% to 25% memory
+safety buffer above your working set size to absorb slab class
+imbalances and prevent unexpected evictions.</li>
+</ul>
+<h3 id="3-plan-for-network-bandwidth-and-packet-limits">3. Plan for
+Network Bandwidth and Packet Limits</h3>
+<p>In many production environments, network capacity saturates before
+CPU or RAM:</p>
+<ul>
+<li><strong>Bandwidth Saturation:</strong> High-throughput caching can
+easily saturate network interfaces. A server serving 50,000 requests per
+second with an average payload of 20 KB requires approximately 8 Gbps of
+sustained bandwidth.</li>
+<li><strong>Packets Per Second (PPS):</strong> Cloud instances often
+impose strict PPS throttling. Ensure the selected instance type provides
+dedicated network performance (e.g., 10 Gbps, 25 Gbps, or higher) rather
+than burstable allocations.</li>
+</ul>
+<h3 id="4-right-size-cpu-and-threading">4. Right-Size CPU and
+Threading</h3>
+<p>Memcached uses a multi-threaded architecture based on
+<code>libevent</code>, but CPU scaling has limits:</p>
+<ul>
+<li><strong>Core Scaling:</strong> Memcached scales efficiently up to
+4–8 CPU cores. Beyond 8 to 16 cores, lock contention on internal data
+structures can degrade returns per core.</li>
+<li><strong>Process Separation:</strong> Running multiple smaller
+Memcached instances on a single large multi-core machine often yields
+higher throughput and lower lock contention than running a single
+massive instance.</li>
+</ul>
+<h3 id="5-account-for-connections-and-os-overhead">5. Account for
+Connections and OS Overhead</h3>
+<p>Memcached maintains connections using event loops, which demand
+system resources:</p>
+<ul>
+<li><strong>Connection Memory:</strong> Each active TCP connection
+consumes server memory. Budget for connection memory by configuring the
+max connections parameter (<code>-c</code>).</li>
+<li><strong>OS Overhead:</strong> Reserve at least 1 GB to 2 GB of RAM
+on each host for the operating system, monitoring agents, and system
+buffers to prevent the Linux Out-Of-Memory (OOM) killer from terminating
+the Memcached daemon.</li>
+</ul>
+<h3 id="6-design-for-blast-radius-and-redundancy">6. Design for Blast
+Radius and Redundancy</h3>
+<p>A Memcached cluster lacks native replication; consistent hashing on
+the client side determines key distribution:</p>
+<ul>
+<li><strong>Avoid Giant Nodes:</strong> A few large instances create a
+high blast radius. If you have two 64 GB nodes and one fails, 50% of
+your cache is lost, overwhelming your primary database.</li>
+<li><strong>Use More, Smaller Nodes:</strong> Favor clusters with
+multiple smaller nodes (e.g., eight 16 GB nodes instead of two 64 GB
+nodes). The loss of a single node then only removes a small percentage
+of cached keys.</li>
+<li><strong>N+1 Headroom:</strong> Ensure your database layer can handle
+the cache miss storm of at least one failed node, or size the cluster
+capacity to tolerate redistributing traffic across remaining nodes.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/sizing-memcached-clusters-for-production-workloads';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

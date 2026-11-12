@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Add Handles Existing Keys - memcached</title>
+    <meta name="description" content="In Memcached, the add command is specifically designed to store data only when a key does not already exist on the server. This article covers how Memcached processes the add command upon encountering an existing key, the specific protocol responses retur">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-add-handles-existing-keys">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Add Handles Existing Keys - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-add-handles-existing-keys" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In Memcached, the add command is specifically designed to store data only when a key does not already exist on the server. This article covers how Memcached processes the add command upon encountering an existing key, the specific protocol responses retur" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-add-handles-existing-keys">How Memcached Add
+Handles Existing Keys</h1>
+<p>In Memcached, the <code>add</code> command is specifically designed
+to store data only when a key does not already exist on the server. This
+article covers how Memcached processes the <code>add</code> command upon
+encountering an existing key, the specific protocol responses returned,
+the atomic nature of the operation, and practical use cases such as
+concurrency control and distributed locking.</p>
+<h3 id="core-behavior-of-the-add-command">Core Behavior of the Add
+Command</h3>
+<p>When you issue an <code>add</code> command to a Memcached server for
+a key that already exists, the server simply ignores the new payload. It
+does not overwrite the existing value, nor does it update the key's
+flags or reset its time-to-live (TTL) expiration. The existing item
+remains entirely unchanged.</p>
+<h3 id="server-responses">Server Responses</h3>
+<p>The exact response returned by Memcached when an <code>add</code>
+fails due to an existing key depends on the protocol in use:</p>
+<ul>
+<li><strong>Text Protocol:</strong> The server responds with
+<code>NOT_STORED\r\n</code>. If the key had not existed, the server
+would have returned <code>STORED\r\n</code>.</li>
+<li><strong>Binary Protocol:</strong> The server returns a status
+response indicating a failure, specifically using the response status
+code <code>0x0002</code> (Key Exists).</li>
+</ul>
+<h3 id="atomicity-and-concurrency">Atomicity and Concurrency</h3>
+<p>The evaluation performed by the <code>add</code> command is strictly
+atomic. The server determines whether the key exists and applies the
+write in a single, non-blocking, thread-safe step. Because Memcached
+processes operations sequentially via internal item locks, there is no
+race condition where two simultaneous clients can successfully execute
+an <code>add</code> command on the same key at the same time. Exactly
+one client will receive success (<code>STORED</code>), and all
+concurrent attempts will fail (<code>NOT_STORED</code>).</p>
+<h3 id="practical-use-cases">Practical Use Cases</h3>
+<p>Because of its conditional write and atomic guarantees, developers
+frequently use the <code>add</code> command for synchronization
+tasks:</p>
+<ul>
+<li><strong>Simple Distributed Locks:</strong> A process attempts to
+<code>add</code> a key representing a lock (e.g.,
+<code>lock:process_reports</code>) with a short TTL. If the command
+succeeds, the process holds the lock. If it returns
+<code>NOT_STORED</code>, another process is already executing the
+task.</li>
+<li><strong>Cache Stampede Prevention:</strong> When a popular cache
+item expires, multiple worker threads may attempt to regenerate it.
+Using <code>add</code> with a temporary lock key ensures only one worker
+queries the primary database to rebuild the cache, while others wait or
+serve stale data.</li>
+<li><strong>First-Writer-Wins Patterns:</strong> When multiple actors
+race to initialize a resource or assign an identifier, <code>add</code>
+guarantees that the first received submission takes precedence.</li>
+</ul>
+<h3 id="comparison-add-vs-set-vs-replace">Comparison: Add vs. Set vs.
+Replace</h3>
+<p>To understand <code>add</code> clearly, contrast it with its
+companion commands:</p>
+<ul>
+<li><strong><code>set</code></strong>: Stores data unconditionally. It
+will create the key if missing, or overwrite it if it exists.</li>
+<li><strong><code>add</code></strong>: Stores data conditionally,
+succeeding <em>only</em> if the key does not exist.</li>
+<li><strong><code>replace</code></strong>: Stores data conditionally,
+succeeding <em>only</em> if the key already exists.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-add-handles-existing-keys';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

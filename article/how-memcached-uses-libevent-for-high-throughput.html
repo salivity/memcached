@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Uses Libevent for High Throughput - memcached</title>
+    <meta name="description" content="Memcached achieves exceptional throughput and low latency primarily by combining non-blocking network I/O with the libevent library across a multi-threaded architecture. Instead of dedicating a thread or process to each client connection, Memcached uses a">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-uses-libevent-for-high-throughput">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Uses Libevent for High Throughput - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-uses-libevent-for-high-throughput" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached achieves exceptional throughput and low latency primarily by combining non-blocking network I/O with the libevent library across a multi-threaded architecture. Instead of dedicating a thread or process to each client connection, Memcached uses a" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-uses-libevent-for-high-throughput">How Memcached
+Uses Libevent for High Throughput</h1>
+<p>Memcached achieves exceptional throughput and low latency primarily
+by combining non-blocking network I/O with the <code>libevent</code>
+library across a multi-threaded architecture. Instead of dedicating a
+thread or process to each client connection, Memcached uses an
+event-driven mechanism that monitors thousands of simultaneous
+connections with minimal overhead. This article explains how
+non-blocking sockets, OS-level event notification mechanisms like
+<code>epoll</code> and <code>kqueue</code> managed by
+<code>libevent</code>, and an efficient master-worker threading model
+work together to handle heavy traffic loads seamlessly.</p>
+<h3 id="the-limitation-of-traditional-blocking-io">The Limitation of
+Traditional Blocking I/O</h3>
+<p>In a traditional blocking I/O model, when a thread initiates a read
+or write operation on a network socket, it pauses execution until data
+is available or the write buffer is ready. Handling tens of thousands of
+concurrent clients in this model requires allocating a separate thread
+or process for each connection. This approach rapidly degrades
+performance due to:</p>
+<ul>
+<li>Excessive memory consumption from thread stack allocations.</li>
+<li>Severe CPU overhead caused by constant OS context switching.</li>
+<li>Thread starvation while waiting for idle network clients to send
+requests.</li>
+</ul>
+<p>To handle modern web-scale traffic, Memcached avoids blocking calls
+entirely.</p>
+<h3 id="non-blocking-io-and-libevent">Non-Blocking I/O and Libevent</h3>
+<p>Memcached configures all network sockets in non-blocking mode. When a
+socket is non-blocking, a read or write system call returns immediately.
+If no data is available to read, or if the network output buffer is
+full, the call returns an error code (<code>EAGAIN</code> or
+<code>EWOULDBLOCK</code>) rather than stalling the CPU.</p>
+<p>Because querying thousands of sockets sequentially to see if they are
+ready (busy-waiting) would waste CPU cycles, Memcached relies on
+<code>libevent</code>.</p>
+<p><code>libevent</code> is a high-performance event notification
+library that abstracts the most efficient event demultiplexing
+mechanisms provided by modern operating systems:</p>
+<ul>
+<li><strong><code>epoll</code></strong> on Linux</li>
+<li><strong><code>kqueue</code></strong> on BSD and macOS</li>
+<li><strong>Event ports</strong> on Solaris</li>
+</ul>
+<p>Instead of repeatedly polling connections, Memcached registers file
+descriptors (sockets) with <code>libevent</code> and specifies the
+events it wants to monitor (such as read readiness, write readiness, or
+errors). The operating system notifies <code>libevent</code> only when
+an actual state change occurs, and <code>libevent</code> triggers the
+appropriate callback function in Memcached.</p>
+<h3 id="the-master-worker-threading-architecture">The Master-Worker
+Threading Architecture</h3>
+<p>Memcached pairs <code>libevent</code> with a dedicated multi-threaded
+design to scale across multiple CPU cores. It divides network
+responsibilities between a single dispatcher thread and multiple worker
+threads.</p>
+<h4 id="1-the-dispatcher-main-thread">1. The Dispatcher (Main)
+Thread</h4>
+<p>The primary responsibility of the dispatcher thread is connection
+management:</p>
+<ul>
+<li>It runs its own <code>libevent</code> event loop, listening on the
+server's TCP/UDP listening port.</li>
+<li>When a new client attempts to connect, the OS signals the dispatcher
+thread via <code>libevent</code>.</li>
+<li>The dispatcher accepts the connection, sets the new socket to
+non-blocking mode, and packages it into a connection item.</li>
+<li>It then assigns the connection to one of the worker threads using a
+round-robin distribution strategy.</li>
+<li>To notify the chosen worker thread, the dispatcher writes a single
+byte to an internal pipe or eventfd connected to that specific
+worker.</li>
+</ul>
+<h4 id="2-the-worker-threads">2. The Worker Threads</h4>
+<p>When Memcached starts, it creates a pool of worker threads (typically
+matching the number of available CPU cores). Each worker thread operates
+independently:</p>
+<ul>
+<li>Every worker runs its own isolated <code>libevent</code>
+instance.</li>
+<li>The worker thread monitors its internal pipe for notifications from
+the dispatcher.</li>
+<li>When notified, the worker reads the new connection details from the
+pipe and registers the client's network socket with its own
+<code>libevent</code> loop.</li>
+<li>From that moment on, that specific worker thread handles all
+subsequent reads, protocol parsing, memory operations, and writes for
+that connection.</li>
+</ul>
+<h3 id="request-lifecycle-and-event-handling">Request Lifecycle and
+Event Handling</h3>
+<p>Once a connection is established, the request-response lifecycle
+proceeds asynchronously:</p>
+<ol type="1">
+<li><strong>Wait State:</strong> The worker thread remains idle or
+processes other connections while <code>libevent</code> monitors the
+socket.</li>
+<li><strong>Read Event:</strong> As soon as the client transmits data,
+the OS alerts the worker's <code>libevent</code> instance, which
+executes the read callback.</li>
+<li><strong>Command Processing:</strong> The worker reads the available
+bytes into a buffer, parses the Memcached command (such as
+<code>GET</code> or <code>SET</code>), and accesses the internal hash
+table and slab allocator.</li>
+<li><strong>Write Event:</strong> When the response is ready, the worker
+writes the data back to the socket. If the client’s receive buffer is
+full, the worker registers a write event with <code>libevent</code> and
+pauses transmission for that client, returning to handle other tasks
+until the socket is ready to accept more data.</li>
+</ol>
+<h3 id="why-this-architecture-drives-high-throughput">Why This
+Architecture Drives High Throughput</h3>
+<p>Memcached maximizes hardware efficiency by eliminating blocking calls
+and minimizing synchronization bottlenecks:</p>
+<ul>
+<li><strong>Minimal Context Switching:</strong> Threads only run when
+there is actual work to do, reducing wasted CPU cycles.</li>
+<li><strong>High Concurrency:</strong> A single worker thread can easily
+juggle thousands of idle or intermittently active connections
+simultaneously.</li>
+<li><strong>CPU Cache Affinity:</strong> Assigning a connection to a
+specific worker thread ensures that request processing occurs within the
+same CPU context, improving memory cache locality.</li>
+<li><strong>Low Memory Footprint:</strong> Without the need for
+thread-per-connection overhead, system memory is preserved for its
+primary function: caching key-value data.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-uses-libevent-for-high-throughput';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

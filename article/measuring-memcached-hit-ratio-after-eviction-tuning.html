@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Measuring Memcached Hit Ratio After Eviction Tuning - memcached</title>
+    <meta name="description" content="Tuning eviction rules in Memcached allows teams to protect high-value keys, balance slab classes, and prevent premature data drops, but these changes require precise measurement to confirm their effectiveness. To quantify improvements, developers must est">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/measuring-memcached-hit-ratio-after-eviction-tuning">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Measuring Memcached Hit Ratio After Eviction Tuning - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/measuring-memcached-hit-ratio-after-eviction-tuning" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Tuning eviction rules in Memcached allows teams to protect high-value keys, balance slab classes, and prevent premature data drops, but these changes require precise measurement to confirm their effectiveness. To quantify improvements, developers must est" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="measuring-memcached-hit-ratio-after-eviction-tuning">Measuring
+Memcached Hit Ratio After Eviction Tuning</h1>
+<p>Tuning eviction rules in Memcached allows teams to protect high-value
+keys, balance slab classes, and prevent premature data drops, but these
+changes require precise measurement to confirm their effectiveness. To
+quantify improvements, developers must establish baseline cache metrics,
+track hit ratios across consistent traffic windows, monitor slab-level
+eviction counts, and employ automated time-series monitoring rather than
+relying on lifetime server totals.</p>
+<h3 id="establish-baseline-metrics">Establish Baseline Metrics</h3>
+<p>Before modifying any eviction settings—such as modernizing segmented
+LRU behaviors (<code>lru_maintainer</code>, <code>lru_crawler</code>) or
+enabling automatic slab reassignment (<code>slab_reassign</code>,
+<code>slab_automove</code>)—capture the existing state. Connect to
+Memcached using <code>telnet</code> or <code>nc</code> and issue the
+<code>stats</code> command:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;stats&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> localhost 11211</span></code></pre></div>
+<p>Record the following cumulative metrics:</p>
+<ul>
+<li><code>cmd_get</code>: Total read requests processed.</li>
+<li><code>get_hits</code>: Total successful key lookups.</li>
+<li><code>get_misses</code>: Total failed key lookups.</li>
+<li><code>evictions</code>: The total number of valid items removed to
+free memory for new items.</li>
+<li><code>reclaimed</code>: Number of times an expired entry was reused
+without needing a full eviction.</li>
+</ul>
+<h3 id="calculate-cache-hit-ratio-accurately">Calculate Cache Hit Ratio
+Accurately</h3>
+<p>The standard formula for cache hit ratio is:</p>
+<p><span class="math display">\[\text{Hit Ratio} =
+\frac{\text{get\_hits}}{\text{get\_hits} +
+\text{get\_misses}}\]</span></p>
+<p>Because standard <code>stats</code> counters accumulate from the
+moment the daemon starts, reading the raw numbers after a configuration
+change will dilute recent performance with historical data.</p>
+<p>To measure actual improvements:</p>
+<ol type="1">
+<li><strong>Use Delta Calculations</strong>: Calculate the hit ratio
+using differences between two specific timestamps: <span
+class="math display">\[\text{Delta Hit Ratio} =
+\frac{\Delta\text{get\_hits}}{\Delta\text{get\_hits} +
+\Delta\text{get\_misses}}\]</span></li>
+<li><strong>Export to Time-Series Monitoring</strong>: Route metrics
+through an exporter (such as Prometheus Memcached Exporter) to capture
+per-minute or per-hour rates using functions like <code>rate()</code> or
+<code>irate()</code>. This reveals immediate trajectory shifts
+post-tuning.</li>
+</ol>
+<h3 id="correlate-hit-ratio-with-eviction-reductions">Correlate Hit
+Ratio with Eviction Reductions</h3>
+<p>An improved hit ratio is only meaningful if it correlates with
+healthier memory behavior rather than a drop in overall traffic. Monitor
+the eviction rate alongside the hit ratio:</p>
+<ul>
+<li><strong>Eviction Rate Drop</strong>: A successful tune of slab
+allocations or LRU thresholds should cause the eviction rate per second
+to decrease or isolate evictions exclusively to temporary/cold slab
+queues.</li>
+<li><strong>Inspect Slab-Level Metrics</strong>: Run
+<code>stats items</code> and <code>stats slabs</code> to evaluate
+individual slab classes. If a specific slab class previously showed a
+high ratio of <code>evictions</code> to <code>number of items</code>,
+check whether your changes (e.g., dynamic slab movement) reduced
+evictions in that specific class.</li>
+</ul>
+<h3 id="benchmark-with-consistent-workloads">Benchmark with Consistent
+Workloads</h3>
+<p>To eliminate confounding variables caused by natural user traffic
+fluctuations:</p>
+<ul>
+<li><strong>Traffic Shadowing</strong>: Replay identical production
+traffic traces against a control instance (untuned) and a target
+instance (tuned) concurrently.</li>
+<li><strong>Synthetic Workloads</strong>: Use tools such as
+<code>mutilate</code> or <code>memtier_benchmark</code> to simulate
+identical read/write access patterns, payload sizes, and key
+distribution curves (e.g., Zipfian distribution).</li>
+</ul>
+<p>Compare the delta hit ratio and total evictions across both instances
+over identical run durations. A successful eviction configuration will
+demonstrate a higher hit ratio, lower or zero evictions in warm/hot
+queues, and reduced p95/p99 application response latency caused by fewer
+database fallback queries.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/measuring-memcached-hit-ratio-after-eviction-tuning';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

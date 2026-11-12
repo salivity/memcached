@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tools to Trace Key Access and Cold Keys in Memcached - memcached</title>
+    <meta name="description" content="Memcached is a high-performance, distributed memory caching system designed to speed up dynamic web applications by alleviating database load. Over time, unused or infrequently accessed items—known as &quot;cold keys&quot;—can consume valuable memory slabs, leading">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/tools-to-trace-key-access-and-cold-keys-in-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Tools to Trace Key Access and Cold Keys in Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/tools-to-trace-key-access-and-cold-keys-in-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is a high-performance, distributed memory caching system designed to speed up dynamic web applications by alleviating database load. Over time, unused or infrequently accessed items—known as &quot;cold keys&quot;—can consume valuable memory slabs, leading" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="tools-to-trace-key-access-and-cold-keys-in-memcached">Tools to
+Trace Key Access and Cold Keys in Memcached</h1>
+<p>Memcached is a high-performance, distributed memory caching system
+designed to speed up dynamic web applications by alleviating database
+load. Over time, unused or infrequently accessed items—known as "cold
+keys"—can consume valuable memory slabs, leading to premature evictions
+of active data. This article outlines the built-in utilities,
+open-source network sniffers, and kernel-level tracing tools developers
+use to trace key access patterns and pinpoint cold keys in
+Memcached.</p>
+<h3 id="built-in-memcached-features">Built-in Memcached Features</h3>
+<h4 id="lru-crawler">LRU Crawler</h4>
+<p>Modern versions of Memcached include an asynchronous background
+thread called the LRU Crawler. It inspects items in memory without
+blocking active operations.</p>
+<ul>
+<li><strong><code>lru_crawler metadump</code></strong>: This command
+dumps metadata (such as key name, expiration time, size, and last access
+time in seconds since the Unix epoch) for keys stored in the cache. By
+comparing the last-accessed timestamp with the current time, developers
+can identify keys that have not been requested over extended
+periods.</li>
+<li><strong><code>lru_crawler crawl</code></strong>: Triggers targeted
+inspections across specific slab classes to evaluate memory usage and
+stale data without full service interruption.</li>
+</ul>
+<h4 id="slab-and-item-statistics">Slab and Item Statistics</h4>
+<p>Memcached provides native telemetry through its text protocol:</p>
+<ul>
+<li><strong><code>stats items</code></strong>: Displays allocation,
+eviction, and crawler metrics across slab classes, helping determine
+whether specific slabs are experiencing high eviction rates due to
+stagnant memory.</li>
+<li><strong><code>stats cachedump</code></strong>: A legacy debugging
+command that inspects keys within a specific slab class. While useful in
+isolated test environments, it locks the cache during execution and
+should be avoided in production environments with high throughput.</li>
+</ul>
+<h3 id="network-traffic-and-packet-analysis-tools">Network Traffic and
+Packet Analysis Tools</h3>
+<p>Because Memcached does not log every command natively to maintain
+sub-millisecond latency, network-level inspection is a popular method to
+observe live key access.</p>
+<h4 id="mctop">mctop</h4>
+<p>Inspired by <code>top</code>, <strong>mctop</strong> captures live
+traffic sent to Memcached via <code>libpcap</code>. It sniffs network
+interfaces, parses the Memcached protocol (both ASCII and binary), and
+aggregates real-time metrics. Developers can view request rates,
+bandwidth consumption, and hit/miss ratios per key. Cold keys are
+recognized by filtering out active patterns or analyzing items that
+appear in memory dumps but never register traffic in
+<code>mctop</code>.</p>
+<h4 id="mcsnooper">McSnooper</h4>
+<p><strong>McSnooper</strong> is another passive packet-capturing
+utility specifically built for Memcached traffic. It tracks
+<code>get</code>, <code>set</code>, and <code>delete</code> commands,
+allowing teams to log key frequency to external storage (like
+Elasticsearch or local disk) for batch analysis and access-frequency
+modeling.</p>
+<h4 id="tcpdump-and-wireshark">tcpdump and Wireshark</h4>
+<p>For targeted debugging without installing third-party binaries on
+servers, standard network utilities suffice:</p>
+<ul>
+<li>Use <code>tcpdump</code> on port 11211 to record raw packets to a
+<code>.pcap</code> file.</li>
+<li>Open the capture in <strong>Wireshark</strong>, which features a
+native Memcached protocol dissector capable of filtering by specific
+commands (e.g., <code>memcache.command == 0x00</code> for binary
+<code>Get</code>).</li>
+</ul>
+<h3 id="kernel-tracing-ebpf-and-bpftrace">Kernel Tracing: eBPF and
+bpftrace</h3>
+<p>For zero-overhead profiling in production environments, Extended
+Berkeley Packet Filter (eBPF) tools provide visibility into Memcached
+socket operations or user-space tracepoints.</p>
+<ul>
+<li><strong>bpftrace scripts</strong>: Developers can attach probes to
+<code>read</code> and <code>write</code> syscalls on the Memcached
+process, extracting the raw command payloads. This allows programmatic
+tracking of access counts per key directly in kernel space before
+sending summaries to user space, eliminating the performance penalties
+associated with heavy packet capturing.</li>
+</ul>
+<h3 id="application-level-tracing">Application-Level Tracing</h3>
+<p>When infrastructure access is restricted, application-level
+monitoring serves as a reliable alternative:</p>
+<ul>
+<li><strong>APM and Metrics Libraries</strong>: Client wrappers (such as
+those in Python, Go, or Java) can emit metrics to Prometheus, Datadog,
+or StatsD on cache operations. Tagging metrics with key prefixes allows
+developers to map key usage frequency and detect obsolete cache key
+namespaces that are no longer requested by application code.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/tools-to-trace-key-access-and-cold-keys-in-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

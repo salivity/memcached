@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached vs Varnish in Web Architecture - memcached</title>
+    <meta name="description" content="Modern web applications rely on multi-tier caching strategies to minimize latency and handle high-volume traffic efficiently. While both Memcached and Varnish Cache are prominent in-memory caching solutions, they operate at fundamentally different layers">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-vs-varnish-in-web-architecture">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached vs Varnish in Web Architecture - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-vs-varnish-in-web-architecture" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Modern web applications rely on multi-tier caching strategies to minimize latency and handle high-volume traffic efficiently. While both Memcached and Varnish Cache are prominent in-memory caching solutions, they operate at fundamentally different layers" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-vs-varnish-in-web-architecture">Memcached vs Varnish
+in Web Architecture</h1>
+<p>Modern web applications rely on multi-tier caching strategies to
+minimize latency and handle high-volume traffic efficiently. While both
+Memcached and Varnish Cache are prominent in-memory caching solutions,
+they operate at fundamentally different layers of the infrastructure
+stack. This article examines the architectural roles, operational
+differences, and complementary use cases of Varnish as an HTTP reverse
+proxy versus Memcached as an internal object store.</p>
+<h3 id="architectural-placement-and-tiers">Architectural Placement and
+Tiers</h3>
+<p>The primary distinction between Varnish and Memcached is their
+placement within the web application architecture:</p>
+<ul>
+<li><strong>Varnish (The HTTP Edge Tier):</strong> Varnish operates as a
+reverse proxy sitting directly in front of the web servers (such as
+Nginx, Apache, or Node.js) and the public internet. It intercepts
+incoming client HTTP requests before they reach the application runtime.
+If an asset or response is cached, Varnish returns it directly to the
+client without invoking the backend web servers.</li>
+<li><strong>Memcached (The Application and Database Tier):</strong>
+Memcached resides deep within the internal infrastructure, situated
+between the application code and the persistent data stores (such as
+MySQL, PostgreSQL, or MongoDB). It serves as an internal key-value data
+store used by the application logic to hold frequently accessed database
+queries, API results, or user session states.</li>
+</ul>
+<h3 id="data-types-and-protocols">Data Types and Protocols</h3>
+<p>Varnish and Memcached handle different types of data and communicate
+using distinct network protocols:</p>
+<ul>
+<li><strong>Varnish handles full HTTP payloads.</strong> It understands
+the HTTP protocol natively, processing HTTP headers, cookies, request
+methods, and response codes. Varnish caches full web pages, API
+endpoints, images, stylesheets, and JSON responses, delivering them
+directly via HTTP/1.1 and HTTP/2.</li>
+<li><strong>Memcached handles arbitrary data blobs.</strong> It is
+protocol-agnostic regarding the data it stores, operating via its own
+lightweight TCP/UDP text and binary protocols. Applications serialize
+complex data structures—such as arrays, objects, or strings—and save
+them into Memcached against a specific string key.</li>
+</ul>
+<h3 id="configuration-and-invalidation-strategies">Configuration and
+Invalidation Strategies</h3>
+<p>Cache invalidation and request handling logic differ significantly
+between the two systems:</p>
+<ul>
+<li><strong>Varnish Configuration Language (VCL):</strong> Varnish
+features a domain-specific programming language (VCL) that allows
+administrators to define complex routing, caching, and header
+manipulation rules. Invalidation can be achieved using TTLs
+(Time-to-Live), HTTP purge requests, regular expression bans, and cache
+tagging (surrogate keys), enabling granular invalidation of edge
+content.</li>
+<li><strong>Memcached Simple Key Invalidation:</strong> Memcached relies
+on a straightforward Least Recently Used (LRU) eviction algorithm and
+explicit TTLs. Invalidation occurs either when an item expires, when
+memory fills up and forces the eviction of older keys, or when the
+application explicitly deletes or updates a specific key.</li>
+</ul>
+<h3 id="implementing-both-in-a-unified-architecture">Implementing Both
+in a Unified Architecture</h3>
+<p>Rather than competing, Varnish and Memcached are typically deployed
+together to form a robust, multi-tiered caching pipeline:</p>
+<ol type="1">
+<li><strong>Client Request:</strong> A user requests a dynamic web
+page.</li>
+<li><strong>Edge Layer (Varnish):</strong> Varnish checks its cache for
+the complete HTML output. If a match is found (a cache hit), it is
+returned instantly, bypassing the rest of the stack.</li>
+<li><strong>Application Layer:</strong> If the request misses Varnish,
+it proceeds to the web server to execute the backend application
+code.</li>
+<li><strong>Data Caching Layer (Memcached):</strong> While rendering the
+page, the application checks Memcached for database results, user
+permissions, and configuration data. Cache hits here prevent heavy read
+operations on the primary database.</li>
+<li><strong>Persistence Layer:</strong> Any missing data is queried from
+the primary database, saved into Memcached for subsequent requests, and
+the final response is constructed.</li>
+<li><strong>Response Delivery:</strong> The application sends the
+rendered page back through Varnish, which stores the HTTP response for
+future visitors according to its caching policy, then delivers it to the
+user.</li>
+</ol>
+<h3 id="summary-of-differences">Summary of Differences</h3>
+<ul>
+<li><strong>Layer:</strong> Varnish is an external-facing HTTP gateway
+cache; Memcached is an internal-facing application object cache.</li>
+<li><strong>Awareness:</strong> Varnish is fully aware of HTTP
+semantics; Memcached is an agnostic key-value store.</li>
+<li><strong>Target Load Reduction:</strong> Varnish offloads traffic
+from application and web servers; Memcached offloads query volume from
+backend databases.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-vs-varnish-in-web-architecture';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Logging and Debugging Capabilities - memcached</title>
+    <meta name="description" content="This article provides an overview of the logging, diagnostic, and debugging mechanisms built directly into the Memcached daemon (memcached) binary. It covers command-line verbosity flags, real-time log streaming via the watch interface, internal diagnosti">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-logging-and-debugging-capabilities">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Logging and Debugging Capabilities - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-logging-and-debugging-capabilities" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article provides an overview of the logging, diagnostic, and debugging mechanisms built directly into the Memcached daemon (memcached) binary. It covers command-line verbosity flags, real-time log streaming via the watch interface, internal diagnosti" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-logging-and-debugging-capabilities">Memcached Logging
+and Debugging Capabilities</h1>
+<p>This article provides an overview of the logging, diagnostic, and
+debugging mechanisms built directly into the Memcached daemon
+(<code>memcached</code>) binary. It covers command-line verbosity flags,
+real-time log streaming via the <code>watch</code> interface, internal
+diagnostic <code>stats</code> commands, and compile-time tracing
+integrations like DTrace.</p>
+<h3 id="command-line-verbosity-flags">Command-Line Verbosity Flags</h3>
+<p>Memcached prints diagnostic and operational messages directly to
+standard output (<code>stdout</code>) or standard error
+(<code>stderr</code>). You can control the depth of these logs during
+process startup using verbosity flags:</p>
+<ul>
+<li><strong><code>-v</code> (Verbose):</strong> Logs informational
+messages, startup configurations, warnings, and high-level errors.</li>
+<li><strong><code>-vv</code> (Very Verbose):</strong> Logs incoming
+client requests, keys requested, storage actions, and server responses.
+This mode is useful for tracking application-level queries in a
+development environment.</li>
+<li><strong><code>-vvv</code> (Extremely Verbose):</strong> Emits
+detailed internal state transitions, memory allocations, and event-loop
+executions. This flag produces high log volumes and should never be used
+under high-throughput production workloads.</li>
+</ul>
+<p>To aid post-crash debugging, the <strong><code>-r</code></strong>
+flag instructs the binary to maximize core file limits
+(<code>ulimit -c unlimited</code>), allowing the generation of core
+dumps for inspection with tools like GDB.</p>
+<h3 id="live-dynamic-logging-the-watch-command">Live Dynamic Logging:
+The <code>watch</code> Command</h3>
+<p>Memcached includes a dynamic log-monitoring system accessible over
+its standard ASCII protocol without needing to restart the daemon. By
+opening a TCP connection (via <code>telnet</code> or <code>nc</code>) to
+the Memcached port, administrators can issue the <code>watch</code>
+command to stream live internal events.</p>
+<p>The <code>watch</code> command supports filtering by event
+categories:</p>
+<ul>
+<li><strong><code>watch fetchers</code>:</strong> Displays cache
+lookups, cache hits, and cache misses in real time.</li>
+<li><strong><code>watch mutations</code>:</strong> Streams write
+operations, including <code>set</code>, <code>add</code>,
+<code>replace</code>, and <code>delete</code>.</li>
+<li><strong><code>watch evictions</code>:</strong> Alerts when items are
+evicted from slab classes due to memory constraints.</li>
+</ul>
+<p>This interface allows granular inspection of production traffic with
+lower overhead than the <code>-vv</code> flag.</p>
+<h3 id="runtime-inspection-via-stats-commands">Runtime Inspection via
+<code>stats</code> Commands</h3>
+<p>The binary implements an extensive set of diagnostic commands via the
+Memcached protocol to inspect memory management, connection states, and
+cache efficiency:</p>
+<ul>
+<li><strong><code>stats</code>:</strong> Returns general uptime, current
+connections, total items stored, memory usage, and cumulative hit/miss
+ratios.</li>
+<li><strong><code>stats settings</code>:</strong> Dumps the running
+configuration, including max connections, thread count, slab limits, and
+memory limits.</li>
+<li><strong><code>stats items</code>:</strong> Provides counts, age of
+oldest items, and eviction counts segmented by slab class ID.</li>
+<li><strong><code>stats slabs</code>:</strong> Displays the low-level
+state of the slab memory allocator, chunk sizes, unused chunks, and
+memory waste.</li>
+<li><strong><code>stats conns</code>:</strong> Lists active network
+connections, file descriptor usage, and current read/write states.</li>
+</ul>
+<h3 id="dtrace-and-systemtap-probes">DTrace and SystemTap Probes</h3>
+<p>When compiled with the <code>--enable-dtrace</code> flag, the
+Memcached binary includes native User-Level Statically Defined Tracing
+(USDT) probes. These probes allow kernel-level tracing frameworks like
+DTrace, SystemTap, and eBPF to hook directly into the binary at runtime.
+They expose low-overhead monitoring for connection lifecycles, hash
+table lookups, memory allocation, and query execution times without
+modifying application code or restarting the daemon.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-logging-and-debugging-capabilities';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

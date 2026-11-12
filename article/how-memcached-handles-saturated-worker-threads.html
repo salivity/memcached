@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Saturated Worker Threads - memcached</title>
+    <meta name="description" content="This article explains how Memcached handles incoming request queues when its worker threads reach full saturation. It details the event-driven architecture, internal connection queuing mechanisms, the role of operating system network buffers, and the back">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-saturated-worker-threads">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Saturated Worker Threads - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-saturated-worker-threads" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article explains how Memcached handles incoming request queues when its worker threads reach full saturation. It details the event-driven architecture, internal connection queuing mechanisms, the role of operating system network buffers, and the back" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-saturated-worker-threads">How Memcached
+Handles Saturated Worker Threads</h1>
+<p>This article explains how Memcached handles incoming request queues
+when its worker threads reach full saturation. It details the
+event-driven architecture, internal connection queuing mechanisms, the
+role of operating system network buffers, and the backpressure
+strategies Memcached uses to prevent thread starvation and manage
+resource exhaustion during extreme traffic spikes.</p>
+<h3 id="the-architecture-main-dispatcher-and-worker-threads">The
+Architecture: Main Dispatcher and Worker Threads</h3>
+<p>Memcached utilizes an event-driven network architecture powered by
+<code>libevent</code>. Its threading model consists of a single primary
+dispatcher thread and a pool of pre-allocated worker threads.</p>
+<p>The primary thread binds to the network port and handles incoming
+connection requests (<code>accept()</code>). When a client establishes a
+connection, the dispatcher assigns that connection to a specific worker
+thread using a round-robin distribution algorithm. The dispatcher pushes
+a connection item (<code>CQ_ITEM</code>) into that specific worker
+thread's internal connection queue (<code>CQ</code>) and writes a single
+byte through a notification pipe (<code>pipe</code> or
+<code>eventfd</code>) to notify the worker's event loop that work is
+waiting.</p>
+<p>Once assigned, an established client connection remains tied to that
+specific worker thread for the lifetime of the connection. The worker
+thread registers the client's file descriptor with its local
+<code>libevent</code> loop to monitor for incoming read and write
+events.</p>
+<h3 id="behavior-under-thread-saturation">Behavior Under Thread
+Saturation</h3>
+<p>Thread saturation occurs when worker threads become CPU-bound, often
+caused by heavy serialization/deserialization, lock contention (such as
+cache eviction or slab allocation locks), or handling millions of
+requests per second. When a worker thread is fully saturated, request
+execution flows through several defense and buffering layers.</p>
+<h4 id="1-internal-event-loop-latency">1. Internal Event Loop
+Latency</h4>
+<p>Because worker threads operate on non-blocking I/O using an event
+loop, a saturated thread does not simply block; rather, the time
+required to complete a full iteration of its event loop increases
+significantly. While a worker is executing commands for one socket,
+pending network events on other sockets assigned to that same thread sit
+unprocessed in <code>libevent</code>'s internal dispatch queue.</p>
+<h4 id="2-event-throttling-via-maxreqs_per_event">2. Event Throttling
+via <code>maxreqs_per_event</code></h4>
+<p>To prevent a single active client connection from monopolizing a
+worker thread and starving other sockets assigned to the same thread,
+Memcached utilizes the <code>maxreqs_per_event</code> parameter (often
+defaulting to 20 or dynamic settings).</p>
+<p>When a worker thread reads commands from a client connection, it
+processes up to the configured limit of requests before intentionally
+yielding control. It resets the event trigger and returns to the event
+loop to service other pending connections before reading from that
+socket again. When threads are saturated, this mechanism guarantees fair
+scheduling among connections assigned to that thread, ensuring all
+clients experience uniform latency degradation rather than total
+starvation.</p>
+<h4 id="3-operating-system-socket-buffers">3. Operating System Socket
+Buffers</h4>
+<p>Memcached does not maintain unbounded application-level queues for
+raw requests. When a worker thread cannot execute requests as fast as
+clients send them, the client sockets' kernel-level TCP receive buffers
+(<code>SO_RCVBUF</code>) fill up.</p>
+<p>When the OS receive buffer becomes full, the TCP window shrinks to
+zero (TCP ZeroWindow). This signals the client operating system to halt
+sending additional packets, pushing the backpressure directly onto the
+client applications.</p>
+<h4 id="4-new-connection-queue-overflow">4. New Connection Queue
+Overflow</h4>
+<p>Saturation also impacts the arrival of new connections. If worker
+threads are too busy to read from their internal notification pipes,
+their incoming connection queues (<code>CQ</code>) accumulate
+unacknowledged connection objects.</p>
+<p>If saturation spreads to the dispatcher thread or reaches global
+connection limits (<code>-c</code> flag), new connections cannot be
+accepted. At this point, the operating system's TCP listen backlog queue
+(<code>SOMAXCONN</code> / listen backlog) fills up. Once the listen
+queue is exhausted, the operating system drops incoming TCP SYN packets
+or responds with connection resets (<code>ECONNRESET</code>), causing
+connection timeouts and connection-refused errors on the client
+side.</p>
+<h3 id="summary-of-failure-modes">Summary of Failure Modes</h3>
+<p>When Memcached worker threads are fully saturated:</p>
+<ul>
+<li><strong>Existing connections</strong> experience increased latency
+as requests wait in operating system TCP receive buffers and the
+worker's fair-share event iterations.</li>
+<li><strong>Fairness is maintained</strong> across existing clients via
+<code>maxreqs_per_event</code>, preventing individual sockets from
+monopolizing CPU time.</li>
+<li><strong>New connections</strong> stall in the listen backlog and
+eventually drop once OS-level queues fill.</li>
+<li><strong>No unbound memory growth occurs</strong> inside Memcached
+because the backpressure mechanism delegates request queuing back to the
+kernel and the client TCP stack.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-saturated-worker-threads';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

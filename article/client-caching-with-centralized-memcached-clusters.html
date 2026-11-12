@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client Caching with Centralized Memcached Clusters - memcached</title>
+    <meta name="description" content="In high-throughput microservices architectures, combining client-side (in-process) caching with a centralized Memcached cluster creates a two-tier caching strategy that drastically reduces latency and network overhead. This article explains how client-sid">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/client-caching-with-centralized-memcached-clusters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Client Caching with Centralized Memcached Clusters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/client-caching-with-centralized-memcached-clusters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="In high-throughput microservices architectures, combining client-side (in-process) caching with a centralized Memcached cluster creates a two-tier caching strategy that drastically reduces latency and network overhead. This article explains how client-sid" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="client-caching-with-centralized-memcached-clusters">Client
+Caching with Centralized Memcached Clusters</h1>
+<p>In high-throughput microservices architectures, combining client-side
+(in-process) caching with a centralized Memcached cluster creates a
+two-tier caching strategy that drastically reduces latency and network
+overhead. This article explains how client-side L1 caches operate
+alongside centralized L2 Memcached clusters, outlining the read and
+write paths, cache invalidation mechanisms, and strategies for managing
+data consistency across distributed services.</p>
+<h3 id="the-two-tier-architecture-l1-and-l2">The Two-Tier Architecture:
+L1 and L2</h3>
+<p>A multi-tier caching architecture balances speed and resource
+distribution:</p>
+<ul>
+<li><strong>L1 (Client-Side Cache):</strong> Stored directly in the
+memory space of the microservice instance (e.g., using Guava, Caffeine,
+or a local dictionary). Access takes nanoseconds because it bypasses the
+network completely.</li>
+<li><strong>L2 (Centralized Memcached Cluster):</strong> A shared,
+distributed caching layer accessible by all microservice instances over
+the network. Access typically takes 1 to 5 milliseconds. It holds a
+larger volume of data and prevents duplicated storage across multiple
+application instances.</li>
+</ul>
+<h3 id="the-read-path">The Read Path</h3>
+<p>When a microservice requests data, it executes a tiered lookup
+sequence:</p>
+<ol type="1">
+<li><strong>L1 Query:</strong> The service first checks its local
+memory. If a cache hit occurs, the data is returned immediately without
+network I/O.</li>
+<li><strong>L2 Query:</strong> On an L1 miss, the client library
+contacts the centralized Memcached cluster using consistent hashing to
+locate the appropriate node. If found, the service populates its local
+L1 cache with the retrieved value before returning it.</li>
+<li><strong>Source of Truth:</strong> If both L1 and L2 miss, the
+service queries the underlying database or downstream service. The
+retrieved data is then written asynchronously to both the centralized
+Memcached cluster and the local L1 cache.</li>
+</ol>
+<h3 id="the-write-path-and-invalidation-strategies">The Write Path and
+Invalidation Strategies</h3>
+<p>Maintaining consistency between the local memory of multiple service
+replicas and a central Memcached cluster is the primary engineering
+challenge. Writes are generally handled using the following
+patterns:</p>
+<h4 id="1-central-invalidation-with-short-local-ttls">1. Central
+Invalidation with Short Local TTLs</h4>
+<p>The microservice updates the database and immediately deletes the key
+in the central Memcached cluster. Instead of coordinating complex
+broadcast invalidations to every running instance, the L1 caches rely on
+aggressive, short Time-To-Live (TTL) values (e.g., 5 to 30 seconds).
+While this introduces a small window of eventual consistency, it
+minimizes system complexity and overhead.</p>
+<h4 id="2-event-driven-eviction-pubsub">2. Event-Driven Eviction
+(Pub/Sub)</h4>
+<p>For systems requiring tighter consistency, an update triggers an
+event via a message broker (such as Apache Kafka, RabbitMQ, or Redis
+Pub/Sub):</p>
+<ol type="1">
+<li>The mutating service updates the database and evicts the key from
+Memcached.</li>
+<li>The mutating service publishes a <code>cache-invalidate</code> event
+containing the target key.</li>
+<li>All microservice instances subscribe to this topic and invalidate
+their local L1 caches upon receiving the message.</li>
+</ol>
+<h4 id="3-change-data-capture-cdc">3. Change Data Capture (CDC)</h4>
+<p>Using tools like Debezium, database transaction logs are streamed
+directly to an invalidation pipeline. A dedicated consumer intercepts
+the changes, deletes stale entries from Memcached, and broadcasts
+invalidation commands to the microservices to clear their L1 tiers.</p>
+<h3 id="mitigating-stampedes-and-hotkeys">Mitigating Stampedes and
+Hotkeys</h3>
+<p>Centralized Memcached clusters can experience bottlenecks when
+thousands of service pods request the same "hotkey" simultaneously. The
+client-side L1 cache absorbs this traffic entirely, ensuring the
+centralized Memcached nodes do not suffer from network saturation or CPU
+spikes.</p>
+<p>To prevent cache stampedes when an L1 and L2 entry expires
+simultaneously, clients often implement probabilistic early expiration
+(such as XFetch) or local mutex locking, ensuring only one instance
+queries the central Memcached cluster or database to re-populate the
+cache.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/client-caching-with-centralized-memcached-clusters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Multi-Threading Performance Trade-offs - memcached</title>
+    <meta name="description" content="Configuring Memcached with multiple listening threads allows the cache engine to handle higher concurrency and saturate high-bandwidth network interfaces across modern multi-core processors. However, scaling the thread count is not a strictly linear perfo">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-multi-threading-performance-trade-offs">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Multi-Threading Performance Trade-offs - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-multi-threading-performance-trade-offs" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Configuring Memcached with multiple listening threads allows the cache engine to handle higher concurrency and saturate high-bandwidth network interfaces across modern multi-core processors. However, scaling the thread count is not a strictly linear perfo" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-multi-threading-performance-trade-offs">Memcached
+Multi-Threading Performance Trade-offs</h1>
+<p>Configuring Memcached with multiple listening threads allows the
+cache engine to handle higher concurrency and saturate high-bandwidth
+network interfaces across modern multi-core processors. However, scaling
+the thread count is not a strictly linear performance gain; it
+introduces critical trade-offs including internal lock contention, CPU
+cache coherency overhead, increased context switching, and diminished
+returns beyond hardware capacity. Understanding these trade-offs is
+essential to tuning Memcached for low-latency, high-throughput caching
+workloads.</p>
+<h3 id="concurrency-and-throughput-gains">Concurrency and Throughput
+Gains</h3>
+<p>By default, Memcached uses an event-driven architecture featuring a
+single main dispatcher thread and multiple worker threads (configured
+via the <code>-t</code> parameter). Each worker thread runs its own
+event loop to handle read and write operations for assigned client
+connections.</p>
+<ul>
+<li><strong>High Network Concurrency:</strong> Multiple threads allow
+Memcached to distribute thousands of simultaneous TCP connections
+evenly, preventing a single event loop from bottlenecking on I/O.</li>
+<li><strong>CPU Core Utilization:</strong> Adding threads enables the
+server to leverage multi-core CPU architectures, maximizing aggregate
+request throughput under heavy read-and-write traffic.</li>
+</ul>
+<h3 id="lock-contention-and-synchronization-overhead">Lock Contention
+and Synchronization Overhead</h3>
+<p>While worker threads process network I/O independently, they share
+the underlying data storage, including the primary hash table, slab
+memory allocators, and LRU (Least Recently Used) cache lists.</p>
+<ul>
+<li><strong>Item and Hash Table Locks:</strong> Memcached uses
+fine-grained item locks to protect data integrity. When concurrent
+threads attempt to read or modify keys that map to the same hash bucket,
+they must wait for lock acquisition. High thread counts amplify lock
+contention, resulting in increased tail latencies (p99 and p99.9).</li>
+<li><strong>LRU and Slab Allocator Contention:</strong> Evictions and
+allocations require synchronization across threads. When memory is full,
+threads compete for the slab allocator and global LRU locks to reclaim
+space, drastically reducing efficiency under heavy write or update
+workloads.</li>
+</ul>
+<h3 id="cpu-cache-invalidation-and-cache-line-bouncing">CPU Cache
+Invalidation and Cache-Line Bouncing</h3>
+<p>As thread counts scale across multiple CPU cores—especially on
+multi-socket NUMA (Non-Uniform Memory Access) systems—hardware-level
+performance degradation can occur:</p>
+<ul>
+<li><strong>Cache Invalidation:</strong> Multiple processor cores
+executing Memcached threads frequently update shared data structures,
+such as item reference counts and global statistics counters. This
+triggers CPU cache line invalidations across cores, forcing memory buses
+to synchronize state.</li>
+<li><strong>False Sharing:</strong> Unrelated data points residing on
+the same 64-byte CPU cache line can force unnecessary cache invalidation
+across cores when modified by different threads, degrading CPU
+instruction efficiency.</li>
+</ul>
+<h3 id="context-switching-and-over-provisioning">Context Switching and
+Over-Provisioning</h3>
+<p>Configuring the thread count (<code>-t</code>) higher than the number
+of available physical CPU cores introduces kernel scheduling
+overhead:</p>
+<ul>
+<li><strong>Voluntary and Involuntary Context Switches:</strong> When
+more threads compete for execution time than there are physical cores,
+the operating system spends excessive cycles swapping thread
+contexts.</li>
+<li><strong>Latency Spikes:</strong> Context switches flush CPU
+registers and L1/L2 caches, directly translating to unpredictable
+response latencies for incoming cache requests.</li>
+</ul>
+<h3 id="diminishing-returns-and-optimal-sizing">Diminishing Returns and
+Optimal Sizing</h3>
+<p>In practice, Memcached exhibits an asymptotic performance curve
+relative to thread scaling. Because the workload is primarily network-
+and memory-bound rather than compute-intensive, throughput often peaks
+between 4 and 8 threads on modern hardware. Allocating beyond 8 to 16
+threads rarely yields proportional throughput gains and frequently leads
+to degraded performance due to the cumulative cost of mutex
+synchronization and cross-core communication.</p>
+<p>To achieve optimal performance, set the thread count to match
+dedicated physical cores (avoiding hyper-thread oversubscription) and
+continuously monitor lock statistics via the <code>stats</code> command
+to identify contention bottlenecks.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-multi-threading-performance-trade-offs';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

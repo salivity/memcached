@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Binary Protocol Atomic Increment Explained - memcached</title>
+    <meta name="description" content="This article provides an overview of how Memcached processes incremental atomic modifications to counter values using its binary protocol. It examines the specific request packet structure, thread locking mechanisms, the arithmetic execution path, boundar">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-binary-protocol-atomic-increment-explained">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Binary Protocol Atomic Increment Explained - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-binary-protocol-atomic-increment-explained" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article provides an overview of how Memcached processes incremental atomic modifications to counter values using its binary protocol. It examines the specific request packet structure, thread locking mechanisms, the arithmetic execution path, boundar" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-binary-protocol-atomic-increment-explained">Memcached
+Binary Protocol Atomic Increment Explained</h1>
+<p>This article provides an overview of how Memcached processes
+incremental atomic modifications to counter values using its binary
+protocol. It examines the specific request packet structure, thread
+locking mechanisms, the arithmetic execution path, boundary conditions
+such as overflow and key initialization, and the final response
+structure returned to the client.</p>
+<h3 id="binary-protocol-framing-and-extras">Binary Protocol Framing and
+Extras</h3>
+<p>Memcached uses dedicated opcodes for counter operations in its binary
+protocol: <code>0x05</code> for Increment (<code>Increment</code>) and
+<code>0x06</code> for Decrement (<code>Decrement</code>). Unlike generic
+text-mode commands, binary requests use fixed-size header structures and
+structured extra data fields to execute counter operations
+efficiently.</p>
+<p>An atomic increment request carries an extras section containing
+three specific fields:</p>
+<ul>
+<li><strong>Amount (<code>delta</code>)</strong>: An 8-byte unsigned
+64-bit integer specifying the value to add.</li>
+<li><strong>Initial value</strong>: An 8-byte unsigned 64-bit integer
+indicating the counter's starting value if the target key does not yet
+exist.</li>
+<li><strong>Expiration</strong>: A 4-byte unsigned integer representing
+the item’s Time-To-Live (TTL) in seconds if the item is created by this
+command.</li>
+</ul>
+<p>The extras payload is followed immediately by the key identifier in
+the dynamic body of the packet.</p>
+<h3 id="atomicity-and-concurrency-control">Atomicity and Concurrency
+Control</h3>
+<p>When the worker thread receives the binary packet, it extracts the
+key and computes its hash using the configured hashing algorithm
+(typically Murmur3 or Jenkins). Memcached enforces atomicity at the item
+level through granular item locks:</p>
+<ol type="1">
+<li><strong>Lock Acquisition</strong>: Memcached identifies the hash
+bucket corresponding to the key and acquires the mutex associated with
+that bucket or item slice. This stops any concurrent read, update, or
+delete commands from mutating the state of that key simultaneously.</li>
+<li><strong>Key Lookup</strong>: With the lock held, the thread searches
+the primary hash table for the existing item.</li>
+</ol>
+<h3 id="value-evaluation-and-mutation-logic">Value Evaluation and
+Mutation Logic</h3>
+<p>Once the key location is resolved, Memcached evaluates the operation
+based on whether the key currently exists:</p>
+<h4 id="1-when-the-key-exists">1. When the Key Exists</h4>
+<p>If the item is present and has not expired, Memcached reads the raw
+byte value. Counter values in Memcached are internally stored as ASCII
+string representations of 64-bit unsigned integers:</p>
+<ul>
+<li>The server validates that the payload can be parsed into a 64-bit
+unsigned integer. If the existing data is non-numeric, the server
+rejects the command and returns an error (<code>EINVAL</code> /
+<code>0x0004</code>).</li>
+<li>Memcached parses the numeric value, adds the 8-byte
+<code>delta</code>, and computes the new value.</li>
+<li><strong>Overflow Behavior</strong>: Increments wrap around
+automatically using standard 64-bit unsigned integer arithmetic (<span
+class="math inline">\(2^{64}-1\)</span> wraps to <span
+class="math inline">\(0\)</span>). In contrast, decrements clamp at zero
+and do not wrap to negative numbers or maximum values.</li>
+<li>The thread allocates a new item structure to hold the updated ASCII
+string representing the new counter value, copies over existing metadata
+(such as flags), generates a new unique Compare-And-Swap (CAS)
+identifier, inserts the new item into the slab allocator, and frees the
+old item.</li>
+</ul>
+<h4 id="2-when-the-key-does-not-exist">2. When the Key Does Not
+Exist</h4>
+<p>If the lookup misses or the existing item has expired:</p>
+<ul>
+<li>Memcached inspects the 4-byte <code>expiration</code> field sent in
+the binary extras.</li>
+<li>If the expiration is set to <code>0xFFFFFFFF</code> (all bits set),
+the server treats the request as a strict mutation on existing keys
+only. It aborts the operation and returns a <code>Key Not Found</code>
+(<code>0x0001</code>) response status.</li>
+<li>If the expiration is any other value, Memcached creates a new key.
+The new item’s value is set directly to the <code>initial value</code>
+supplied in the request, and its expiration is set according to the
+provided TTL.</li>
+</ul>
+<h3 id="release-and-binary-response">Release and Binary Response</h3>
+<p>After mutating or creating the item:</p>
+<ol type="1">
+<li>The server updates the internal stats counters (e.g.,
+<code>cmd_touch</code>, <code>incr_hits</code>, or
+<code>incr_misses</code>).</li>
+<li>The item lock for the hash bucket is released, allowing subsequent
+operations on the key.</li>
+<li>Memcached constructs a binary response packet containing:
+<ul>
+<li>Header with status <code>0x0000</code> (Success).</li>
+<li>The newly generated 64-bit CAS ID.</li>
+<li>An 8-byte binary body representing the updated 64-bit integer
+counter value encoded in network byte order (big-endian).</li>
+</ul></li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-binary-protocol-atomic-increment-explained';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Behavior During Memory Page Swapping - memcached</title>
+    <meta name="description" content="When an operating system encounters intense memory page swapping, Memcached experiences severe latency spikes and throughput degradation during key retrieval operations. Because Memcached assumes its entire data set resides in physical RAM, it does not im">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-behavior-during-memory-page-swapping">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Behavior During Memory Page Swapping - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-behavior-during-memory-page-swapping" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When an operating system encounters intense memory page swapping, Memcached experiences severe latency spikes and throughput degradation during key retrieval operations. Because Memcached assumes its entire data set resides in physical RAM, it does not im" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-behavior-during-memory-page-swapping">Memcached
+Behavior During Memory Page Swapping</h1>
+<p>When an operating system encounters intense memory page swapping,
+Memcached experiences severe latency spikes and throughput degradation
+during key retrieval operations. Because Memcached assumes its entire
+data set resides in physical RAM, it does not implement internal disk
+I/O mechanisms. When an item targeted by a retrieval request has been
+shifted to the operating system's swap space, synchronous major page
+faults force the responsible worker thread to halt execution while
+waiting for disk reads, transforming sub-millisecond in-memory lookups
+into multi-millisecond disk operations.</p>
+<h3 id="the-key-retrieval-process-in-a-swapping-environment">The Key
+Retrieval Process in a Swapping Environment</h3>
+<p>Memcached utilizes an event-driven, multithreaded architecture
+powered by <code>libevent</code>. Worker threads multiplex client
+connections and handle request processing using non-blocking network
+sockets. However, memory access itself is fundamentally synchronous at
+the CPU level.</p>
+<p>When a client issues a <code>get</code> command during heavy swap
+activity, the retrieval follows these steps:</p>
+<ol type="1">
+<li><strong>Hash Table Lookup:</strong> The worker thread computes the
+hash of the requested key and accesses the internal hash table to locate
+the item's pointer. If the hash bucket resides in a swapped page, a
+hardware page fault occurs immediately.</li>
+<li><strong>Page Fault Interruption:</strong> The CPU pauses the worker
+thread and triggers a context switch to the kernel.</li>
+<li><strong>Paging In:</strong> The operating system's virtual memory
+manager issues synchronous I/O commands to read the required memory page
+from the swap partition (SSD or HDD) back into physical RAM.</li>
+<li><strong>Item Pointer Dereferencing:</strong> Once the hash table
+page is restored, the thread reads the item pointer. If the slab
+containing the actual key-value payload is also swapped out, a second
+page fault occurs, initiating another disk read.</li>
+<li><strong>Response Transmission:</strong> Once the payload resides in
+physical memory, Memcached formats the response and writes it to the
+client socket.</li>
+</ol>
+<h3 id="thread-starvation-and-latency-cascades">Thread Starvation and
+Latency Cascades</h3>
+<p>The primary failure mode of Memcached under memory pressure is thread
+starvation. While Memcached relies on asynchronous network polling to
+handle thousands of concurrent network connections, a major page fault
+suspends the operating thread entirely.</p>
+<p>Because each worker thread handles a subset of all active client
+connections via connection multiplexing, a blocked thread does not
+merely delay the request that triggered the page fault; it stops
+processing all other client events assigned to that thread. As multiple
+threads hit swapped-out memory addresses:</p>
+<ul>
+<li><strong>Event Loops Stall:</strong> Threads spend the vast majority
+of their CPU time in an <code>uninterruptible sleep</code> state (often
+visible as high <code>iowait</code> in system metrics).</li>
+<li><strong>Buffer Saturation:</strong> Kernel-level TCP receive buffers
+fill up because stalled worker threads are not calling
+<code>read()</code> or <code>recv()</code> on the sockets.</li>
+<li><strong>Client Timeouts:</strong> Latencies jump from tens of
+microseconds to dozens of milliseconds. Upstream application servers
+exceed their socket read timeouts and drop connections.</li>
+<li><strong>Connection Stampedes:</strong> Dropped connections often
+cause application layers to retry requests or open new connections,
+overwhelming the Memcached master thread that handles incoming TCP
+connection handshakes.</li>
+</ul>
+<h3 id="sluggish-lru-eviction">Sluggish LRU Eviction</h3>
+<p>Memcached incorporates its own Least Recently Used (LRU) eviction
+algorithm to free slabs when configured memory limits (<code>-m</code>)
+are reached. However, Memcached's internal memory limit is decoupled
+from the operating system's physical memory boundaries.</p>
+<p>If Memcached is allocated more memory than is physically available—or
+if co-located processes consume the remaining physical RAM—the operating
+system initiates swapping before Memcached reaches its internal memory
+limit. Consequently, Memcached’s internal LRU engine fails to evict cold
+items to free up RAM, because from Memcached’s perspective, its memory
+quota is not yet exhausted.</p>
+<p>Furthermore, when the internal LRU crawler traverses memory chains to
+reorder or evict items, touching cold items can inadvertently trigger a
+storm of page faults, accelerating system thrashing.</p>
+<h3 id="prevention-and-operational-configuration">Prevention and
+Operational Configuration</h3>
+<p>Because Memcached cannot gracefully manage key retrievals from
+disk-based swap space, system architectures must prevent swap
+interactions altogether:</p>
+<ul>
+<li><strong>Reduce Memcached Allocation:</strong> Ensure the
+<code>-m</code> flag is strictly configured to account for Memcached
+internal memory overhead, thread stacks, and connection buffers,
+typically leaving 15% to 20% of system RAM free for the host OS.</li>
+<li><strong>Kernel Swappiness:</strong> Adjust the Linux kernel
+swappiness parameter to an extremely low value, such as
+<code>vm.swappiness = 1</code> or <code>vm.swappiness = 0</code>,
+forcing the kernel to favor evicting file system caches over paging
+anonymous process memory.</li>
+<li><strong>Memory Locking:</strong> Launch Memcached with the
+<code>-k</code> (mlockall) flag, which requests the operating system to
+lock all of Memcached's virtual memory space into physical RAM,
+preventing the kernel from paging it out under any circumstance. If
+physical memory runs out with memory locking enabled, allocation
+requests fail immediately (triggering out-of-memory errors) rather than
+stalling the entire retrieval pipeline on disk I/O.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-behavior-during-memory-page-swapping';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Monitor Memcached Slab Class Fragmentation - memcached</title>
+    <meta name="description" content="Monitoring memory fragmentation across individual Memcached slab classes is essential for optimizing cache efficiency and preventing unexpected evictions. This article explains how Memcached&#39;s slab allocation engine works, how to extract memory usage metr">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-monitor-memcached-slab-class-fragmentation">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Monitor Memcached Slab Class Fragmentation - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-monitor-memcached-slab-class-fragmentation" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Monitoring memory fragmentation across individual Memcached slab classes is essential for optimizing cache efficiency and preventing unexpected evictions. This article explains how Memcached&#39;s slab allocation engine works, how to extract memory usage metr" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-monitor-memcached-slab-class-fragmentation">How to
+Monitor Memcached Slab Class Fragmentation</h1>
+<p>Monitoring memory fragmentation across individual Memcached slab
+classes is essential for optimizing cache efficiency and preventing
+unexpected evictions. This article explains how Memcached's slab
+allocation engine works, how to extract memory usage metrics via
+standard administrative commands, the exact mathematical formulas
+required to calculate slab-level fragmentation, and how to automate this
+monitoring using Prometheus and custom tooling.</p>
+<h3 id="understanding-memcached-slab-allocation">Understanding Memcached
+Slab Allocation</h3>
+<p>Memcached manages memory using a slab allocator to prevent operating
+system-level memory fragmentation. Memory is divided into 1MB pages,
+which are then assigned to specific "slab classes." Each slab class
+divides its assigned pages into fixed-size chunks based on a growth
+factor (configured via the <code>-f</code> flag).</p>
+<p>Fragmentation within Memcached primarily occurs internally within
+these chunks. If a slab class provides 512-byte chunks and stores a
+300-byte item, the remaining 212 bytes inside that chunk are wasted.
+When repeated across millions of keys, this internal fragmentation can
+consume vast amounts of memory without triggering high-level alerts
+until cache evictions begin.</p>
+<h3 id="extracting-metrics-with-stats-slabs">Extracting Metrics with
+<code>stats slabs</code></h3>
+<p>To monitor individual slab classes, developers can connect directly
+to Memcached over its text protocol using tools like <code>nc</code>
+(netcat) or <code>telnet</code>:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;stats slabs&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> 127.0.0.1 11211</span></code></pre></div>
+<p>Memcached outputs metrics prefixed with the slab class ID (e.g.,
+<code>1</code>, <code>2</code>, <code>3</code>). The critical metrics
+for monitoring fragmentation include:</p>
+<ul>
+<li><strong><code>chunk_size</code></strong>: The fixed size (in bytes)
+allocated for each chunk in this slab class.</li>
+<li><strong><code>used_chunks</code></strong>: The number of chunks
+currently holding stored items.</li>
+<li><strong><code>total_chunks</code></strong>: The total number of
+chunks allocated to this slab class.</li>
+<li><strong><code>mem_requested</code></strong>: The actual number of
+bytes requested and consumed by the stored data (keys, values, and
+per-item metadata).</li>
+</ul>
+<h3 id="calculating-the-fragmentation-ratio">Calculating the
+Fragmentation Ratio</h3>
+<p>There are two primary fragmentation metrics you should calculate per
+slab class: <strong>Active Internal Fragmentation</strong> and
+<strong>Total Class Memory Waste</strong>.</p>
+<h4 id="1-active-internal-fragmentation-ratio">1. Active Internal
+Fragmentation Ratio</h4>
+<p>This measures the efficiency of the chunks that are currently in use.
+It shows how much memory is lost simply due to chunk size mismatch:</p>
+<p><span class="math display">\[\text{Active Fragmentation Ratio} = 1 -
+\left( \frac{\text{mem\_requested}}{\text{used\_chunks} \times
+\text{chunk\_size}} \right)\]</span></p>
+<ul>
+<li>A ratio close to <code>0.0</code> (0%) indicates near-perfect
+alignment between data sizes and chunk sizes.</li>
+<li>A ratio above <code>0.3</code> (30%) indicates significant internal
+fragmentation, meaning data stored in this class is substantially
+smaller than the allocated chunk size.</li>
+</ul>
+<h4 id="2-overall-slab-waste-ratio">2. Overall Slab Waste Ratio</h4>
+<p>This measures the active data against the total capacity currently
+reserved for the slab class (including unused chunks):</p>
+<p><span class="math display">\[\text{Overall Waste Ratio} = 1 - \left(
+\frac{\text{mem\_requested}}{\text{total\_chunks} \times
+\text{chunk\_size}} \right)\]</span></p>
+<p>This metric helps identify slab classes that have claimed memory
+pages they are no longer fully utilizing.</p>
+<h3 id="automating-with-prometheus">Automating with Prometheus</h3>
+<p>In modern production environments, manual metric extraction is
+impractical. The official Prometheus <code>memcached_exporter</code>
+scrapes <code>stats slabs</code> and exposes the necessary gauges:</p>
+<ul>
+<li><code>memcached_slab_chunk_size_bytes{slab="&lt;ID&gt;"}</code></li>
+<li><code>memcached_slab_chunks_used{slab="&lt;ID&gt;"}</code></li>
+<li><code>memcached_slab_mem_requested_bytes{slab="&lt;ID&gt;"}</code></li>
+</ul>
+<p>Using PromQL, developers can calculate the active fragmentation ratio
+for each slab class in real time:</p>
+<pre class="promql"><code>1 - (
+  memcached_slab_mem_requested_bytes
+  / (memcached_slab_chunks_used * memcached_slab_chunk_size_bytes)
+)</code></pre>
+<p>Alerting rules can be configured to fire whenever any slab class with
+significant utilization
+(<code>memcached_slab_chunks_used &gt; 1000</code>) exhibits a
+fragmentation ratio exceeding <code>0.35</code> for sustained
+periods.</p>
+<h3 id="remediating-high-slab-fragmentation">Remediating High Slab
+Fragmentation</h3>
+<p>If monitoring reveals high fragmentation in specific classes,
+developers have several remediation strategies:</p>
+<ul>
+<li><strong>Adjust the Growth Factor (<code>-f</code>):</strong> The
+default growth factor is <code>1.25</code>. Lowering it (e.g., to
+<code>1.1</code> or <code>1.15</code>) creates more granular slab
+classes with smaller size jumps, decreasing internal waste at the cost
+of higher slab metadata overhead.</li>
+<li><strong>Tune Minimum Chunk Size (<code>-s</code> or
+<code>-n</code>):</strong> If smaller slabs are underutilized or
+fragmented, adjusting the initial chunk size aligns the lower end of the
+slab ladder with actual key-value dimensions.</li>
+<li><strong>Enable Slab Automove:</strong> Run Memcached with
+<code>-o slab_reassign,slab_automove=2</code> to allow the engine to
+automatically reassign unused pages from stagnant slab classes to
+classes experiencing high eviction pressure.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-monitor-memcached-slab-class-fragmentation';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

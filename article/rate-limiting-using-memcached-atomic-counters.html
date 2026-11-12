@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rate Limiting Using Memcached Atomic Counters - memcached</title>
+    <meta name="description" content="Rate limiting is an essential mechanism for protecting APIs and web services from abuse, traffic spikes, and denial-of-service attacks. By leveraging Memcached&#39;s high-throughput atomic operations—specifically add and incr—developers can implement fast, th">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/rate-limiting-using-memcached-atomic-counters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Rate Limiting Using Memcached Atomic Counters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/rate-limiting-using-memcached-atomic-counters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Rate limiting is an essential mechanism for protecting APIs and web services from abuse, traffic spikes, and denial-of-service attacks. By leveraging Memcached&#39;s high-throughput atomic operations—specifically add and incr—developers can implement fast, th" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="rate-limiting-using-memcached-atomic-counters">Rate Limiting
+Using Memcached Atomic Counters</h1>
+<p>Rate limiting is an essential mechanism for protecting APIs and web
+services from abuse, traffic spikes, and denial-of-service attacks. By
+leveraging Memcached's high-throughput atomic operations—specifically
+<code>add</code> and <code>incr</code>—developers can implement fast,
+thread-safe, and distributed rate limiters without introducing complex
+locking mechanisms or database bottlenecks. This guide details how
+atomic counters function in Memcached, how to handle the fixed window
+rate-limiting algorithm, and how to structure production-ready logic to
+avoid race conditions.</p>
+<h3 id="the-power-of-memcached-atomic-operations">The Power of Memcached
+Atomic Operations</h3>
+<p>Memcached operates in-memory and supports atomic commands, meaning
+operations on a single key execute completely without interruption from
+concurrent requests. The two foundational commands for rate limiting
+are:</p>
+<ul>
+<li><strong><code>add</code></strong>: Stores a key only if it does not
+already exist in the cache. It accepts a Time-To-Live (TTL)
+parameter.</li>
+<li><strong><code>incr</code></strong>: Atomically increments a numeric
+value stored at a given key. If the key exists, it updates the integer
+value without altering the existing TTL.</li>
+</ul>
+<p>Combining these two commands allows multiple application instances to
+coordinate request limits without race conditions.</p>
+<h3 id="the-atomic-fixed-window-algorithm">The Atomic Fixed-Window
+Algorithm</h3>
+<p>A standard approach is the fixed-window counter. The window
+represents a discrete block of time (e.g., 60 seconds) during which a
+client is permitted a maximum number of requests.</p>
+<h4 id="step-1-construct-the-cache-key">Step 1: Construct the Cache
+Key</h4>
+<p>To partition limits by client and time frame, build a deterministic
+key combining the identifier (IP address, user ID, or API key) and a
+time-based window bucket:</p>
+<pre class="text"><code>key = &quot;rate_limit:&quot; + client_id + &quot;:&quot; + current_window_timestamp</code></pre>
+<p>For a 60-second window, the timestamp can be calculated as:</p>
+<pre class="text"><code>current_window_timestamp = floor(current_unix_time / 60) * 60</code></pre>
+<h4 id="step-2-initialize-or-increment">Step 2: Initialize or
+Increment</h4>
+<p>To prevent overwriting the TTL or resetting counters during
+concurrent requests, the initialization and increment logic must follow
+this sequence:</p>
+<ol type="1">
+<li>Attempt an <code>incr(key, 1)</code>.</li>
+<li>If <code>incr</code> succeeds, compare the returned count to the
+maximum allowed limit.</li>
+<li>If <code>incr</code> fails (because the key does not exist), execute
+an <code>add(key, 1, ttl=window_size)</code>.</li>
+<li>If <code>add</code> succeeds, this request is the first in the
+current window (count = 1).</li>
+<li>If <code>add</code> fails due to a race condition (another process
+initialized the key simultaneously), retry
+<code>incr(key, 1)</code>.</li>
+</ol>
+<p>This approach ensures that the TTL is set strictly once per window
+and is never reset on subsequent requests.</p>
+<h3 id="implementation-example">Implementation Example</h3>
+<p>The following logic demonstrates the implementation pattern using
+standard Memcached client methods:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> time</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> is_rate_limited(memcached_client, client_id, limit<span class="op">=</span><span class="dv">100</span>, window_seconds<span class="op">=</span><span class="dv">60</span>):</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    current_time <span class="op">=</span> <span class="bu">int</span>(time.time())</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    window_bucket <span class="op">=</span> (current_time <span class="op">//</span> window_seconds) <span class="op">*</span> window_seconds</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    key <span class="op">=</span> <span class="ss">f&quot;rate:</span><span class="sc">{</span>client_id<span class="sc">}</span><span class="ss">:</span><span class="sc">{</span>window_bucket<span class="sc">}</span><span class="ss">&quot;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Try incrementing the existing counter</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    count <span class="op">=</span> memcached_client.incr(key, <span class="dv">1</span>)</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> count <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Key does not exist; attempt to initialize it with an expiration</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>        added <span class="op">=</span> memcached_client.add(key, <span class="dv">1</span>, expire<span class="op">=</span>window_seconds)</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> added:</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>            count <span class="op">=</span> <span class="dv">1</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">else</span>:</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Another worker initialized the key concurrently; increment it</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>            count <span class="op">=</span> memcached_client.incr(key, <span class="dv">1</span>)</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Check if the counter exceeds the allowed threshold</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> count <span class="op">&gt;</span> limit:</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">True</span>, count  <span class="co"># Rate limit exceeded</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="va">False</span>, count  <span class="co"># Request allowed</span></span></code></pre></div>
+<h3 id="handling-edge-cases-and-best-practices">Handling Edge Cases and
+Best Practices</h3>
+<ul>
+<li><strong>Expiration Alignment</strong>: Always set the TTL equal to
+or slightly greater than the window duration. Once the window expires,
+Memcached automatically evicts the key, preventing memory leaks without
+requiring manual cleanup jobs.</li>
+<li><strong>Fail-Open vs. Fail-Closed</strong>: Decide how the
+application should react if Memcached becomes unavailable. A "fail-open"
+strategy allows requests to proceed during cache downtime, prioritizing
+availability. A "fail-closed" strategy drops requests to prioritize
+backend protection.</li>
+<li><strong>Boundary Bursting</strong>: The fixed-window pattern has an
+inherent limitation: a client can send its full quota at the end of one
+window and another full quota at the start of the next, effectively
+doubling the rate across the boundary. If strict smoothing is required,
+consider using two overlapping windows or an atomic token bucket
+implementation.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/rate-limiting-using-memcached-atomic-counters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

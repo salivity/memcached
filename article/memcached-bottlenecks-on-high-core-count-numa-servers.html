@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Bottlenecks on High Core Count NUMA Servers - memcached</title>
+    <meta name="description" content="Deploying a single Memcached instance on modern servers featuring high core counts and Non-Uniform Memory Access (NUMA) architecture often results in diminishing returns and severe throughput degradation. While Memcached is engineered for multi-threaded p">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-bottlenecks-on-high-core-count-numa-servers">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Bottlenecks on High Core Count NUMA Servers - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-bottlenecks-on-high-core-count-numa-servers" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Deploying a single Memcached instance on modern servers featuring high core counts and Non-Uniform Memory Access (NUMA) architecture often results in diminishing returns and severe throughput degradation. While Memcached is engineered for multi-threaded p" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-bottlenecks-on-high-core-count-numa-servers">Memcached
+Bottlenecks on High Core Count NUMA Servers</h1>
+<p>Deploying a single Memcached instance on modern servers featuring
+high core counts and Non-Uniform Memory Access (NUMA) architecture often
+results in diminishing returns and severe throughput degradation. While
+Memcached is engineered for multi-threaded performance, running a single
+monolithic process across multiple NUMA nodes exposes severe hardware
+and software bottlenecks. These issues primarily stem from cross-socket
+memory access latency, cache line invalidation over CPU interconnects,
+lock contention within critical data paths, and network stack
+inefficiencies at the kernel level.</p>
+<h3 id="remote-memory-access-latency">Remote Memory Access Latency</h3>
+<p>NUMA architecture divides system memory into distinct nodes, where
+each CPU socket accesses its directly attached memory far faster than
+memory attached to other sockets. In a single Memcached instance
+spanning multiple NUMA nodes, worker threads are distributed across all
+available cores. Because memory allocations occur dynamically across the
+entire address space, threads on one socket frequently read from and
+write to remote memory on another. Accessing remote memory introduces
+higher latency—often double or triple local access times—causing CPU
+cycles to stall while waiting for data fetches to complete.</p>
+<h3 id="interconnect-saturation-and-cache-line-bouncing">Interconnect
+Saturation and Cache Line Bouncing</h3>
+<p>When multiple cores modify shared data structures, the CPU's cache
+coherency protocol must synchronize state across sockets via
+interconnects like Intel Ultra Path Interconnect (UPI) or AMD Infinity
+Fabric. In Memcached, frequently accessed metadata—such as item
+reference counts, Least Recently Used (LRU) list pointers, and global
+statistics—continually bounce between CPU L1/L2/L3 caches. On high core
+count systems, this "cache line bouncing" saturates the inter-socket
+interconnect bandwidth, leading to serialization at the hardware level
+and drastically increasing average instruction execution latency.</p>
+<h3 id="lock-and-data-structure-contention">Lock and Data Structure
+Contention</h3>
+<p>Memcached employs fine-grained locking (such as bucket-level hash
+table locks), but several global choke points remain:</p>
+<ul>
+<li><strong>The Slab Allocator:</strong> Memory allocation and
+deallocation require acquiring slab locks. When dozens or hundreds of
+threads compete for slab pages simultaneously, lock contention
+skyrockets.</li>
+<li><strong>Hash Table Expansion:</strong> Resizing the main hash table
+during heavy writes stalls worker threads and creates severe CPU
+spikes.</li>
+<li><strong>Thread Synchronization Primitives:</strong> Mutexes
+implemented via atomic instructions (e.g.,
+<code>compare-and-swap</code>) become exponentially more expensive as
+thread counts rise across NUMA boundaries, forcing threads to spend more
+time spinning or context-switching rather than processing requests.</li>
+</ul>
+<h3 id="operating-system-and-kernel-bottlenecks">Operating System and
+Kernel Bottlenecks</h3>
+<p>A single Memcached process multiplexes client connections using an
+event loop (via <code>libevent</code> and <code>epoll</code>). At
+scale:</p>
+<ul>
+<li><strong>Socket Migration:</strong> Worker threads handling a single
+connection may be scheduled on different NUMA nodes over time, causing
+cache thrashing.</li>
+<li><strong>Network Interrupt Overhead:</strong> If Network Interface
+Card (NIC) receive queues (RSS) route packets to CPU cores on Node 0,
+but the Memcached worker thread handling that specific connection runs
+on Node 1, cross-node traffic spikes even before the application reads
+the payload.</li>
+</ul>
+<h3 id="architectural-best-practice">Architectural Best Practice</h3>
+<p>To circumvent these bottlenecks, production architectures avoid
+running a single large Memcached instance on high-spec NUMA hardware.
+Instead, the standard approach is to run multiple, smaller, independent
+Memcached instances pinned directly to specific NUMA nodes using tools
+like <code>numactl</code> or <code>taskset</code>. Pair each instance
+with dedicated network queues and route traffic locally via a
+lightweight client-side or proxy-based partitioner.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-bottlenecks-on-high-core-count-numa-servers';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

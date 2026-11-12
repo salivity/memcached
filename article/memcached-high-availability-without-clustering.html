@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached High Availability Without Clustering - memcached</title>
+    <meta name="description" content="Memcached is inherently a stateless, non-replicated caching system that relies on client-side partitioning rather than native clustering or data replication. Because a failure of an individual node can result in cache misses and severe database load, appl">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-high-availability-without-clustering">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached High Availability Without Clustering - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-high-availability-without-clustering" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is inherently a stateless, non-replicated caching system that relies on client-side partitioning rather than native clustering or data replication. Because a failure of an individual node can result in cache misses and severe database load, appl" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-high-availability-without-clustering">Memcached High
+Availability Without Clustering</h1>
+<p>Memcached is inherently a stateless, non-replicated caching system
+that relies on client-side partitioning rather than native clustering or
+data replication. Because a failure of an individual node can result in
+cache misses and severe database load, applications must implement
+external architectural patterns to ensure uptime and performance. This
+article outlines the primary strategies—including proxy layers,
+active-active dual writing, advanced consistent hashing, and layered
+caching—that allow engineering teams to achieve high availability with
+Memcached.</p>
+<h2 id="proxy-based-routing-and-replication">Proxy-Based Routing and
+Replication</h2>
+<p>The most scalable method for decoupling Memcached availability from
+the application layer is deploying an intelligent proxy, such as
+Mcrouter. Developed by Facebook, Mcrouter sits between your application
+and your Memcached instances to provide capabilities not natively
+supported by the daemon:</p>
+<ul>
+<li><strong>Automatic Failover:</strong> Mcrouter can be configured with
+failover route handles. If a primary Memcached server fails to respond,
+requests are immediately redirected to a designated backup instance
+without application intervention.</li>
+<li><strong>Connection Pooling:</strong> It maintains persistent
+connection pools to the backend instances, reducing connection churn and
+latency.</li>
+<li><strong>Shadowing and Cross-Region Replication:</strong> Mcrouter
+enables asynchronous replication across separate server pools or
+distinct data centers, ensuring that a total failure in one availability
+zone does not impact the cache hit ratio in another.</li>
+</ul>
+<p>Alternative proxies, such as Twemproxy (nutcracker), can also manage
+connection overhead and distribute traffic across a dynamic pool of
+servers, abstracting failure management away from application code.</p>
+<h2 id="dual-writing-active-active-clusters">Dual-Writing (Active-Active
+Clusters)</h2>
+<p>For architectures that do not use a dedicated proxy,
+application-level dual-writing provides direct control over
+redundancy.</p>
+<p>In this model, two distinct and isolated Memcached pools are
+deployed. When updating or invalidating data, the application writes
+simultaneously to both pools. When reading data:</p>
+<ol type="1">
+<li>The client requests data from the primary cluster.</li>
+<li>If the primary request times out or returns a cache miss, the client
+automatically falls back to the secondary cluster.</li>
+<li>If the primary cluster node is determined to be offline, a
+background health-check mechanism temporarily suppresses traffic to that
+node, reading exclusively from the secondary.</li>
+</ol>
+<p>While this approach doubles the network write overhead and requires
+strict handling of race conditions during updates, it guarantees that an
+entire pool can fail with zero downtime and minimal degradation of cache
+hit rates.</p>
+<h2 id="consistent-hashing-with-ketama-and-dynamic-removal">Consistent
+Hashing with Ketama and Dynamic Removal</h2>
+<p>Memcached client libraries typically distribute keys using consistent
+hashing, most commonly the Ketama algorithm. Consistent hashing maps
+both cache keys and server nodes to a virtual hash ring.</p>
+<p>To maintain availability during a single-node failure:</p>
+<ul>
+<li><strong>Graceful Degradation:</strong> When a node fails, consistent
+hashing ensures that only the keys mapped to the failed node are
+invalidated, leaving the rest of the cache intact.</li>
+<li><strong>Dynamic Node Ejection:</strong> Modern client libraries can
+be configured to automatically eject unresponsive nodes from the ring.
+When an instance drops, its slice of the hash ring is redistributed
+across the remaining live nodes.</li>
+<li><strong>Circuit Breakers:</strong> Implement circuit breakers around
+cache calls. If a node begins timing out, the application should
+fast-fail requests to that specific instance rather than exhausting
+worker threads waiting for network timeouts.</li>
+</ul>
+<p><em>Note: Automatically adding or removing nodes causes cache
+redistribution, which can temporarily increase database load. Pair this
+strategy with rate limiters or cache warmers to manage the
+impact.</em></p>
+<h2 id="layered-caching-l1l2-topology">Layered Caching (L1/L2
+Topology)</h2>
+<p>High availability can also be achieved by insulating Memcached with a
+tiered caching architecture:</p>
+<ul>
+<li><strong>L1 (In-Memory Application Cache):</strong> Store frequently
+accessed, read-heavy keys inside the application process memory using
+local libraries (such as Guava or Caffeine in Java, or local process
+memory in Node.js/Go). This layer absorbs the bulk of requests and
+survives network partitions.</li>
+<li><strong>L2 (Distributed Memcached):</strong> Memcached acts as the
+shared second layer.</li>
+</ul>
+<p>If a Memcached instance becomes unavailable, the local L1 cache
+prevents immediate thundering herds from overwhelming the primary
+database, providing a buffer period for the Memcached node to recover or
+be replaced.</p>
+<h2 id="stampede-protection-on-failover">Stampede Protection on
+Failover</h2>
+<p>A major risk during cache node failure is the cache stampede (or
+"dogpile" effect), where thousands of concurrent processes attempt to
+rebuild the missing data in the primary database simultaneously. To
+maintain system availability during a cache outage:</p>
+<ul>
+<li><strong>Mutex Locks:</strong> Require workers to acquire a
+distributed or local mutex before recomputing a cache value. Only one
+thread recomputes the data, while others wait or return stale data.</li>
+<li><strong>Probabilistic Early Expiration (XFetch):</strong> Background
+workers recompute keys slightly before their actual time-to-live (TTL)
+expires based on request probability, ensuring high-traffic keys rarely
+experience a total miss, even during cluster degradation.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-high-availability-without-clustering';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

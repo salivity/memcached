@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Optimizes Item Storage Layout - memcached</title>
+    <meta name="description" content="Memcached maximizes data density within its memory footprint by combining a slab-based memory allocator with a compact, contiguous item storage layout. By pre-allocating memory into uniform 1MB pages, organizing data chunks into geometrically scaled slab">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-optimizes-item-storage-layout">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Optimizes Item Storage Layout - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-optimizes-item-storage-layout" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maximizes data density within its memory footprint by combining a slab-based memory allocator with a compact, contiguous item storage layout. By pre-allocating memory into uniform 1MB pages, organizing data chunks into geometrically scaled slab" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-optimizes-item-storage-layout">How Memcached
+Optimizes Item Storage Layout</h1>
+<p>Memcached maximizes data density within its memory footprint by
+combining a slab-based memory allocator with a compact, contiguous item
+storage layout. By pre-allocating memory into uniform 1MB pages,
+organizing data chunks into geometrically scaled slab classes, and
+stripping the per-item metadata down to essential fields, Memcached
+prevents external memory fragmentation while fitting the maximum
+possible data payload into every allocated byte. This article explains
+the internal structure of Memcached items, how payloads are packed into
+slab pages, and the mechanisms used to minimize internal
+fragmentation.</p>
+<h3 id="slab-allocation-and-page-division">Slab Allocation and Page
+Division</h3>
+<p>Memcached bypasses standard dynamic memory allocation (like standard
+<code>malloc</code>) during runtime to avoid memory fragmentation and
+allocation latency. Instead, it reserves a large pool of virtual memory
+at startup and divides it into 1MB pages.</p>
+<p>Each 1MB page is assigned to a specific <strong>slab class</strong>.
+A slab class defines a fixed chunk size:</p>
+<ul>
+<li>Slab Class 1 might hold 96-byte chunks.</li>
+<li>Slab Class 2 might hold 120-byte chunks.</li>
+<li>Each subsequent class increases in size by a configurable growth
+factor (defaulting to 1.25).</li>
+</ul>
+<p>A 1MB page assigned to a specific slab class is subdivided evenly
+into chunks of that class's fixed size. An item is assigned to the
+smallest slab class that can completely accommodate its total
+footprint.</p>
+<h3 id="contiguous-item-layout">Contiguous Item Layout</h3>
+<p>To eliminate pointer-chasing overhead and reduce memory waste,
+Memcached serializes the entire item—metadata, keys, and values—into a
+single contiguous block of bytes that fits directly inside a single
+chunk.</p>
+<p>The binary layout of an item chunk consists of four contiguous
+sections:</p>
+<ol type="1">
+<li><strong>Item Header (<code>item</code> struct):</strong> A
+fixed-size C structure containing memory management and lookup
+metadata.</li>
+<li><strong>Key:</strong> The raw string identifier for the key, stored
+without a null-terminating byte to save space.</li>
+<li><strong>Suffix:</strong> A small, plain-text ASCII metadata string
+storing flags and the length of the raw value.</li>
+<li><strong>Value (Payload):</strong> The raw binary or text data
+provided by the client.</li>
+</ol>
+<p>By appending the key, suffix, and payload immediately after the
+header in memory, Memcached avoids allocating separate memory regions or
+pointer arrays for keys and data.</p>
+<h3 id="minimizing-header-overhead">Minimizing Header Overhead</h3>
+<p>The primary static overhead in any cached record is the internal
+<code>item</code> structure. Memcached has heavily optimized this
+structure across versions to keep it as compact as possible (typically
+between 32 and 48 bytes, depending on 32-bit vs. 64-bit architecture and
+compile-time options).</p>
+<p>Key elements of this optimization include:</p>
+<ul>
+<li><strong>Bidirectional Pointers:</strong> The header includes forward
+and backward pointers (<code>next</code> and <code>prev</code>) to
+maintain the Least Recently Used (LRU) doubly linked lists, as well as
+an <code>h_next</code> pointer for hash table collisions.</li>
+<li><strong>Bit-Packed Fields:</strong> Flags, slab class IDs, and
+reference counters are packed into smaller integer types (such as
+<code>uint8_t</code> and <code>uint16_t</code>) rather than full 32-bit
+or 64-bit integers to prevent struct padding waste.</li>
+<li><strong>Conditional CAS Storage:</strong> The 64-bit Check-And-Set
+(CAS) identifier is conditionally compiled or placed such that it only
+consumes memory when CAS functionality is enabled.</li>
+<li><strong>Explicit Length Tracking:</strong> Instead of using null
+terminators, Memcached stores explicit 1-byte or 2-byte lengths for the
+key and suffix, ensuring that string boundaries consume minimal
+space.</li>
+</ul>
+<h3 id="mitigating-internal-fragmentation">Mitigating Internal
+Fragmentation</h3>
+<p>Internal fragmentation occurs when an item does not completely fill
+the fixed chunk size of its assigned slab class. For example, storing a
+100-byte total item in a 128-byte chunk wastes 28 bytes of space.</p>
+<p>Memcached mitigates this waste through two primary
+configurations:</p>
+<h4 id="1-tuning-the-growth-factor">1. Tuning the Growth Factor</h4>
+<p>The <code>-f</code> command-line flag adjusts the multiplier between
+adjacent slab classes (default: 1.25). A lower factor (e.g., 1.1)
+creates more slab classes with smaller size differences between them.
+This tighter spacing reduces the gap between an item's true size and the
+chunk size, minimizing wasted bytes per chunk at the expense of managing
+more slab classes.</p>
+<h4 id="2-chunk-size-minimums">2. Chunk Size Minimums</h4>
+<p>The <code>-n</code> parameter controls the minimum chunk size
+(default: 48 bytes), which covers the baseline header, a minimal key,
+and small payload. Tuning this floor ensures that very small items are
+not placed into disproportionately large default chunks.</p>
+<h3 id="slab-rebalancing-and-page-reassignment">Slab Rebalancing and
+Page Reassignment</h3>
+<p>Historically, once a 1MB page was assigned to a slab class, it
+remained locked to that chunk size indefinitely. If workload patterns
+shifted—such as payload sizes growing from 100 bytes to 500 bytes—memory
+assigned to smaller slab classes sat idle while larger classes evicted
+items prematurely.</p>
+<p>Modern Memcached versions resolve this with the <strong>Slab
+Automover</strong> and <strong>Slab Rebalance</strong> threads:</p>
+<ul>
+<li>The engine continuously monitors page usage, eviction rates, and
+memory pressure across all classes.</li>
+<li>When a slab class experiences heavy evictions while another class
+has free, unused pages, Memcached unlinks an entire 1MB page from the
+underutilized slab class.</li>
+<li>The page is cleared, formatted into chunks of the new size, and
+reassigned to the constrained slab class.</li>
+</ul>
+<p>This dynamic reallocation ensures that pages constantly reflect the
+active payload distribution, maximizing the storage capacity of the
+total allocated memory pool.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-optimizes-item-storage-layout';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

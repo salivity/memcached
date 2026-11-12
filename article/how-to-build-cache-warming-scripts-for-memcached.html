@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Build Cache Warming Scripts for Memcached - memcached</title>
+    <meta name="description" content="When deploying fresh Memcached instances or recovering from service restarts, an empty cache can trigger a &quot;thundering herd&quot; problem, overwhelming backend databases with un-cached read requests. Constructing effective cache warming scripts ensures that hi">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-build-cache-warming-scripts-for-memcached">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Build Cache Warming Scripts for Memcached - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-build-cache-warming-scripts-for-memcached" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When deploying fresh Memcached instances or recovering from service restarts, an empty cache can trigger a &quot;thundering herd&quot; problem, overwhelming backend databases with un-cached read requests. Constructing effective cache warming scripts ensures that hi" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-build-cache-warming-scripts-for-memcached">How to Build
+Cache Warming Scripts for Memcached</h1>
+<p>When deploying fresh Memcached instances or recovering from service
+restarts, an empty cache can trigger a "thundering herd" problem,
+overwhelming backend databases with un-cached read requests.
+Constructing effective cache warming scripts ensures that high-value,
+high-frequency data is pre-populated in Memcached before routing live
+production traffic to the nodes. This guide outlines the core
+architecture, data extraction strategies, concurrent population
+techniques, and validation checks necessary to build a reliable cache
+warming pipeline.</p>
+<h3 id="identify-the-working-set">Identify the Working Set</h3>
+<p>Warming an entire database into Memcached is inefficient and often
+impossible due to memory constraints. The warming script must target
+only the active "working set."</p>
+<ul>
+<li><strong>Query Access Logs:</strong> Analyze production access logs
+or slow query logs to identify the top 5% to 10% of database queries
+that account for the majority of read operations.</li>
+<li><strong>Database Read Replicas:</strong> Run queries against read
+replicas during off-peak hours to extract high-traffic entities, such as
+global system settings, active user sessions, product catalogs, or top
+landing page data.</li>
+<li><strong>Pre-Computed Views:</strong> If the application uses
+materialized views or aggregated metrics, include these in the warm-up
+list to prevent expensive initial compute cycles.</li>
+</ul>
+<h3 id="match-production-serialization-exactly">Match Production
+Serialization Exactly</h3>
+<p>Memcached stores arbitrary byte arrays, meaning the warming script
+must serialize data using the exact format, flags, and compression
+algorithms expected by the primary application.</p>
+<ul>
+<li><strong>Key Namespacing:</strong> Ensure key construction precisely
+mirrors the application’s key schema (e.g., <code>v1:users:12345</code>
+instead of <code>user_12345</code>).</li>
+<li><strong>Serialization Formats:</strong> If the production
+application uses JSON, MessagePack, Protobuf, or language-specific
+formats (like Python's <code>pickle</code> or PHP's
+<code>igbinary</code>), the warming script must apply the identical
+encoding pipeline.</li>
+<li><strong>Memcached Flags:</strong> Memcached stores an integer flag
+alongside each key. Client libraries often use this flag to indicate
+serialization types or compression (e.g., zlib). Ensure the warming
+script sets these flags accurately so the application can read the
+values without unpickling or decompression errors.</li>
+</ul>
+<h3 id="implement-batching-and-concurrency">Implement Batching and
+Concurrency</h3>
+<p>Sequential writes through single <code>set</code> commands create
+high network overhead, making the warming process too slow for
+deployment pipelines. The script should leverage batching and concurrent
+execution.</p>
+<ul>
+<li><strong>Pipelining and Multi-Set:</strong> Use multi-key write
+commands (such as <code>set_multi</code> or equivalent batching
+operations in your Memcached client). This packages multiple key-value
+pairs into a single TCP packet, drastically cutting network round-trip
+time (RTT).</li>
+<li><strong>Worker Pools:</strong> Structure the script using worker
+threads, asynchronous event loops (like Python’s <code>asyncio</code>),
+or lightweight processes (like Go routines). Split the dataset into
+chunks and distribute them across workers to saturate the network
+throughput rather than waiting on single-thread I/O.</li>
+<li><strong>Connection Pooling:</strong> Reuse persistent TCP
+connections to Memcached rather than opening and closing sockets for
+each batch.</li>
+</ul>
+<h3 id="add-jitter-to-time-to-live-ttl-values">Add Jitter to
+Time-to-Live (TTL) Values</h3>
+<p>If thousands of keys are written simultaneously with identical TTLs,
+they will all expire at the exact same moment in the future, recreating
+a cache stampede in the middle of production traffic.</p>
+<ul>
+<li>Apply random time variance ("jitter") to the expiration times.</li>
+<li>If a dataset normally has a TTL of 3600 seconds, instruct the script
+to assign a randomized TTL between 3300 and 3900 seconds
+(<code>base_ttl ± random_offset</code>).</li>
+</ul>
+<h3 id="automate-validation-and-the-deployment-gate">Automate Validation
+and the Deployment Gate</h3>
+<p>The warming script should serve as a quality gate in your continuous
+deployment or autoscaling pipeline, preventing traffic cutover if the
+warm-up fails.</p>
+<ol type="1">
+<li><strong>Populate:</strong> The script connects directly to the
+private IP address of the unattached Memcached instance and executes the
+batch writes.</li>
+<li><strong>Verify Integrity:</strong> Sample a deterministic subset of
+keys using <code>get_multi</code> and assert that the retrieved values
+match the source data and can be deserialized successfully.</li>
+<li><strong>Check Metrics:</strong> Inspect Memcached statistics using
+the <code>stats</code> command. Verify that <code>bytes</code> allocated
+and <code>total_items</code> meet the minimum expected thresholds for a
+warmed state.</li>
+<li><strong>Shift Traffic:</strong> Once the script exits with a
+successful status code (<code>0</code>), the deployment orchestrator
+(such as Kubernetes readiness probes, AWS Target Group registration, or
+an internal service mesh) registers the instance into the active
+upstream pool.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-build-cache-warming-scripts-for-memcached';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

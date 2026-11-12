@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Request Queuing During CPU Saturation - memcached</title>
+    <meta name="description" content="Memcached relies on a multi-threaded, non-blocking I/O model powered by libevent to achieve high throughput and low latency. When system CPU resources become fully saturated, Memcached does not maintain an internal, unbounded application-level queue for i">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-request-queuing-during-cpu-saturation">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Request Queuing During CPU Saturation - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-request-queuing-during-cpu-saturation" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached relies on a multi-threaded, non-blocking I/O model powered by libevent to achieve high throughput and low latency. When system CPU resources become fully saturated, Memcached does not maintain an internal, unbounded application-level queue for i" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-request-queuing-during-cpu-saturation">Memcached
+Request Queuing During CPU Saturation</h1>
+<p>Memcached relies on a multi-threaded, non-blocking I/O model powered
+by <code>libevent</code> to achieve high throughput and low latency.
+When system CPU resources become fully saturated, Memcached does not
+maintain an internal, unbounded application-level queue for incoming
+commands. Instead, request queuing naturally shifts down to the
+operating system's network stack, kernel socket buffers, and TCP
+connection backlogs. Understanding this behavior reveals how CPU
+bottlenecks trigger network-level backpressure, client-side timeouts,
+and dropped connections rather than application memory exhaustion.</p>
+<h2 id="the-thread-model-and-libevent">The Thread Model and
+Libevent</h2>
+<p>Memcached operates with a single main thread (dispatcher) and
+multiple worker threads configured via the <code>-t</code> parameter.
+The main thread listens on the network port and distributes incoming TCP
+connections to worker threads using a simple round-robin mechanism via
+internal connection queues.</p>
+<p>Once a connection is assigned to a worker thread, that thread handles
+all subsequent reads, writes, and cache operations for that connection
+using its own <code>libevent</code> event loop. Memcached processes
+requests as discrete events triggered when sockets become readable.
+Because worker threads execute operations synchronously within their
+event loops, a saturated CPU directly starves these loops of execution
+cycles.</p>
+<h2 id="kernel-level-queuing-and-socket-buffers">Kernel-Level Queuing
+and Socket Buffers</h2>
+<p>Because Memcached does not queue inbound requests in application
+memory beyond the immediate command read buffers, unserviced data
+accumulates in the Linux kernel:</p>
+<ol type="1">
+<li><strong>Socket Receive Buffers (<code>SO_RCVBUF</code>):</strong> As
+clients send <code>get</code>, <code>set</code>, or batch operations,
+the data arrives over the network and fills the OS socket receive
+buffer. When the CPU is at 100%, worker threads cannot call
+<code>read()</code> or <code>recv()</code> fast enough to drain these
+buffers.</li>
+<li><strong>TCP Window Shrinking:</strong> Once a connection’s receive
+buffer fills up, the OS TCP stack advertises a smaller TCP receive
+window (<code>rwnd</code>) to the client. If the worker thread remains
+unable to process the backlog, the receive window drops to zero (TCP
+Zero Window), instructing the client to halt packet transmission
+immediately.</li>
+<li><strong>TCP Listen Backlog:</strong> If the main dispatcher thread
+is starved of CPU time, it cannot invoke <code>accept()</code> quickly
+enough to process incoming connection handshakes. New connections
+accumulate in the kernel's <code>SYN</code> and <code>accept</code>
+queues (governed by the system's <code>somaxconn</code> and Memcached’s
+<code>-b</code> backlog settings). Once full, the kernel silently drops
+incoming <code>SYN</code> packets or sends TCP reset (<code>RST</code>)
+packets back to the client.</li>
+</ol>
+<h2 id="worker-thread-event-loop-latency">Worker Thread Event Loop
+Latency</h2>
+<p>Under heavy CPU load, the Linux scheduler must divide scarce CPU time
+among all active threads, including the Memcached worker threads and any
+other host processes.</p>
+<p>Even though existing connections remain established, the worker
+threads spend more time waiting for scheduled execution slices. When a
+thread finally runs, it processes the readable events registered with
+<code>libevent</code>. However, the latency between an event firing and
+the thread finishing the operation stretches significantly. Because the
+CPU cannot retire instructions faster, the processing time per request
+rises, increasing the turnaround time for every connected client.</p>
+<h2 id="client-side-impact">Client-Side Impact</h2>
+<p>Because Memcached pushes the burden of request queuing onto the TCP
+layer, the failure modes appear on the client side:</p>
+<ul>
+<li><strong>Connection Timeouts:</strong> New clients fail to establish
+a connection because the listen backlog is full, resulting in connection
+timeouts or <code>ECONNREFUSED</code> errors.</li>
+<li><strong>Read/Write Timeouts:</strong> Established clients sending
+commands stall when their local send buffers fill (due to the server's
+TCP Zero Window), or they exceed their configured socket read timeout
+waiting for Memcached to process the query and write the response.</li>
+<li><strong>Thundering Herd Exacerbation:</strong> If clients react to
+timeouts by retrying requests or re-establishing connections, they
+inject more traffic into the saturated kernel queues, deepening the CPU
+starvation loop.</li>
+</ul>
+<p>By avoiding large application-level request queues, Memcached
+protects its own process memory from ballooning out of control during
+CPU saturation, delegating traffic management to standard TCP
+flow-control mechanisms.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-request-queuing-during-cpu-saturation';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

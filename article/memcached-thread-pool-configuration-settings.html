@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Thread Pool Configuration Settings - memcached</title>
+    <meta name="description" content="Memcached uses a multithreaded architecture designed to scale read and write operations across multi-core processors. This article outlines the primary configuration flags used to size and balance Memcached&#39;s thread pool, detailing how the dispatcher assi">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-thread-pool-configuration-settings">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Thread Pool Configuration Settings - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-thread-pool-configuration-settings" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached uses a multithreaded architecture designed to scale read and write operations across multi-core processors. This article outlines the primary configuration flags used to size and balance Memcached&#39;s thread pool, detailing how the dispatcher assi" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-thread-pool-configuration-settings">Memcached Thread
+Pool Configuration Settings</h1>
+<p>Memcached uses a multithreaded architecture designed to scale read
+and write operations across multi-core processors. This article outlines
+the primary configuration flags used to size and balance Memcached's
+thread pool, detailing how the dispatcher assigns workloads to worker
+threads and which parameters prevent thread starvation and resource
+bottlenecks.</p>
+<h3 id="worker-thread-pool-sizing--t">Worker Thread Pool Sizing
+(<code>-t</code>)</h3>
+<p>The primary configuration setting for controlling the size of the
+Memcached thread pool is the <code>-t</code> (or <code>--threads</code>)
+flag.</p>
+<ul>
+<li><strong>Flag:</strong> <code>-t &lt;number&gt;</code></li>
+<li><strong>Default:</strong> <code>4</code></li>
+<li><strong>Function:</strong> Defines the number of worker threads
+dedicated to processing incoming read and write requests.</li>
+</ul>
+<p>Memcached delegates network events using <code>libevent</code>. When
+requests arrive, a dedicated master thread (the dispatcher) accepts the
+connections and distributes them to these worker threads.</p>
+<p><strong>Sizing Recommendations:</strong></p>
+<ul>
+<li>Set <code>-t</code> to match the number of physical or logical CPU
+cores available on the system.</li>
+<li>Avoid setting <code>-t</code> significantly higher than the core
+count, as excessive thread context switching creates unnecessary CPU
+overhead without increasing throughput.</li>
+<li>Setting <code>-t</code> lower than the core count can lead to
+unutilized CPU capacity under heavy loads.</li>
+</ul>
+<h3 id="workload-distribution-and-fair-scheduling--r">Workload
+Distribution and Fair Scheduling (<code>-R</code>)</h3>
+<p>Worker threads manage multiple client connections concurrently. To
+prevent a single high-traffic connection from monopolizing a worker
+thread and starving other connections, Memcached uses the
+<code>-R</code> parameter.</p>
+<ul>
+<li><strong>Flag:</strong> <code>-R &lt;number&gt;</code> (or
+<code>-o max_reqs_per_event=&lt;number&gt;</code>)</li>
+<li><strong>Default:</strong> <code>20</code></li>
+<li><strong>Function:</strong> Sets the maximum number of requests a
+worker thread will process for a single connection before yielding
+execution to handle events from other assigned connections.</li>
+</ul>
+<p>Lowering this value improves fairness and reduces latency jitter
+across competing connections at the cost of slight scheduling overhead.
+Raising it increases batch processing efficiency for persistent,
+high-throughput connections.</p>
+<h3 id="connection-limits-and-distribution--c">Connection Limits and
+Distribution (<code>-c</code>)</h3>
+<p>While <code>-c</code> controls the global connection ceiling rather
+than thread counts directly, it dictates how many concurrent connections
+are distributed across the active thread pool.</p>
+<ul>
+<li><strong>Flag:</strong> <code>-c &lt;number&gt;</code> (or
+<code>--conn-limit=&lt;number&gt;</code>)</li>
+<li><strong>Default:</strong> <code>1024</code></li>
+<li><strong>Function:</strong> Sets the maximum simultaneous connections
+allowed.</li>
+</ul>
+<p>Because the master thread assigns connections to worker threads in a
+round-robin manner, the ratio of <code>-c</code> to <code>-t</code>
+determines the maximum theoretical concurrency load per thread.</p>
+<h3 id="dedicated-internal-maintenance-threads">Dedicated Internal
+Maintenance Threads</h3>
+<p>In modern versions of Memcached, background tasks are isolated from
+the main worker thread pool to eliminate blocking operations. These
+maintenance threads are managed by specific feature flags:</p>
+<ul>
+<li><strong>Hash Table Expansion:</strong> Automatically spawns a
+dedicated maintenance thread when the primary hash table needs to
+resize.</li>
+<li><strong>LRU Crawler (<code>-o lru_crawler</code>):</strong> Runs on
+a background thread to inspect and invalidate expired items without
+blocking reads/writes.</li>
+<li><strong>Slab Reassigner (<code>-o slab_reassign</code>):</strong>
+Manages memory redistribution across slab classes via an independent
+background thread.</li>
+</ul>
+<h3 id="applying-configuration-changes">Applying Configuration
+Changes</h3>
+<p>To apply these thread settings, pass them via the command line when
+starting the daemon or add them to your environment configuration
+file:</p>
+<ul>
+<li><p><strong>Command Line:</strong></p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-t</span> 8 <span class="at">-R</span> 50 <span class="at">-c</span> 4096 <span class="at">-m</span> 4096 <span class="at">-u</span> memcached</span></code></pre></div></li>
+<li><p><strong>Debian/Ubuntu
+(<code>/etc/memcached.conf</code>):</strong></p>
+<pre class="text"><code>-t 8
+-R 50
+-c 4096</code></pre></li>
+<li><p><strong>RHEL/CentOS
+(<code>/etc/sysconfig/memcached</code>):</strong></p>
+<pre class="text"><code>OPTIONS=&quot;-t 8 -R 50&quot;
+MAXCONN=&quot;4096&quot;</code></pre></li>
+</ul>
+<p>Restart the Memcached service after editing configuration files to
+apply the new thread pool and distribution parameters.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-thread-pool-configuration-settings';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Stats Items: Troubleshoot Memory Usage - memcached</title>
+    <meta name="description" content="The stats items command is a vital diagnostic tool for investigating Memcached memory allocation, cache turnover, and data loss. Memcached manages memory using a slab allocation system, grouping data into distinct classes based on chunk size. This article">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-items-troubleshoot-memory-usage">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Stats Items: Troubleshoot Memory Usage - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-items-troubleshoot-memory-usage" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The stats items command is a vital diagnostic tool for investigating Memcached memory allocation, cache turnover, and data loss. Memcached manages memory using a slab allocation system, grouping data into distinct classes based on chunk size. This article" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-stats-items-troubleshoot-memory-usage">Memcached Stats
+Items: Troubleshoot Memory Usage</h1>
+<p>The <code>stats items</code> command is a vital diagnostic tool for
+investigating Memcached memory allocation, cache turnover, and data
+loss. Memcached manages memory using a slab allocation system, grouping
+data into distinct classes based on chunk size. This article explains
+how the <code>stats items</code> command breaks down item storage across
+these individual slab classes, why metrics like evictions and item age
+are critical for diagnosing memory pressure, and how to use this data to
+optimize cache performance.</p>
+<h3 id="understanding-the-role-of-stats-items">Understanding the Role of
+<code>stats items</code></h3>
+<p>When troubleshooting memory issues in Memcached, server-wide
+statistics via <code>stats</code> only provide a high-level picture of
+overall usage. Memcached avoids operating system memory fragmentation by
+allocating memory into 1MB pages, which are then subdivided into chunks
+of fixed sizes called slab classes.</p>
+<p>Because memory is tied up inside specific slabs, a server may report
+free global memory while an individual slab class is completely full and
+evicting items. The <code>stats items</code> command exposes the
+internal telemetry of each slab class, allowing administrators to
+pinpoint precisely where memory exhaustion occurs.</p>
+<h3 id="critical-metrics-exposed-by-stats-items">Critical Metrics
+Exposed by <code>stats items</code></h3>
+<p>The command outputs statistics prefixed by
+<code>STAT items:&lt;slab_id&gt;:&lt;metric&gt;</code>. When
+troubleshooting memory bottlenecks, focus on these primary fields:</p>
+<ul>
+<li><strong><code>number</code></strong>: The total count of active
+items currently stored in the specified slab class. Tracking this shows
+which object sizes dominate your cache.</li>
+<li><strong><code>age</code></strong>: The age, in seconds, of the
+oldest item in the slab's Least Recently Used (LRU) queue. A very low
+<code>age</code> relative to expected item Time-To-Live (TTL) indicates
+rapid cache turnover.</li>
+<li><strong><code>evicted</code></strong>: The cumulative count of valid
+items forcibly removed before their TTL expired to make room for new
+writes. Any non-zero or rapidly increasing eviction count indicates that
+this specific slab class is out of memory.</li>
+<li><strong><code>evicted_nonzero</code></strong>: The number of times
+an item with an explicit expiration time was evicted.</li>
+<li><strong><code>evicted_time</code></strong>: The seconds elapsed
+between an evicted item’s creation and its eviction. A low value
+indicates critical memory starvation for that chunk size.</li>
+<li><strong><code>outofmemory</code></strong>: Tracks instances where
+the engine failed to allocate memory for a write (typically relevant if
+the <code>-M</code> flag is used to disable automatic evictions).</li>
+</ul>
+<h3 id="diagnosing-memory-problems">Diagnosing Memory Problems</h3>
+<h4 id="identifying-slab-imbalance-and-calcification">Identifying Slab
+Imbalance and Calcification</h4>
+<p>Memcached assigns 1MB memory pages to slab classes on demand.
+Historically, once a page was assigned to a slab class, it could not be
+reassigned. The <code>stats items</code> command helps detect this "slab
+calcification" pattern: if one slab class reports zero evictions with a
+high item <code>age</code>, while another class shows millions of
+evictions and an <code>age</code> of only a few seconds, the cache
+memory is distributed disproportionately to the workload.</p>
+<h4 id="pinpointing-inefficient-chunk-sizing">Pinpointing Inefficient
+Chunk Sizing</h4>
+<p>Comparing the item counts across slabs reveals the size distribution
+of cached objects. If items are clustering heavily in higher slab
+classes unexpectedly, application payloads may have grown. This bloat
+requires larger chunk sizes, which consume slab pages much faster and
+lead to premature evictions.</p>
+<h3 id="remediation-strategies-based-on-diagnostic-data">Remediation
+Strategies Based on Diagnostic Data</h3>
+<p>Once <code>stats items</code> identifies the distressed slab classes,
+apply targeted adjustments:</p>
+<ol type="1">
+<li><strong>Enable Slab Automove</strong>: If using modern Memcached
+versions, enable automatic page reassignment
+(<code>slab_automove=1</code> or <code>slab_automove=2</code> via
+<code>stats settings</code> or startup arguments). This allows Memcached
+to reclaim memory pages from cold slabs and assign them to the starving
+slabs identified by your eviction stats.</li>
+<li><strong>Tune the Growth Factor</strong>: If data sizes are
+clustering inefficiently, alter the <code>-f</code> (slab growth factor)
+setting. A smaller growth factor (e.g., <code>1.1</code> instead of the
+default <code>1.25</code>) creates more slab classes with finer size
+increments, reducing wasted internal padding within chunks.</li>
+<li><strong>Optimize Application Serialization</strong>: If a specific
+slab shows continuous eviction spikes, inspect the application keys
+stored in that size bracket. Applying compression or stripping
+unnecessary metadata from the payload can drop the items into smaller,
+less contested slab classes.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-items-troubleshoot-memory-usage';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

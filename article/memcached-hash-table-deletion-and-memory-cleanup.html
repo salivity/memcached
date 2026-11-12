@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Hash Table Deletion and Memory Cleanup - memcached</title>
+    <meta name="description" content="Memcached manages high-throughput caching by utilizing an internal hash table alongside a slab memory allocator. When a key is deleted, Memcached does not perform a traditional garbage collection cycle on the hash table buckets themselves; instead, it imm">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-hash-table-deletion-and-memory-cleanup">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Hash Table Deletion and Memory Cleanup - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-hash-table-deletion-and-memory-cleanup" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached manages high-throughput caching by utilizing an internal hash table alongside a slab memory allocator. When a key is deleted, Memcached does not perform a traditional garbage collection cycle on the hash table buckets themselves; instead, it imm" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-hash-table-deletion-and-memory-cleanup">Memcached Hash
+Table Deletion and Memory Cleanup</h1>
+<p>Memcached manages high-throughput caching by utilizing an internal
+hash table alongside a slab memory allocator. When a key is deleted,
+Memcached does not perform a traditional garbage collection cycle on the
+hash table buckets themselves; instead, it immediately unlinks the item
+node from the corresponding hash table bucket chain and marks the
+underlying item memory for immediate reuse within its slab class,
+leaving the primary bucket array intact.</p>
+<h3 id="internal-hash-table-architecture">Internal Hash Table
+Architecture</h3>
+<p>Memcached uses a primary hash table to provide <span
+class="math inline">\(O(1)\)</span> lookups for stored keys. This hash
+table consists of an array of bucket pointers, where the size of the
+array is always a power of two. Because multiple keys can hash to the
+same bucket index, Memcached resolves collisions using separate chaining
+via a singly linked list. Each cached item structure (<code>item</code>)
+contains an internal pointer (<code>h_next</code>) that points to the
+next item in the same hash bucket.</p>
+<h3 id="the-key-deletion-process">The Key Deletion Process</h3>
+<p>When a client issues a <code>delete</code> command, Memcached
+executes an immediate, deterministic cleanup process rather than waiting
+for an asynchronous garbage collector:</p>
+<ol type="1">
+<li><strong>Hash Lookup:</strong> Memcached computes the hash of the
+target key using MurmurHash3 (or Jenkins hash, depending on
+configuration) and maps it to the corresponding bucket index.</li>
+<li><strong>Chain Traversal:</strong> It traverses the singly linked
+list at that bucket, comparing keys to locate the specific target
+item.</li>
+<li><strong>Unlinking from the Hash Table:</strong> Once found,
+Memcached adjusts the pointers. The preceding pointer in the chain
+(either the bucket head pointer itself or the <code>h_next</code>
+pointer of the prior item) is updated to bypass the deleted item and
+point directly to the deleted item’s <code>h_next</code>.</li>
+<li><strong>LRU Unlinking:</strong> The item is unlinked from the global
+or slab-class Least Recently Used (LRU) doubly linked list.</li>
+<li><strong>Reference Decrement:</strong> The item's reference count is
+decremented. If no active read threads hold a reference, the item is
+immediately freed.</li>
+</ol>
+<h3 id="why-hash-table-buckets-are-not-garbage-collected">Why Hash Table
+Buckets Are Not Garbage Collected</h3>
+<p>The individual "buckets" in Memcached's hash table are simply pointer
+slots in a large, contiguous memory array. As a result, deleting a key
+does not deallocate or garbage collect the bucket itself:</p>
+<ul>
+<li><strong>Pointer Reset:</strong> If an item was the only entry in a
+bucket, unlinking it simply sets that bucket's pointer to
+<code>NULL</code>. The pointer slot remains part of the allocated bucket
+array.</li>
+<li><strong>No Array Shrinking:</strong> Memcached dynamically expands
+its hash table size via a dedicated maintenance thread when the number
+of stored items exceeds 1.5 times the table size. However, Memcached
+does not shrink the hash table array when keys are deleted. The array
+remains at its peak size to avoid the CPU overhead and synchronization
+locks required to rehash items into a smaller table.</li>
+</ul>
+<h3 id="slab-memory-reclaiming">Slab Memory Reclaiming</h3>
+<p>While the hash table bucket pointers remain fixed in memory, the
+memory allocated for the item itself (the key, metadata, and value
+payload) is reclaimed instantly. Memcached does not return this memory
+to the operating system via standard C library calls like
+<code>free()</code>. Instead, it hands the chunk back to the internal
+slab allocator:</p>
+<ul>
+<li>The freed chunk is placed onto the slab class’s free list
+(<code>slots</code>).</li>
+<li>The next write operation requiring memory within that specific chunk
+size category immediately reuses that allocated slot.</li>
+<li>This design eliminates memory fragmentation and avoids the latency
+spikes typically associated with stop-the-world garbage collection
+routines.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-hash-table-deletion-and-memory-cleanup';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Stats Slabs: Find Underutilized Memory Chunks - memcached</title>
+    <meta name="description" content="Memcached organizes memory into slab classes containing fixed-size chunks to minimize dynamic memory allocation overhead. However, variations in item sizes and shifting traffic patterns can lead to inefficient memory use, including idle allocations and in">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-slabs-find-underutilized-memory-chunks">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Stats Slabs: Find Underutilized Memory Chunks - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-slabs-find-underutilized-memory-chunks" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached organizes memory into slab classes containing fixed-size chunks to minimize dynamic memory allocation overhead. However, variations in item sizes and shifting traffic patterns can lead to inefficient memory use, including idle allocations and in" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1
+id="memcached-stats-slabs-find-underutilized-memory-chunks">Memcached
+Stats Slabs: Find Underutilized Memory Chunks</h1>
+<p>Memcached organizes memory into slab classes containing fixed-size
+chunks to minimize dynamic memory allocation overhead. However,
+variations in item sizes and shifting traffic patterns can lead to
+inefficient memory use, including idle allocations and internal
+fragmentation. By querying the <code>stats slabs</code> command,
+administrators can monitor specific metrics—such as
+<code>used_chunks</code>, <code>total_chunks</code>,
+<code>free_chunks</code>, and <code>mem_requested</code>—to precisely
+identify and resolve underutilized memory across slab classes.</p>
+<h3 id="key-stats-slabs-metrics-for-diagnosing-underutilization">Key
+<code>stats slabs</code> Metrics for Diagnosing Underutilization</h3>
+<p>To evaluate memory efficiency per slab class, issue the
+<code>stats slabs</code> command via telnet or an administrative socket.
+The output provides per-class statistics (denoted by the slab class ID
+prefix, such as <code>1:chunk_size</code>):</p>
+<ul>
+<li><strong><code>chunk_size</code></strong>: The fixed byte size
+allocated for every item assigned to this slab class, including
+Memcached key and metadata overhead.</li>
+<li><strong><code>total_chunks</code></strong>: The total capacity of
+chunks available across all memory pages assigned to the slab class
+(<code>total_pages * chunks_per_page</code>).</li>
+<li><strong><code>used_chunks</code></strong>: The number of chunks
+currently storing active cache items.</li>
+<li><strong><code>free_chunks</code></strong>: The count of chunks that
+have been allocated to the slab class but are currently unused and
+sitting on the free list (e.g., after an eviction, expiration, or
+pre-allocation).</li>
+<li><strong><code>free_chunks_end</code></strong>: The number of unused
+chunks remaining at the end of the most recently allocated page that
+have not yet been placed onto the free list.</li>
+<li><strong><code>mem_requested</code></strong>: The actual total byte
+count of the data payload and metadata stored in the slab class.</li>
+</ul>
+<h3 id="diagnosing-idle-and-over-allocated-chunks">Diagnosing Idle and
+Over-Allocated Chunks</h3>
+<p>A slab class experiences idle underutilization when it reserves
+memory pages and chunks that are never populated with data.</p>
+<p>To determine the chunk allocation utilization rate:</p>
+<p><span class="math display">\[\text{Chunk Utilization Rate} =
+\frac{\text{used\_chunks}}{\text{total\_chunks}}\]</span></p>
+<p>If a slab class displays a low utilization rate alongside high values
+for <code>free_chunks</code> or <code>free_chunks_end</code>, memory has
+been locked into that specific slab class and cannot be shared with
+classes under eviction pressure. In early Memcached versions, this
+memory remains stranded permanently unless slab rebalancing is
+active.</p>
+<h3 id="diagnosing-internal-fragmentation-slack-space">Diagnosing
+Internal Fragmentation (Slack Space)</h3>
+<p>Internal fragmentation occurs when the stored item is significantly
+smaller than the slab's <code>chunk_size</code>. Memcached allocates the
+entire chunk regardless of payload size.</p>
+<p>To quantify internal fragmentation per slab class, compare
+<code>mem_requested</code> against the gross memory consumed by all
+active chunks:</p>
+<p><span class="math display">\[\text{Wasted Memory (Bytes)} =
+(\text{used\_chunks} \times \text{chunk\_size}) -
+\text{mem\_requested}\]</span></p>
+<p>A large discrepancy indicates that items routed to this slab class
+are leaving substantial "slack space" empty inside each chunk.</p>
+<h3 id="corrective-actions">Corrective Actions</h3>
+<ul>
+<li><strong>Enable Slab Automove</strong>: If idle chunks
+(<code>free_chunks</code>) dominate a slab class while other classes
+experience evictions, enable the slab automover runtime option
+(<code>slab_automove=1</code> or <code>slab_automove=2</code>) to
+reassign unused pages to classes that need them.</li>
+<li><strong>Tune the Growth Factor (<code>-f</code>)</strong>: If
+<code>mem_requested</code> reveals excessive slack space, the growth
+factor between slab chunk sizes is likely too coarse. Lowering the
+growth factor (default <code>1.25</code>) reduces the size gaps between
+slab classes, ensuring items land in chunk sizes closer to their actual
+payload size.</li>
+<li><strong>Adjust Minimum Item Size (<code>-s</code> or
+<code>-n</code>)</strong>: If the smallest slab class (Slab 1) exhibits
+high internal fragmentation, adjust the initial chunk size to align with
+your application's smallest stored objects.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-slabs-find-underutilized-memory-chunks';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

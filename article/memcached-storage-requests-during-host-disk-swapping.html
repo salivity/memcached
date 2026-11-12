@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Storage Requests During Host Disk Swapping - memcached</title>
+    <meta name="description" content="Memcached is designed strictly as an in-memory key-value store and remains entirely unaware of the underlying operating system&#39;s virtual memory paging activities. When host disk swapping becomes active, Memcached continues to process read and write reques">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-storage-requests-during-host-disk-swapping">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Storage Requests During Host Disk Swapping - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-storage-requests-during-host-disk-swapping" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached is designed strictly as an in-memory key-value store and remains entirely unaware of the underlying operating system&#39;s virtual memory paging activities. When host disk swapping becomes active, Memcached continues to process read and write reques" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-storage-requests-during-host-disk-swapping">Memcached
+Storage Requests During Host Disk Swapping</h1>
+<p>Memcached is designed strictly as an in-memory key-value store and
+remains entirely unaware of the underlying operating system's virtual
+memory paging activities. When host disk swapping becomes active,
+Memcached continues to process read and write requests as if all data
+resided in physical RAM; however, accessing swapped-out memory pages
+triggers kernel-level page faults that force synchronous disk reads,
+resulting in severe latency spikes, thread blocking, and client-side
+timeouts.</p>
+<h3 id="how-memcached-manages-storage">How Memcached Manages
+Storage</h3>
+<p>Memcached utilizes a slab allocation system to manage memory. During
+startup, it pre-allocates a continuous block of virtual memory defined
+by the <code>-m</code> parameter. Memcached treats this memory as pure
+physical RAM, relying entirely on the operating system kernel to manage
+hardware-level page tables. It contains no internal logic to detect
+whether a virtual memory page currently resides in physical memory or
+has been moved to the swap partition on a storage drive.</p>
+<h3 id="the-request-lifecycle-under-active-swapping">The Request
+Lifecycle Under Active Swapping</h3>
+<p>When an application sends a storage request—such as a
+<code>GET</code>, <code>SET</code>, or <code>DELETE</code>—the following
+sequence occurs on a swapping host:</p>
+<ol type="1">
+<li><strong>Request Ingestion:</strong> The network worker thread
+accepts the command and parses the key.</li>
+<li><strong>Hash Table Lookup:</strong> Memcached consults its internal
+hash table to locate the pointer corresponding to the item or slab.</li>
+<li><strong>Hardware Page Fault:</strong> When the thread attempts to
+read or write to the virtual address associated with that item, the CPU
+recognizes that the memory page is absent from physical RAM.</li>
+<li><strong>Synchronous Disk I/O:</strong> The operating system suspends
+the Memcached thread and issues an I/O request to read the page from the
+swap file or partition on disk. If physical memory is completely
+exhausted, the kernel may first need to swap out another page to free
+space.</li>
+<li><strong>Execution Resumption:</strong> Once the required page is
+loaded back into physical RAM, the CPU unblocks the worker thread,
+allowing Memcached to complete the item retrieval or insertion and
+return a response to the client.</li>
+</ol>
+<h3 id="performance-and-operational-impacts">Performance and Operational
+Impacts</h3>
+<p>Because disk I/O operations are several orders of magnitude slower
+than direct RAM access, active swapping profoundly disrupts Memcached's
+primary function:</p>
+<ul>
+<li><strong>Latency Degradation:</strong> Operations that typically
+complete in fractions of a millisecond take tens or hundreds of
+milliseconds when bound to disk speeds.</li>
+<li><strong>Worker Thread Starvation:</strong> Memcached uses an
+event-driven, non-blocking architecture, but synchronous page faults
+force the underlying threads to pause. A single worker thread stalled on
+disk I/O cannot service other connections assigned to that thread.</li>
+<li><strong>Connection Queue Saturation:</strong> As threads stall,
+pending requests back up in the network listen queue, eventually hitting
+operating system limits (<code>backlog</code>) and causing connection
+drops.</li>
+<li><strong>Cascading Timeouts:</strong> Upstream application servers
+waiting for cache responses encounter timeouts. These applications often
+fall back to querying the primary database, shifting the bottleneck and
+potentially causing wider service outages.</li>
+</ul>
+<h3 id="preventing-swapping-in-memcached-environments">Preventing
+Swapping in Memcached Environments</h3>
+<p>To prevent disk swapping from degrading cache operations, server
+environments should be configured using the following practices:</p>
+<ul>
+<li><strong>Proper Sizing (<code>-m</code> Flag):</strong> Ensure the
+memory allocated to Memcached leaves sufficient headroom (typically 20%
+to 30%) for the operating system, network buffers, connection overhead,
+and other host processes.</li>
+<li><strong>Adjusting Swappiness:</strong> Lower the Linux kernel
+swappiness parameter by setting <code>vm.swappiness = 1</code> (or
+<code>0</code> on modern kernels) to avoid moving cache pages to swap
+unless physical memory is completely depleted.</li>
+<li><strong>Disabling Swap:</strong> On dedicated cache servers,
+entirely disabling swap (<code>swapoff -a</code>) ensures that if the
+system runs out of memory, the Out-Of-Memory (OOM) killer triggers
+immediately rather than permitting sustained high-latency disk
+thrashing.</li>
+<li><strong>Memory Locking:</strong> In specific performance-critical
+configurations, use operating system utilities or compile Memcached to
+use <code>mlockall</code> to pin allocated memory directly to physical
+RAM, preventing the kernel from swapping those addresses under any
+circumstance.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-storage-requests-during-host-disk-swapping';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

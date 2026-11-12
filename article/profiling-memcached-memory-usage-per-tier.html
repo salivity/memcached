@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profiling Memcached Memory Usage Per Tier - memcached</title>
+    <meta name="description" content="Running multiple application tiers on a shared Memcached cluster often leads to the &quot;noisy neighbor&quot; problem, where one service exhausts cache space at the expense of others. Because Memcached is inherently unaware of multi-tenancy and stores items purely">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/profiling-memcached-memory-usage-per-tier">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Profiling Memcached Memory Usage Per Tier - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/profiling-memcached-memory-usage-per-tier" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Running multiple application tiers on a shared Memcached cluster often leads to the &quot;noisy neighbor&quot; problem, where one service exhausts cache space at the expense of others. Because Memcached is inherently unaware of multi-tenancy and stores items purely" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="profiling-memcached-memory-usage-per-tier">Profiling Memcached
+Memory Usage Per Tier</h1>
+<p>Running multiple application tiers on a shared Memcached cluster
+often leads to the "noisy neighbor" problem, where one service exhausts
+cache space at the expense of others. Because Memcached is inherently
+unaware of multi-tenancy and stores items purely as key-value pairs
+inside global slab allocators, profiling memory consumption per
+application tier requires specialized operational strategies. This guide
+covers actionable techniques to attribute, measure, and monitor memory
+consumption by application tier in shared Memcached environments.</p>
+<h3 id="1-hierarchical-key-namespacing-and-lru-crawler-metadumps">1.
+Hierarchical Key Namespacing and LRU Crawler Metadumps</h3>
+<p>The most reliable server-side method for tracking memory consumption
+by tier involves enforcing a strict key-naming convention across all
+applications (for example, <code>tier:service:identifier</code>, such as
+<code>auth:session:12345</code> or <code>catalog:item:67890</code>).</p>
+<p>To profile memory without impacting live traffic:</p>
+<ul>
+<li>Run the asynchronous <strong>LRU Crawler</strong> via the Memcached
+administration protocol using the command
+<code>lru_crawler metadump all</code>.</li>
+<li>Unlike the legacy <code>stats cachedump</code>, the LRU Crawler runs
+non-blockingly on background threads and dumps key metadata, including
+expiration time (exp), size in bytes, and slab class.</li>
+<li>Stream this metadump output into an aggregation pipeline (using
+scripts in Python, Go, or a log parser). Parse the prefix delimiters to
+compute total allocated bytes, average item size, and total key count
+per application tier.</li>
+</ul>
+<h3 id="2-client-side-telemetry-and-metrics-instrumentation">2.
+Client-Side Telemetry and Metrics Instrumentation</h3>
+<p>Because Memcached does not track the client origin of stored bytes,
+accounting can be shifted upstream to the application tiers themselves.
+By wrapping client SDKs (such as <code>pymemcache</code>,
+<code>spymemcache</code>, or custom wrappers):</p>
+<ul>
+<li>Track the exact payload size in bytes during <code>set</code>,
+<code>add</code>, and <code>replace</code> operations.</li>
+<li>Emit custom metrics to your telemetry collector (Prometheus,
+Datadog, or OpenTelemetry) tagged by tier, such as
+<code>memcached_bytes_written_total{tier="checkout"}</code>.</li>
+<li>Pair this with tracked read hits and misses to compute not just
+total footprint, but the memory efficiency (hit-to-footprint ratio) of
+each individual tier.</li>
+</ul>
+<h3 id="3-layer-7-proxy-inspection-using-mcrouter-or-envoy">3. Layer 7
+Proxy Inspection Using Mcrouter or Envoy</h3>
+<p>Introducing an intelligent proxy layer such as Facebook's
+<strong>mcrouter</strong> or an <strong>Envoy</strong> proxy with a
+Memcached filter decouples connection routing from backend storage.
+Proxies can inspect and segment traffic per tier:</p>
+<ul>
+<li><strong>Prefix-based Routing and Accounting</strong>: Configure
+mcrouter with routing prefixes dedicated to each tier. Mcrouter records
+detailed stats per route prefix, allowing you to observe throughput,
+byte rates, and command types per tier.</li>
+<li><strong>Envoy Access Logs and Metrics</strong>: Envoy can parse the
+Memcached binary and text protocols to output command histograms,
+request payload sizes, and response sizes labeled by downstream client
+identities.</li>
+</ul>
+<h3 id="4-slab-class-attribution">4. Slab Class Attribution</h3>
+<p>Memcached organizes memory into slab classes based on item size chunk
+intervals (governed by the growth factor, typically 1.25).</p>
+<ul>
+<li>Different application tiers typically store distinct data shapes.
+For example, a user session tier may consistently store ~512-byte
+payloads (Slab Class 4), while an inventory tier caches large JSON
+payloads exceeding 16KB (Slab Class 16).</li>
+<li>Query <code>stats slabs</code> and <code>stats items</code> to
+inspect individual slab utilization, page counts, and eviction
+rates.</li>
+<li>By cross-referencing your application tiers' known serialization
+sizes with active slab classes, you can infer which tier is driving slab
+allocation and triggering evictions.</li>
+</ul>
+<h3 id="5-ebpf-network-tracing-by-source-ip">5. eBPF Network Tracing by
+Source IP</h3>
+<p>In environments where application tiers occupy distinct IP blocks,
+Kubernetes namespaces, or VPC subnets, kernel-level eBPF programs (using
+tools like <code>bcc</code> or <code>bpftrace</code>) can trace incoming
+network traffic to the Memcached port:</p>
+<ul>
+<li>Attach eBPF probes to socket buffers
+(<code>sock:sock_data_ready</code> or <code>tcp_recvmsg</code>) on the
+Memcached host.</li>
+<li>Extract the command payload length from write commands
+(<code>set</code>, <code>add</code>) and associate the byte count with
+the source IP address.</li>
+<li>Aggregate the incoming write volume by CIDR or service identity to
+determine which application tier is injecting the highest volume of data
+over time without introducing client-side overhead or modifying
+application code.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/profiling-memcached-memory-usage-per-tier';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

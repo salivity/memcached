@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Inspect Memcached Keys with stats cachedump - memcached</title>
+    <meta name="description" content="The stats cachedump command in Memcached provides administrators with a direct method to view and inspect individual keys stored within specific memory slabs. This guide explains how to connect to a Memcached instance, discover active slab IDs using the s">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-to-inspect-memcached-keys-with-stats-cachedump">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How to Inspect Memcached Keys with stats cachedump - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-to-inspect-memcached-keys-with-stats-cachedump" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="The stats cachedump command in Memcached provides administrators with a direct method to view and inspect individual keys stored within specific memory slabs. This guide explains how to connect to a Memcached instance, discover active slab IDs using the s" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-to-inspect-memcached-keys-with-stats-cachedump">How to
+Inspect Memcached Keys with stats cachedump</h1>
+<p>The <code>stats cachedump</code> command in Memcached provides
+administrators with a direct method to view and inspect individual keys
+stored within specific memory slabs. This guide explains how to connect
+to a Memcached instance, discover active slab IDs using the
+<code>stats items</code> command, execute <code>stats cachedump</code>
+to extract key names along with their metadata, and address the
+operational limitations of using this diagnostic tool in production
+environments.</p>
+<h3 id="connecting-to-memcached">Connecting to Memcached</h3>
+<p>To run administrative commands, connect to the Memcached service
+using a TCP utility such as <code>telnet</code> or <code>nc</code>
+(Netcat) on the default port <code>11211</code>:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">telnet</span> 127.0.0.1 11211</span></code></pre></div>
+<p>Alternatively, you can pipe commands through Netcat:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">nc</span> 127.0.0.1 11211</span></code></pre></div>
+<h3 id="step-1-identify-slab-ids-with-stats-items">Step 1: Identify Slab
+IDs with <code>stats items</code></h3>
+<p>Memcached does not store all keys in a single global list; instead,
+it groups items of similar sizes into slabs. You must specify a slab
+class ID to dump its keys. Run the <code>stats items</code> command to
+view all active slabs containing items:</p>
+<pre class="text"><code>stats items</code></pre>
+<p>The output will contain lines structured like this:</p>
+<pre class="text"><code>STAT items:1:number 15
+STAT items:1:age 240
+STAT items:2:number 8
+...
+END</code></pre>
+<p>The integer immediately following <code>items:</code> is the slab
+class ID. In the example above, slab classes <code>1</code> and
+<code>2</code> contain cached items.</p>
+<h3 id="step-2-execute-stats-cachedump">Step 2: Execute
+<code>stats cachedump</code></h3>
+<p>Once you have identified the target slab ID, run the
+<code>stats cachedump</code> command using the following syntax:</p>
+<pre class="text"><code>stats cachedump &lt;slab_id&gt; &lt;limit&gt;</code></pre>
+<ul>
+<li><strong><code>&lt;slab_id&gt;</code></strong>: The numeric ID of the
+slab class obtained from <code>stats items</code>.</li>
+<li><strong><code>&lt;limit&gt;</code></strong>: The maximum number of
+keys to return. Setting this to <code>0</code> attempts to return all
+keys currently linked to that slab's LRU (Least Recently Used)
+list.</li>
+</ul>
+<p>For example, to dump up to 10 keys from slab class 1:</p>
+<pre class="text"><code>stats cachedump 1 10</code></pre>
+<h3 id="interpreting-the-output">Interpreting the Output</h3>
+<p>The server responds with entries formatted as follows:</p>
+<pre class="text"><code>ITEM user_session_4815 [64 b; 1711929600 s]
+ITEM user_session_4816 [128 b; 1711933200 s]
+END</code></pre>
+<ul>
+<li><strong><code>ITEM &lt;key&gt;</code></strong>: The name of the
+cached key (e.g., <code>user_session_4815</code>).</li>
+<li><strong><code>[&lt;size&gt; b;</code></strong>: The size of the
+cached value in bytes.</li>
+<li><strong><code>&lt;timestamp&gt; s]</code></strong>: The expiration
+time of the key represented as a Unix epoch timestamp. If the expiration
+timestamp is equal to or less than the current time, the key has expired
+or is set to expire immediately.</li>
+</ul>
+<h3 id="operational-limitations">Operational Limitations</h3>
+<p>While <code>stats cachedump</code> is useful for debugging,
+administrators should be aware of several operational constraints:</p>
+<ol type="1">
+<li><strong>Incomplete Visibility</strong>: The command only dumps items
+linked to the top of the slab's LRU chain. On heavily loaded servers, it
+may not display every item in memory.</li>
+<li><strong>Performance Impact</strong>: Dumping keys temporarily locks
+the cache. On large production instances, querying high limits can stall
+the Memcached process and increase latency for connected
+applications.</li>
+<li><strong>Alternative for Modern Versions</strong>: In Memcached
+version 1.4.31 and newer, the non-blocking
+<code>lru_crawler metadump all</code> command is preferred for
+generating a comprehensive dump of all keys across all slabs without
+freezing the worker threads.</li>
+</ol></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-to-inspect-memcached-keys-with-stats-cachedump';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

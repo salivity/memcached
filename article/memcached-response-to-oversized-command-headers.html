@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Response to Oversized Command Headers - memcached</title>
+    <meta name="description" content="Memcached enforces strict size limitations on command headers, keys, and overall command lines to maintain high throughput and protect against memory exhaustion or denial-of-service (DoS) attacks. When a client application sends a command exceeding these">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-response-to-oversized-command-headers">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Response to Oversized Command Headers - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-response-to-oversized-command-headers" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached enforces strict size limitations on command headers, keys, and overall command lines to maintain high throughput and protect against memory exhaustion or denial-of-service (DoS) attacks. When a client application sends a command exceeding these" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-response-to-oversized-command-headers">Memcached
+Response to Oversized Command Headers</h1>
+<p>Memcached enforces strict size limitations on command headers, keys,
+and overall command lines to maintain high throughput and protect
+against memory exhaustion or denial-of-service (DoS) attacks. When a
+client application sends a command exceeding these predefined maximum
+header or buffer limits, Memcached handles the violation
+deterministically based on whether the client is communicating over the
+text protocol or the binary protocol. In general, the server rejects the
+command with an explicit client-side error code or abruptly terminates
+the underlying TCP connection to prevent buffer overflows.</p>
+<h3 id="text-protocol-behavior">Text Protocol Behavior</h3>
+<p>In the standard ASCII text protocol, Memcached processes commands
+line by line. The server allocates a fixed-size read buffer (typically
+1,024 to 2,048 bytes depending on the compilation settings and version)
+to parse command lines before processing the associated value
+payload.</p>
+<ul>
+<li><p><strong>Key Length Violations:</strong> The text protocol
+enforces a strict key length limit of 250 bytes
+(<code>KEY_MAX_LENGTH</code>). If the command line contains a key
+exceeding this threshold, Memcached immediately halts command processing
+and returns the response:</p>
+<pre class="text"><code>CLIENT_ERROR bad command line format</code></pre>
+<p>or, in certain versions:</p>
+<pre class="text"><code>CLIENT_ERROR key too long</code></pre></li>
+<li><p><strong>Command Line Buffer Overflow:</strong> If a client sends
+a continuous stream of characters without a terminating newline
+(<code>\r\n</code>) that exceeds the read buffer limits, Memcached
+treats the input as unparseable. Because the server cannot safely
+allocate unbounded memory to find the end of an invalid command line, it
+returns a generic <code>CLIENT_ERROR</code> and immediately closes the
+TCP connection to protect internal state.</p></li>
+</ul>
+<h3 id="binary-protocol-behavior">Binary Protocol Behavior</h3>
+<p>The binary protocol uses a strictly structured, fixed 24-byte header
+containing metadata fields such as the magic byte, opcode, key length
+(16-bit integer), extra data length (8-bit integer), and total body
+length (32-bit integer).</p>
+<ul>
+<li><strong>Validation Failures:</strong> Even though the binary
+protocol header theoretically allows key lengths up to 65,535 bytes via
+its 16-bit field, Memcached still enforces the internal 250-byte key
+limit. If the header specifies a key length or extras length that
+violates internal constraints, Memcached crafts a standard 24-byte error
+response with the status field set to <code>0x0003</code>
+(<code>PROTOCOL_BINARY_RESPONSE_EINVAL</code> / Invalid arguments).</li>
+<li><strong>Framing and Protocol Corruption:</strong> If the header
+parameters specify total body lengths that exceed maximum allowable
+command allocations, or if the header bytes do not conform to valid
+binary framing, Memcached categorizes the failure as protocol
+corruption. In this scenario, the server drops the socket connection
+immediately without sending an error response to avoid desynchronization
+between subsequent commands on the same connection.</li>
+</ul>
+<h3 id="client-side-implications">Client-Side Implications</h3>
+<p>When an oversized header causes Memcached to reject a command or
+terminate a connection, client libraries typically handle the failure in
+one of two ways:</p>
+<ul>
+<li><strong>Protocol Exceptions:</strong> Well-behaved client libraries
+intercept keys larger than 250 bytes locally before transmission,
+raising a client-side exception to avoid network overhead.</li>
+<li><strong>Broken Pipe or Connection Reset:</strong> If an oversized
+command reaches the server and causes a connection drop, the client
+receives a socket-level error (such as <code>ECONNRESET</code> or
+<code>EPIPE</code>). The client connection pool must discard the
+terminated connection, establish a new socket, and mark the operation as
+failed.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-response-to-oversized-command-headers';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Behavior When Max Connections Exceeded - memcached</title>
+    <meta name="description" content="When Memcached receives connection requests beyond its configured limit, it does not crash or terminate active sessions; instead, it temporarily pauses accepting new TCP connections while continuing to serve established clients. This article explains how">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-behavior-when-max-connections-exceeded">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Behavior When Max Connections Exceeded - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-behavior-when-max-connections-exceeded" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When Memcached receives connection requests beyond its configured limit, it does not crash or terminate active sessions; instead, it temporarily pauses accepting new TCP connections while continuing to serve established clients. This article explains how" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-behavior-when-max-connections-exceeded">Memcached
+Behavior When Max Connections Exceeded</h1>
+<p>When Memcached receives connection requests beyond its configured
+limit, it does not crash or terminate active sessions; instead, it
+temporarily pauses accepting new TCP connections while continuing to
+serve established clients. This article explains how Memcached handles
+connection saturation at the event loop level, the role played by the
+operating system's network backlog, the exact errors client applications
+encounter, and how to identify and mitigate connection bottlenecks.</p>
+<h3 id="the-internal-mechanism-halting-connection-acceptance">The
+Internal Mechanism: Halting Connection Acceptance</h3>
+<p>Memcached enforces a maximum concurrent connection ceiling controlled
+by the <code>-c</code> runtime parameter, which defaults to 1,024
+connections. Memcached relies on an event-driven networking library
+(<code>libevent</code>) to process incoming network traffic.</p>
+<p>When the number of active connections reaches the
+<code>maxconns</code> threshold, Memcached disables the read event on
+its listening socket. By taking this action, the server intentionally
+stops executing the <code>accept()</code> system call. It completely
+ignores new connection handshakes until at least one currently active
+connection terminates and frees up a slot.</p>
+<h3 id="the-role-of-the-operating-system-tcp-backlog">The Role of the
+Operating System TCP Backlog</h3>
+<p>Because Memcached ceases to accept new connections, incoming TCP
+requests are held at the operating system kernel level in the TCP listen
+backlog queue. The size of this queue is determined by the Memcached
+<code>-b</code> parameter and the operating system’s
+<code>net.core.somaxconn</code> configuration.</p>
+<ul>
+<li><strong>Backlog has available capacity:</strong> The kernel
+completes the three-way TCP handshake (or leaves it half-open depending
+on OS configuration), but the connection remains stuck waiting for the
+application to accept it.</li>
+<li><strong>Backlog is fully saturated:</strong> The kernel cannot queue
+further connection requests. Depending on the operating system’s TCP
+stack settings (such as Linux's <code>tcp_abort_on_overflow</code>), the
+OS either silently discards incoming <code>SYN</code> packets or
+responds with a <code>RST</code> (reset) packet.</li>
+</ul>
+<h3 id="impact-on-client-applications">Impact on Client
+Applications</h3>
+<p>Clients experience distinct behaviors depending on whether they are
+already connected or attempting to initiate a new connection:</p>
+<ul>
+<li><strong>Existing Connections Remain Normal:</strong> Active
+connections continue to send commands (<code>GET</code>,
+<code>SET</code>, etc.) and receive responses without interruption.
+Hitting the connection limit does not degrade the throughput of
+already-established connections.</li>
+<li><strong>Connection Timeouts:</strong> Clients attempting to
+establish a new connection typically block. If the backlog queue holds
+the request without an <code>accept()</code>, the client application
+usually waits until its local connection timeout threshold expires,
+throwing errors such as <code>ETIMEDOUT</code> or framework-specific
+socket connection timeouts.</li>
+<li><strong>Immediate Connection Refusal:</strong> If the operating
+system backlog queue overflows and actively rejects packets, client
+applications receive immediate <code>ECONNREFUSED</code> (Connection
+Refused) errors.</li>
+</ul>
+<h3 id="automatic-recovery">Automatic Recovery</h3>
+<p>Once an existing client disconnects or times out, the active
+connection count drops below <code>maxconns</code>. Memcached detects
+this state change and re-enables the read event on the listening socket.
+The server immediately begins calling <code>accept()</code> again,
+draining the waiting connections from the TCP backlog in the order they
+arrived.</p>
+<h3 id="diagnosing-and-resolving-the-issue">Diagnosing and Resolving the
+Issue</h3>
+<p>To verify whether Memcached is hitting its connection limit, query
+the server using the <code>stats</code> command via Telnet or
+<code>nc</code>:</p>
+<pre class="text"><code>stats</code></pre>
+<p>Look for the following key metrics:</p>
+<ul>
+<li><code>curr_connections</code>: The number of currently open
+connections.</li>
+<li><code>maxconns</code>: The configured maximum connection limit.</li>
+<li><code>listen_disabled_num</code>: The number of times Memcached hit
+its connection limit and temporarily stopped accepting new connections.
+If this value is greater than zero and increasing, the limit is being
+exceeded.</li>
+</ul>
+<p>To resolve connection exhaustion, increase the limit by passing a
+higher value to the <code>-c</code> flag at startup (e.g.,
+<code>-c 4096</code>), ensuring that the operating system's file
+descriptor limits (<code>ulimit -n</code>) are raised accordingly.
+Additionally, applications should use persistent connection pooling
+instead of opening and closing connections on every request, reducing
+connection churn and aggregate concurrency.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-behavior-when-max-connections-exceeded';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

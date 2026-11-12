@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Idle Connection Timeout Parameters - memcached</title>
+    <meta name="description" content="Managing connection lifecycles in Memcached is essential for preventing connection exhaustion and freeing up server resources. By default, Memcached allows idle client connections to remain open indefinitely. However, Memcached provides a specific command">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-idle-connection-timeout-parameters">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Idle Connection Timeout Parameters - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-idle-connection-timeout-parameters" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Managing connection lifecycles in Memcached is essential for preventing connection exhaustion and freeing up server resources. By default, Memcached allows idle client connections to remain open indefinitely. However, Memcached provides a specific command" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-idle-connection-timeout-parameters">Memcached Idle
+Connection Timeout Parameters</h1>
+<p>Managing connection lifecycles in Memcached is essential for
+preventing connection exhaustion and freeing up server resources. By
+default, Memcached allows idle client connections to remain open
+indefinitely. However, Memcached provides a specific command-line
+parameter, along with underlying operating system TCP controls, to
+configure automatic disconnection thresholds for inactive clients. This
+article explains the exact parameters governing Memcached idle
+connection timeouts and how to configure them effectively.</p>
+<h3 id="the-primary-setting--o-idle_timeout">The Primary Setting:
+<code>-o idle_timeout</code></h3>
+<p>The primary parameter controlling how long Memcached waits before
+closing an inactive connection is
+<code>-o idle_timeout=&lt;seconds&gt;</code>.</p>
+<ul>
+<li><p><strong>Default Value:</strong> <code>0</code> (disabled).
+Connections stay open until the client explicitly terminates the socket
+or the connection is severed by a network failure.</p></li>
+<li><p><strong>Functionality:</strong> When set to a positive integer,
+Memcached monitors how long each client connection remains inactive (no
+incoming commands). If no requests are received within the specified
+number of seconds, Memcached closes the connection.</p></li>
+<li><p><strong>Usage Example:</strong></p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">memcached</span> <span class="at">-m</span> 1024 <span class="at">-p</span> 11211 <span class="at">-o</span> idle_timeout=60</span></code></pre></div>
+<p>In this example, Memcached automatically terminates any client
+connection that remains idle for 60 seconds.</p></li>
+</ul>
+<h3 id="verifying-the-configuration">Verifying the Configuration</h3>
+<p>To check whether the idle timeout is enabled on a running instance,
+connect via Telnet or netcat and query the server settings:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;stats settings&quot;</span> <span class="kw">|</span> <span class="ex">nc</span> localhost 11211 <span class="kw">|</span> <span class="fu">grep</span> idle_timeout</span></code></pre></div>
+<p>The output will display the current value:</p>
+<pre class="text"><code>STAT idle_timeout 60</code></pre>
+<p>If the value is <code>0</code>, idle connections will not be dropped
+automatically by the Memcached daemon.</p>
+<h3 id="operating-system-and-tcp-keepalive-controls">Operating System
+and TCP Keepalive Controls</h3>
+<p>When <code>-o idle_timeout</code> is disabled, connection cleanup
+depends on operating-system-level TCP keepalive settings. If an idle
+client crashes, drops offline, or terminates improperly without sending
+a <code>FIN</code> or <code>RST</code> packet, the connection becomes
+orphaned.</p>
+<p>The operating system handles these dead sockets using standard Linux
+kernel parameters:</p>
+<ul>
+<li><code>net.ipv4.tcp_keepalive_time</code>: The interval (in seconds)
+between the last data packet sent and the first keepalive probe.</li>
+<li><code>net.ipv4.tcp_keepalive_intvl</code>: The interval between
+subsequent keepalive probes if no response is received.</li>
+<li><code>net.ipv4.tcp_keepalive_probes</code>: The number of
+unacknowledged probes sent before declaring the connection dead and
+closing the socket.</li>
+</ul>
+<p>To avoid lingering dead sockets when not using
+<code>-o idle_timeout</code>, administrators typically lower
+<code>tcp_keepalive_time</code> in <code>/etc/sysctl.conf</code>.</p>
+<h3 id="interaction-with-maximum-connections--c">Interaction with
+Maximum Connections (<code>-c</code>)</h3>
+<p>Idle timeouts directly affect the connection limit set by the
+<code>-c &lt;num&gt;</code> parameter, which defaults to 1024 concurrent
+connections. When client applications maintain persistent connection
+pools without proper reuse or closure, the connection pool can quickly
+saturate. Setting <code>-o idle_timeout</code> ensures that abandoned
+connections are recycled before reaching the maximum connection limit,
+preventing <code>connection limit reached</code> errors.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-idle-connection-timeout-parameters';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

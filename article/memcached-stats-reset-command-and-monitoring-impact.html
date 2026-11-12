@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Stats Reset Command and Monitoring Impact - memcached</title>
+    <meta name="description" content="This article examines how the Memcached stats reset command operates at an internal level, detailing which counters are cleared versus which stateful metrics persist, and analyzes the consequences this execution has on infrastructure monitoring systems, b">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-stats-reset-command-and-monitoring-impact">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Stats Reset Command and Monitoring Impact - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-stats-reset-command-and-monitoring-impact" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="This article examines how the Memcached stats reset command operates at an internal level, detailing which counters are cleared versus which stateful metrics persist, and analyzes the consequences this execution has on infrastructure monitoring systems, b" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-stats-reset-command-and-monitoring-impact">Memcached
+Stats Reset Command and Monitoring Impact</h1>
+<p>This article examines how the Memcached <code>stats reset</code>
+command operates at an internal level, detailing which counters are
+cleared versus which stateful metrics persist, and analyzes the
+consequences this execution has on infrastructure monitoring systems,
+baseline calculations, and historical telemetry data.</p>
+<h2 id="processing-the-stats-reset-command">Processing the
+<code>stats reset</code> Command</h2>
+<p>When a client sends the <code>stats reset</code> command over the
+Memcached text protocol interface, the server parses the request and
+invokes its internal statistics-clearing routine (historically
+<code>item_stats_reset</code> and thread-level stat clearing
+routines).</p>
+<p>Rather than restarting the process or flushing cached data, Memcached
+selectively resets cumulative event-based counters. The daemon iterates
+through its thread-specific tracking structures and global counters,
+resetting the values to zero.</p>
+<h3 id="what-gets-cleared">What Gets Cleared</h3>
+<p>The reset primarily affects monotonically increasing event counters,
+including:</p>
+<ul>
+<li><strong>Command totals:</strong> <code>cmd_get</code>,
+<code>cmd_set</code>, <code>cmd_flush</code>,
+<code>cmd_touch</code></li>
+<li><strong>Performance outcomes:</strong> <code>get_hits</code>,
+<code>get_misses</code>, <code>delete_hits</code>,
+<code>delete_misses</code></li>
+<li><strong>Network &amp; eviction metrics:</strong> Cumulative
+read/write byte counters (<code>bytes_read</code>,
+<code>bytes_written</code>) and <code>evictions</code>.</li>
+</ul>
+<h3 id="what-remains-unchanged">What Remains Unchanged</h3>
+<p>The <code>stats reset</code> command does not alter instantaneous
+state gauges or system-level parameters:</p>
+<ul>
+<li><strong>Active resource usage:</strong> <code>curr_items</code>,
+<code>bytes</code> (current memory footprint), and
+<code>curr_connections</code>.</li>
+<li><strong>Server lifecycle metrics:</strong> <code>uptime</code>,
+<code>time</code>, <code>version</code>, and
+<code>pointer_size</code>.</li>
+<li><strong>Slab allocator details:</strong> Underlying slab memory
+layouts and active chunk allocations persist without interruption.</li>
+</ul>
+<p>Data stored in cache is completely unaffected by this command; memory
+is not freed, and keys are not invalidated.</p>
+<h2 id="impact-on-monitoring-history">Impact on Monitoring History</h2>
+<p>Issuing <code>stats reset</code> can introduce significant
+discrepancies and anomalies into continuous observability pipelines.
+Monitoring platforms—such as Prometheus, Datadog, Grafana, and
+CloudWatch—handle metrics based on strict mathematical assumptions
+regarding counters and gauges.</p>
+<h3 id="disruption-of-rate-and-derivative-calculations">Disruption of
+Rate and Derivative Calculations</h3>
+<p>Most time-series databases treat cumulative metrics like
+<code>cmd_get</code> and <code>get_hits</code> as monotonic counters.
+Functions such as <code>rate()</code> or <code>irate()</code> detect
+drops in counter values and assume either a process restart or a counter
+wrap. While modern engines often handle counter resets by discarding
+that specific sample interval to avoid calculating negative rates, a
+sudden drop to zero can cause:</p>
+<ul>
+<li>Artificial metric drops or transient spikes in throughput
+graphs.</li>
+<li>Gaps in telemetry during the transition interval.</li>
+<li>Erroneous alerts from threshold-based alerting rules monitoring
+absolute counter increases.</li>
+</ul>
+<h3 id="distortion-of-historical-cache-hit-ratios">Distortion of
+Historical Cache Hit Ratios</h3>
+<p>The cache hit ratio is derived from cumulative counters:</p>
+<p><span class="math display">\[\text{Hit Ratio} =
+\frac{\text{get\_hits}}{\text{get\_hits} +
+\text{get\_misses}}\]</span></p>
+<p>Resetting these metrics forces the hit ratio to recalculate
+exclusively from the moment of the reset. If traffic immediately
+following the reset is sparse or atypical, calculated efficiency drops
+or swings wildly until a statistically significant sample size
+accumulates. Historical continuity across reporting intervals (e.g.,
+daily or weekly SLA reports) is permanently fragmented within external
+tools that scrape raw point-in-time statistics.</p>
+<h3 id="loss-of-long-term-context">Loss of Long-Term Context</h3>
+<p>For environments relying on direct counter inspection without an
+intermediary time-series database, issuing <code>stats reset</code>
+irrevocably clears performance history from the running daemon's memory.
+Once executed, it is impossible to recover cumulative performance data
+for that server instance prior to the reset point.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-stats-reset-command-and-monitoring-impact';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

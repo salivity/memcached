@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Memcached Handles Concurrent Connection Bursts - memcached</title>
+    <meta name="description" content="Memcached maintains system stability during sudden bursts of concurrent client connections through an asynchronous, event-driven architecture paired with a fixed multi-threaded design. Rather than creating a new thread or process for each incoming client,">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-memcached-handles-concurrent-connection-bursts">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Memcached Handles Concurrent Connection Bursts - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-memcached-handles-concurrent-connection-bursts" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached maintains system stability during sudden bursts of concurrent client connections through an asynchronous, event-driven architecture paired with a fixed multi-threaded design. Rather than creating a new thread or process for each incoming client," />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-memcached-handles-concurrent-connection-bursts">How
+Memcached Handles Concurrent Connection Bursts</h1>
+<p>Memcached maintains system stability during sudden bursts of
+concurrent client connections through an asynchronous, event-driven
+architecture paired with a fixed multi-threaded design. Rather than
+creating a new thread or process for each incoming client, Memcached
+delegates connection handling to non-blocking network sockets managed by
+an underlying event library. This decoupled design, supported by fixed
+connection limits and granular internal locking, prevents resource
+exhaustion, minimizes operating system context switching, and ensures
+predictable throughput under severe traffic spikes.</p>
+<h3 id="asynchronous-io-via-libevent">Asynchronous I/O via libevent</h3>
+<p>At the core of Memcached’s connection handling is
+<code>libevent</code>, an asynchronous event notification library that
+wraps operating-system-specific polling mechanisms like
+<code>epoll</code> on Linux or <code>kqueue</code> on BSD/macOS.</p>
+<p>Instead of blocking an execution thread while waiting for network
+data, Memcached sets all client sockets to non-blocking mode. The event
+notification system alerts Memcached only when a socket has data ready
+to be read or buffer space available to be written. This allows a
+minimal number of operating system threads to monitor tens of thousands
+of idle or bursty connections with negligible CPU overhead.</p>
+<h3 id="multi-threaded-dispatcher-model">Multi-Threaded Dispatcher
+Model</h3>
+<p>Memcached divides the workload between two distinct roles: a single
+main listener thread and a configured pool of worker threads.</p>
+<ol type="1">
+<li><strong>The Dispatcher Thread:</strong> The primary listener thread
+runs its own event loop dedicated exclusively to the listening socket.
+When a sudden burst of new TCP connections arrives, the main thread
+accepts these connections and immediately delegates the resulting file
+descriptors to worker threads via inter-thread communication pipes in a
+round-robin distribution.</li>
+<li><strong>Worker Threads:</strong> Each worker thread maintains its
+own independent <code>libevent</code> loop. Once a worker receives a
+connection descriptor from the dispatcher, it registers the socket with
+its local event loop and handles all subsequent network I/O, protocol
+parsing, and command execution for that client.</li>
+</ol>
+<p>Because the pool of worker threads is fixed (typically matched to the
+host's available CPU cores), the system avoids thread-creation overhead
+and the severe performance degradation caused by CPU context switching
+during connection spikes.</p>
+<h3 id="connection-limits-and-backlog-queues">Connection Limits and
+Backlog Queues</h3>
+<p>Memcached relies on predefined boundaries to protect its operating
+environment:</p>
+<ul>
+<li><strong>Maximum Connections (<code>-c</code>):</strong> By default,
+Memcached enforces a connection cap (typically 1024, though adjustable).
+When this ceiling is hit during an aggressive burst, Memcached rejects
+new connections immediately rather than consuming memory and file
+descriptors until the host operating system crashes.</li>
+<li><strong>Listen Backlog (<code>-b</code>):</strong> Pending TCP
+connections that have not yet been accepted by the dispatcher wait in
+the operating system's kernel TCP backlog queue. If the dispatcher
+thread experiences a momentary delay, the kernel buffers the handshakes
+up to the backlog limit, smoothing out brief spikes.</li>
+</ul>
+<h3 id="buffer-management-and-memory-allocation">Buffer Management and
+Memory Allocation</h3>
+<p>Connection bursts frequently induce memory spikes because each
+connected client requires read and write buffers. Memcached mitigates
+this pressure by dynamically allocating and freeing read/write buffers
+according to request sizes, returning idle buffers to an internal
+freelist rather than constantly allocating memory via the system
+<code>malloc</code>.</p>
+<p>Furthermore, key-value storage operations occur within a
+pre-allocated slab allocator. Because storage memory is already reserved
+at startup, sudden connection spikes never trigger out-of-memory (OOM)
+states for dataset storage, ensuring that the daemon maintains
+predictable memory consumption regardless of client volume.</p>
+<h3 id="granular-thread-synchronization">Granular Thread
+Synchronization</h3>
+<p>To prevent worker threads from bottlenecking one another when
+executing commands from concurrent connections, Memcached employs
+fine-grained locking. Hash table lookups and item accesses utilize a
+collection of striped item locks rather than a single global lock.
+Consequently, requests arriving concurrently across different worker
+threads rarely contend for the same mutex, enabling linear scaling and
+low latency during traffic surges.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-memcached-handles-concurrent-connection-bursts';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

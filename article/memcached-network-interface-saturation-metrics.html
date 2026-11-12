@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Network Interface Saturation Metrics - memcached</title>
+    <meta name="description" content="When Memcached performance degrades, the bottleneck often lies not in CPU or memory allocation, but at the physical or virtual network interface card (NIC). Network interface saturation limits packet processing rates, increases request latency, and trigge">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-network-interface-saturation-metrics">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Network Interface Saturation Metrics - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-network-interface-saturation-metrics" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="When Memcached performance degrades, the bottleneck often lies not in CPU or memory allocation, but at the physical or virtual network interface card (NIC). Network interface saturation limits packet processing rates, increases request latency, and trigge" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-network-interface-saturation-metrics">Memcached
+Network Interface Saturation Metrics</h1>
+<p>When Memcached performance degrades, the bottleneck often lies not in
+CPU or memory allocation, but at the physical or virtual network
+interface card (NIC). Network interface saturation limits packet
+processing rates, increases request latency, and triggers packet drops.
+This article outlines the primary operating system, TCP/IP stack, and
+Memcached-specific metrics used to identify whether network saturation
+is throttling your caching tier.</p>
+<h3 id="1-nic-bandwidth-and-throughput-utilization">1. NIC Bandwidth and
+Throughput Utilization</h3>
+<p>The most direct indicator of network saturation is throughput
+approaching the physical or cloud-enforced limits of the network
+interface.</p>
+<ul>
+<li><strong><code>rxkB/s</code> and <code>txkB/s</code>:</strong> Found
+using tools like <code>sar -n DEV 1</code> or <code>dstat</code>, these
+show receive and transmit volume in kilobytes per second. If these
+values reach 80–90% of the maximum theoretical link speed (e.g., nearing
+1.25 GB/s on a 10 GbE interface), bandwidth saturation is imminent or
+occurring.</li>
+<li><strong>Cloud Provider Network Throttling Caps:</strong> On
+platforms like AWS EC2, instance-level bandwidth caps are enforced
+independently of link speed. Check metrics such as
+<code>bw_in_allowance_exceeded</code> and
+<code>bw_out_allowance_exceeded</code> via
+<code>ethtool -S &lt;interface&gt;</code> to detect bandwidth
+throttling.</li>
+</ul>
+<h3 id="2-interface-drops-and-ring-buffer-exhaustion">2. Interface Drops
+and Ring Buffer Exhaustion</h3>
+<p>When incoming or outgoing packets arrive faster than the interface or
+the kernel can process them, the NIC’s hardware or software ring buffers
+overflow.</p>
+<ul>
+<li><strong><code>rx_dropped</code> and
+<code>tx_dropped</code>:</strong> Reported by
+<code>ip -s link show &lt;interface&gt;</code> or
+<code>/proc/net/dev</code>. Non-zero or steadily increasing drop rates
+indicate buffer exhaustion.</li>
+<li><strong><code>rx_missed_errors</code> and
+<code>rx_fifo_errors</code>:</strong> Viewed using
+<code>ethtool -S &lt;interface&gt;</code>. Missed errors confirm that
+the NIC had to discard packets at the hardware layer because the driver
+ring buffer was completely full.</li>
+</ul>
+<h3 id="3-tcp-retransmissions-and-queue-overflows">3. TCP
+Retransmissions and Queue Overflows</h3>
+<p>Physical network saturation leads to lost segment acknowledgments,
+connection latency, and TCP-level retries.</p>
+<ul>
+<li><strong>TCP Retransmissions (<code>TcpRetransSegs</code>):</strong>
+Monitored using <code>netstat -s</code> or
+<code>nstat -az TcpRetransSegs</code>. A spike in retransmissions
+alongside high network traffic suggests packets are being dropped in
+flight or discarded at the interface.</li>
+<li><strong>Listen Queue Drops (<code>ListenDrops</code> and
+<code>ListenOverflows</code>):</strong> Available via
+<code>netstat -s | grep -i listen</code>. These counters increment when
+Memcached cannot accept new TCP connections quickly enough, often caused
+by the OS being stalled processing heavy network traffic.</li>
+</ul>
+<h3 id="4-software-interrupt-softirq-cpu-utilization">4. Software
+Interrupt (softirq) CPU Utilization</h3>
+<p>Processing incoming network interrupts consumes CPU time. If softirq
+processing cannot keep up with high packet rates (PPS), packets are
+dropped before reaching Memcached.</p>
+<ul>
+<li><strong><code>%soft</code> in <code>mpstat -P ALL 1</code> or
+<code>top</code>:</strong> If one or more CPU cores show near 100% time
+spent in <code>%soft</code>, the network driver's receive processing
+(e.g., NAPI polling) is saturated. This frequently happens when Receive
+Side Scaling (RSS) is misconfigured and a single CPU core handles all
+NIC interrupts.</li>
+<li><strong><code>/proc/net/softnet_stat</code> (Second
+Column):</strong> The second column represents squeezed events, where
+the network processing budget ran out before all packets in the queue
+could be processed. A rising count indicates packet-processing
+backlog.</li>
+</ul>
+<h3 id="5-memcached-internal-indicators">5. Memcached Internal
+Indicators</h3>
+<p>While operating system metrics confirm the physical constraint,
+Memcached exposes operational metrics that reflect network-induced
+stalls.</p>
+<ul>
+<li><strong><code>listen_disabled_num</code>:</strong> Viewed through
+the Memcached <code>stats</code> command. If this value increases,
+Memcached was forced to temporarily stop listening for new connections
+because it reached its internal connection limit or the local socket
+buffer backed up.</li>
+<li><strong>Latency Spikes with Low Engine CPU:</strong> If
+client-reported p99 and p999 response latencies surge while Memcached’s
+core CPU usage (<code>rusage_user</code>, <code>rusage_system</code>)
+remains low or steady, packets are queuing at the kernel or network
+interface level before reaching the Memcached application threads.</li>
+</ul></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-network-interface-saturation-metrics';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How Short TTL Affects Memcached Eviction Rates - memcached</title>
+    <meta name="description" content="Setting short Time-To-Live (TTL) values in Memcached directly influences memory reclamation, resulting in significantly lower key eviction rates. By accelerating the expiration of stored data, Memcached can reclaim and reuse allocated slab memory without">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/how-short-ttl-affects-memcached-eviction-rates">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="How Short TTL Affects Memcached Eviction Rates - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/how-short-ttl-affects-memcached-eviction-rates" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Setting short Time-To-Live (TTL) values in Memcached directly influences memory reclamation, resulting in significantly lower key eviction rates. By accelerating the expiration of stored data, Memcached can reclaim and reuse allocated slab memory without" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="how-short-ttl-affects-memcached-eviction-rates">How Short TTL
+Affects Memcached Eviction Rates</h1>
+<p>Setting short Time-To-Live (TTL) values in Memcached directly
+influences memory reclamation, resulting in significantly lower key
+eviction rates. By accelerating the expiration of stored data, Memcached
+can reclaim and reuse allocated slab memory without being forced to
+discard active, unexpired keys. While this drastically reduces or even
+eliminates forced Least Recently Used (LRU) evictions, it shifts the
+operational burden to the backend database by lowering the overall cache
+hit ratio.</p>
+<h3 id="understanding-eviction-vs-expiration">Understanding Eviction vs.
+Expiration</h3>
+<p>To understand the impact of a short TTL, you must distinguish between
+key expiration and key eviction:</p>
+<ul>
+<li><strong>Expiration:</strong> Occurs when a key surpasses its
+assigned TTL. The data becomes invalid and is either reclaimed lazily
+when requested, purged via the background LRU crawler, or overwritten
+when new data arrives.</li>
+<li><strong>Eviction:</strong> Occurs strictly when Memcached runs out
+of allocated memory in a specific slab class and must prematurely delete
+valid, unexpired data to store newly written keys.</li>
+</ul>
+<h3 id="the-mechanism-why-short-ttls-reduce-evictions">The Mechanism:
+Why Short TTLs Reduce Evictions</h3>
+<p>Memcached allocates memory using slab classes, which divide memory
+into fixed-size chunks to prevent fragmentation. When memory becomes
+constrained in a particular slab class, the engine looks at the tail of
+that class's LRU queue.</p>
+<p>When keys have short TTLs, a large percentage of items at the tail of
+the LRU queue are already expired by the time space is needed. Memcached
+checks the status of these tail items:</p>
+<ol type="1">
+<li>If the item at the tail is expired, Memcached reclaims its memory
+chunk immediately for the new item. This is recorded as a memory reuse,
+not an eviction.</li>
+<li>If the item is not expired, Memcached must forcibly remove it to
+free up the chunk, which increments the <code>evictions</code>
+metric.</li>
+</ol>
+<p>By configuring short TTLs, you ensure that older items expire before
+memory pressure forces an eviction. Consequently, the eviction counter
+remains low or zero because the system recycles expired slots instead of
+dropping active data.</p>
+<h3 id="impact-on-slab-rebalancing-and-lru-crawlers">Impact on Slab
+Rebalancing and LRU Crawlers</h3>
+<p>Modern Memcached architectures utilize automated LRU crawlers and
+slab rebalancing. Short TTLs make these systems considerably more
+efficient:</p>
+<ul>
+<li><strong>LRU Crawler Efficiency:</strong> The crawler can traverse
+memory and proactively free expired chunks, keeping free memory
+available and preventing sudden spikes in write latency.</li>
+<li><strong>Reduced Slab Imbalance:</strong> Because short-lived data
+rapidly releases memory, individual slab classes do not remain
+artificially full, preventing one data size from starving other classes
+of memory.</li>
+</ul>
+<h3 id="the-operational-trade-offs">The Operational Trade-Offs</h3>
+<p>While eliminating evictions sounds optimal, relying heavily on very
+short TTLs introduces distinct architectural side effects:</p>
+<ul>
+<li><strong>Decreased Cache Hit Ratio:</strong> Keys expire quickly,
+meaning subsequent read requests must fetch fresh data from the primary
+datastore rather than the cache.</li>
+<li><strong>Increased Database Load:</strong> A short TTL can cause
+"cache stampedes" or thundering herd problems, where a sudden key
+expiration triggers hundreds of simultaneous queries to the
+backend.</li>
+<li><strong>Higher Network and CPU Utilization:</strong> Applications
+must repeatedly regenerate and rewrite data into Memcached, consuming
+more network bandwidth and CPU cycles across your cluster.</li>
+</ul>
+<p>Setting a short TTL successfully minimizes Memcached eviction rates
+by allowing memory to be recovered naturally through expiration.
+However, TTL values must be balanced carefully against backend capacity
+to avoid trading low eviction metrics for degraded overall system
+performance.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/how-short-ttl-affects-memcached-eviction-rates';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

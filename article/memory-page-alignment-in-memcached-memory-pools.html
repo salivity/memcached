@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Page Alignment in Memcached Memory Pools - memcached</title>
+    <meta name="description" content="Memory page alignment during Memcached&#39;s internal memory pool initialization ensures that large pre-allocated memory blocks match the underlying processor cache line boundaries and operating system virtual memory page sizes. By enforcing strict memory pag">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memory-page-alignment-in-memcached-memory-pools">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memory Page Alignment in Memcached Memory Pools - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memory-page-alignment-in-memcached-memory-pools" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memory page alignment during Memcached&#39;s internal memory pool initialization ensures that large pre-allocated memory blocks match the underlying processor cache line boundaries and operating system virtual memory page sizes. By enforcing strict memory pag" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memory-page-alignment-in-memcached-memory-pools">Memory Page
+Alignment in Memcached Memory Pools</h1>
+<p>Memory page alignment during Memcached's internal memory pool
+initialization ensures that large pre-allocated memory blocks match the
+underlying processor cache line boundaries and operating system virtual
+memory page sizes. By enforcing strict memory page alignment during this
+bootstrapping phase, Memcached eliminates CPU-level fetch penalties,
+maximizes Translation Lookaside Buffer (TLB) efficiency, and ensures
+deterministic slab chunking for high-throughput caching.</p>
+<p>When Memcached starts, it uses a slab allocation subsystem to manage
+memory instead of relying on standard dynamic allocators like
+<code>malloc</code> for every item. The engine allocates a large
+contiguous block of memory—often gigabytes in size—and divides it into
+discrete 1MB pages (slabs). For this allocation to function optimally,
+the memory pool must be aligned with system memory pages, which are
+typically 4KB, or 2MB/1GB when Transparent Huge Pages (THP) or explicit
+huge pages are utilized.</p>
+<p>The primary role of page alignment is the elimination of cache line
+splits. Modern CPU architectures access memory in fixed-size cache
+lines, typically 64 bytes. If the base address of a memory pool or slab
+page starts at an unaligned memory offset, data structures such as slab
+headers and item payloads inevitably straddle cache line or page
+boundaries. A misaligned read or write operation requires the CPU to
+execute multiple memory bus transactions, dramatically increasing
+latency. Proper initial alignment guarantees that subsequent item
+allocations within the slab classes remain uniformly aligned to memory
+word boundaries.</p>
+<p>Page alignment also directly improves the efficiency of virtual
+memory translation. The operating system maps virtual memory to physical
+memory via page tables, caching these mappings in the Translation
+Lookaside Buffer (TLB). When Memcached aligns its memory pool to system
+page boundaries—especially when configured to use huge pages—a single
+TLB entry can cover a massive contiguous region of active cache data.
+This minimizes TLB misses, which are otherwise frequent and costly when
+an application rapidly reads and writes millions of distinct keys across
+a multi-gigabyte memory footprint.</p>
+<p>Finally, alignment provides deterministic pointer arithmetic for the
+slab allocator. Memcached divides each 1MB page into uniform chunks
+dictated by slab class profiles. Because the parent page begins at an
+exact, predictable page boundary, the internal offsets for chunk
+headers, metadata, and data boundaries can be computed without injecting
+variable runtime padding to satisfy alignment constraints. This
+deterministic positioning avoids internal fragmentation, simplifies
+memory reclamation, and ensures maximum usable storage capacity within
+each allocated slab.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memory-page-alignment-in-memcached-memory-pools';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-AZ Memcached Node Placement Considerations - memcached</title>
+    <meta name="description" content="Deploying Memcached nodes across multiple Availability Zones (AZs) involves balancing high availability against network latency, bandwidth costs, and architectural complexity. Because Memcached is an in-memory, non-replicated caching system by default, di">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/multi-az-memcached-node-placement-considerations">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Multi-AZ Memcached Node Placement Considerations - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/multi-az-memcached-node-placement-considerations" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Deploying Memcached nodes across multiple Availability Zones (AZs) involves balancing high availability against network latency, bandwidth costs, and architectural complexity. Because Memcached is an in-memory, non-replicated caching system by default, di" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="multi-az-memcached-node-placement-considerations">Multi-AZ
+Memcached Node Placement Considerations</h1>
+<p>Deploying Memcached nodes across multiple Availability Zones (AZs)
+involves balancing high availability against network latency, bandwidth
+costs, and architectural complexity. Because Memcached is an in-memory,
+non-replicated caching system by default, distributing nodes across
+distinct physical zones protects against zone-level outages but
+introduces inter-zone communication overhead. This article outlines the
+core engineering considerations that dictate how and when to place
+Memcached instances across multiple AZs.</p>
+<h3 id="network-latency">Network Latency</h3>
+<p>Memcached is fundamentally optimized for sub-millisecond response
+times. Communication within the same AZ generally takes a fraction of a
+millisecond, whereas round-trip requests crossing AZ boundaries
+typically incur an added penalty of 1 to 2 milliseconds. If an
+application requires hundreds of cache lookups per request, crossing AZ
+boundaries for every cache miss or hit can degrade user-facing
+application performance. Designers must determine whether their latency
+budget accommodates cross-zone hops.</p>
+<h3 id="data-transfer-costs">Data Transfer Costs</h3>
+<p>Major cloud service providers provide free network egress within the
+same AZ, but charge standard rates for data transferred across AZ
+boundaries. Because caching layers often handle significant read and
+write throughput, a high-volume application querying nodes in
+neighboring AZs can face steep, unexpected bandwidth bills. Placing
+nodes without considering query locality directly amplifies cross-AZ
+network costs.</p>
+<h3 id="cluster-topologies-stretched-vs-siloed">Cluster Topologies:
+Stretched vs. Siloed</h3>
+<p>Choosing between a stretched cluster or siloed clusters is the
+primary structural decision in multi-AZ design:</p>
+<ul>
+<li><strong>Stretched Single Cluster:</strong> All Memcached nodes
+across all AZs belong to a single cluster. The client uses consistent
+hashing (such as the Ketama algorithm) to distribute keys uniformly
+across all nodes regardless of their zone. While simple to manage, this
+guarantees that a large percentage of requests will cross AZ boundaries,
+incurring latency and data transfer costs.</li>
+<li><strong>Siloed Per-AZ Clusters:</strong> Each AZ runs an
+independent, identical Memcached cluster that serves only application
+instances within that same zone. Application servers read exclusively
+from their local cache. This eliminates cross-AZ latency and transfer
+fees during reads, but requires the application layer or a cache proxy
+to invalidate or update keys across all regional clusters simultaneously
+to prevent stale data.</li>
+</ul>
+<h3 id="blast-radius-and-the-thundering-herd">Blast Radius and the
+Thundering Herd</h3>
+<p>A primary motivation for multi-AZ placement is limiting the blast
+radius of a data center failure. If an entire AZ becomes
+unavailable:</p>
+<ul>
+<li>In a <strong>stretched cluster</strong>, only a fraction of the
+cache keys (proportional to the number of nodes in that AZ) are lost.
+The remaining nodes continue serving their share of keys, preventing the
+primary database from experiencing a complete cache stampede.</li>
+<li>In a <strong>siloed setup</strong>, the loss of an AZ simply takes
+down the application and cache instances in that zone simultaneously.
+The remaining AZs handle shifted traffic, provided their local caches
+are warm and adequately sized to absorb the increased load.</li>
+</ul>
+<h3 id="proxy-routing-and-replication">Proxy Routing and
+Replication</h3>
+<p>Native Memcached lacks cross-node replication, meaning each key
+exists on exactly one node. When deploying across AZs, teams frequently
+employ routing proxies such as Facebook’s Mcrouter or AWS ElastiCache
+features. A proxy layer can be configured to execute "all-sync"
+writes—writing data to a node in each AZ—while reading exclusively from
+the local AZ. This strategy achieves both high availability and
+sub-millisecond local reads, shifting the latency penalty entirely to
+write operations.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/multi-az-memcached-node-placement-considerations';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>

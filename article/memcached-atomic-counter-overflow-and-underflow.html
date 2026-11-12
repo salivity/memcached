@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memcached Atomic Counter Overflow and Underflow - memcached</title>
+    <meta name="description" content="Memcached provides native incr and decr commands to safely manipulate numeric counters in high-concurrency environments without race conditions. This article examines the internal mechanisms Memcached uses to process these atomic operations, specifically">
+    <link rel="canonical" href="https://salivity.github.io/memcached/article/memcached-atomic-counter-overflow-and-underflow">
+    <link rel="search" type="application/opensearchdescription+xml" title="memcached" href="/memcached/opensearch.xml">
+    <link rel="icon" href="/memcached/favicon.ico">
+    <link rel="stylesheet" href="/memcached/css/style.css">
+    <link media="print" rel="stylesheet" href="/memcached/css/print.css">
+    <script src="/memcached/js/fuse.min.js"></script>
+    <script src="/memcached/js/script.js"></script>
+    <script id="MathJax-script" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.1.3/tex-chtml.min.js" defer></script>
+    <script src="/monetize/monetize.js"></script>
+    <script src="/social/social.js"></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Memcached Atomic Counter Overflow and Underflow - memcached" />
+    <meta property="og:url" content="https://salivity.github.io/memcached/article/memcached-atomic-counter-overflow-and-underflow" />
+    <meta property="og:image" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:secure_url" content="https://salivity.github.io/memcached/images/open-graph/default.webp" />
+    <meta property="og:image:width" content="1120" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:description" content="Memcached provides native incr and decr commands to safely manipulate numeric counters in high-concurrency environments without race conditions. This article examines the internal mechanisms Memcached uses to process these atomic operations, specifically" />
+    <link rel="manifest" href="/memcached/pwa/manifest.json" />
+</head>
+<body>
+    <header>
+        <a href="/memcached/" aria-label="Go To Home Page" title="Go To Home Page" id="logo">
+            <span>salivity.github.io/</span><span>memcached</span>
+        </a>
+        <nav>
+            <ul class="header-links">
+                <li><a href="/memcached/search" title="Search" aria-label="Go To Search Page"><svg class="svg-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"></path></svg></a></li>
+                <li><a id="theme-toggle" title="Theme" href="javascript:void(0);" aria-label="Toggle Website Theme"></a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        
+    <div class="article-layout">
+        <aside id="profile-sidebar" class="profile-column" aria-label="Author Profile"></aside>
+        <div class="article-main-column">
+            <article><h1 id="memcached-atomic-counter-overflow-and-underflow">Memcached
+Atomic Counter Overflow and Underflow</h1>
+<p>Memcached provides native <code>incr</code> and <code>decr</code>
+commands to safely manipulate numeric counters in high-concurrency
+environments without race conditions. This article examines the internal
+mechanisms Memcached uses to process these atomic operations,
+specifically detailing how the engine implements a zero-floor threshold
+to prevent underflows, relies on 64-bit integer wraparound behavior at
+upper limits, and uses internal item locking to guarantee that boundary
+evaluations remain strictly atomic.</p>
+<h3 id="64-bit-numeric-representation">64-Bit Numeric
+Representation</h3>
+<p>While Memcached stores all cached data internally as serialized byte
+arrays (strings), the <code>incr</code> and <code>decr</code> commands
+require the target item to represent a numeric decimal value.</p>
+<p>When a counter command executes, the engine parses the stored ASCII
+string into an unsigned 64-bit integer (<code>uint64_t</code>). All
+arithmetic calculations occur using this 64-bit data type before the
+final result is converted back into an ASCII string and written back to
+the memory block.</p>
+<h3 id="handling-counter-underflow-with-decr">Handling Counter Underflow
+with <code>decr</code></h3>
+<p>Memcached explicitly prevents unsigned integer underflow during
+decrement operations through saturation arithmetic.</p>
+<p>Because counters are unsigned (<code>uint64_t</code>), a naive
+subtraction below zero would wrap the value around to the maximum
+possible 64-bit value (<span class="math inline">\(2^{64} - 1\)</span>,
+or <span class="math inline">\(18,446,744,073,709,551,615\)</span>). To
+prevent this:</p>
+<ul>
+<li>The engine compares the current counter value against the decrement
+delta.</li>
+<li>If the decrement delta is greater than or equal to the current
+value, Memcached floors the result directly at <code>0</code>.</li>
+<li>Negative values are never produced, and the counter will never roll
+over into upper integer bounds.</li>
+</ul>
+<h3 id="handling-counter-overflow-with-incr">Handling Counter Overflow
+with <code>incr</code></h3>
+<p>Unlike underflow handling, Memcached does not floor or saturate at
+the upper bound during an increment operation.</p>
+<ul>
+<li>The maximum value a Memcached counter can reach is <span
+class="math inline">\(2^{64} - 1\)</span>.</li>
+<li>When an increment operation exceeds this 64-bit ceiling, standard
+C-level unsigned integer overflow rules apply: the integer wraps around
+to <code>0</code> (modulo <span
+class="math inline">\(2^{64}\)</span>).</li>
+<li>Memcached does not return an error or reject the command upon
+reaching this limit; the application layer is responsible for monitoring
+or resetting keys if a wraparound would disrupt application logic.</li>
+</ul>
+<h3 id="concurrency-and-atomic-execution">Concurrency and Atomic
+Execution</h3>
+<p>To ensure that calculations and boundary checks are reliable,
+Memcached executes the entire cycle atomically:</p>
+<ol type="1">
+<li><strong>Lock Acquisition:</strong> Memcached acquires an item lock
+(or bucket lock depending on the engine version) corresponding to the
+target key's hash.</li>
+<li><strong>Evaluation:</strong> The string value is parsed into a
+<code>uint64_t</code>, validated, and the arithmetic check (including
+the zero-floor evaluation for <code>decr</code>) takes place.</li>
+<li><strong>Commit:</strong> The updated value is formatted back into an
+ASCII string, replacing the existing item in memory.</li>
+<li><strong>Lock Release:</strong> The lock is freed.</li>
+</ol>
+<p>Because these steps occur exclusively while the item's lock is held,
+concurrent read-modify-write collisions are impossible, ensuring that
+overflow wraparounds and underflow floors happen deterministically.</p></article>
+        <div id='disqus_thread'></div>
+        <script>
+
+            var disqus_config = function () {
+                this.page.url =         'https://salivity.github.io/memcached/article/memcached-atomic-counter-overflow-and-underflow';  
+                //this.page.identifier =  PAGE_IDENTIFIER; 
+            };
+            
+            (function() {
+                var d = document, s = d.createElement('script');
+                s.src = 'https://salivity-github-io.disqus.com/embed.js';
+                s.setAttribute('data-timestamp', +new Date());
+                (d.head || d.body).appendChild(s);
+            })();
+        </script>
+    
+        </div>
+    </div>
+    
+    </main>
+    <footer>
+        <nav>
+            <ul class="social-links">
+            </ul>
+        </nav>
+        <nav>
+            <ul class="footer-links">
+                <li><a href="https://smvc.dev/contact">Contact</a></li>
+                <li><a href="/memcached/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/memcached/terms-and-conditions">Terms and Conditions</a></li>
+            </ul>
+        </nav>
+        <div class="copyright">
+            Copyright &copy; <span id="current-year"></span>
+        </div>
+    </footer>
+</body>
+</html>
